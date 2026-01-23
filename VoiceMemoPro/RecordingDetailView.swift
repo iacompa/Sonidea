@@ -246,7 +246,59 @@ struct RecordingDetailView: View {
             Text(currentRecording.formattedDate)
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            // EQ & Volume Section
+            eqVolumeSection
         }
+    }
+
+    // MARK: - EQ & Volume Section
+
+    @ViewBuilder
+    private var eqVolumeSection: some View {
+        @Bindable var appState = appState
+
+        VStack(alignment: .leading, spacing: 16) {
+            // Section header
+            HStack {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundColor(.accentColor)
+                Text("EQ & Volume")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                Spacer()
+            }
+
+            // Volume slider
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Volume")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+
+                VolumeSliderView(volume: $appState.appSettings.playbackVolume)
+                    .onChange(of: appState.appSettings.playbackVolume) { _, newValue in
+                        playback.setVolume(newValue)
+                    }
+            }
+
+            // EQ Graph
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Equalizer")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+
+                EQGraphView(settings: $appState.appSettings.eqSettings)
+                    .onChange(of: appState.appSettings.eqSettings) { _, newValue in
+                        playback.setEQ(newValue)
+                    }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
     }
 
     // MARK: - Metadata Section
@@ -755,6 +807,7 @@ struct RecordingDetailView: View {
     private func setupPlayback() {
         playback.load(url: currentRecording.fileURL)
         playback.setSpeed(appState.appSettings.playbackSpeed)
+        playback.setVolume(appState.appSettings.playbackVolume)
         playback.setEQ(appState.appSettings.eqSettings)
 
         // Smart resume - seek to last position

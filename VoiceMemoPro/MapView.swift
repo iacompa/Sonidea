@@ -136,25 +136,25 @@ struct GPSInsightsMapView: View {
                         Button {
                             selectedRecording = recording
                         } label: {
-                            VStack(spacing: 0) {
-                                Image(systemName: "mappin.circle.fill")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.red)
-                                    .background(
-                                        Circle()
-                                            .fill(Color.white)
-                                            .frame(width: 20, height: 20)
-                                            .offset(y: 2)
-                                    )
-                            }
+                            RecordingMapPin()
                         }
                     }
                 }
             }
         }
-        .mapStyle(.standard)
+        // Clean map style: no POIs, no business labels
+        .mapStyle(.standard(
+            elevation: .flat,
+            pointsOfInterest: .excludingAll,
+            showsTraffic: false
+        ))
+        .mapControlVisibility(.hidden) // Hide compass and scale
         .frame(height: 350)
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.systemGray4), lineWidth: 1)
+        )
         .sheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
         }
@@ -211,6 +211,37 @@ struct GPSInsightsMapView: View {
         }
         selectedSpot = spot
         showSpotRecordings = true
+    }
+}
+
+// MARK: - Recording Map Pin
+
+struct RecordingMapPin: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            // Shadow/glow
+            Circle()
+                .fill(Color.red.opacity(0.3))
+                .frame(width: 36, height: 36)
+
+            // White background circle
+            Circle()
+                .fill(Color.white)
+                .frame(width: 28, height: 28)
+                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+
+            // Red inner circle
+            Circle()
+                .fill(Color.red)
+                .frame(width: 22, height: 22)
+
+            // Waveform icon
+            Image(systemName: "waveform")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white)
+        }
     }
 }
 

@@ -223,39 +223,87 @@ struct VoiceMemosRecordButton: View {
     }
 }
 
-// MARK: - Recording Status View
+// MARK: - Recording Status View (Pro-style big panel)
 struct RecordingStatusView: View {
     let duration: TimeInterval
     let liveSamples: [Float]
 
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isPulsing = false
+
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
+        VStack(spacing: 16) {
+            // Top row: Recording indicator + time
+            HStack {
+                // Pulsing red dot
                 Circle()
                     .fill(Color.red)
-                    .frame(width: 10, height: 10)
+                    .frame(width: 12, height: 12)
+                    .scaleEffect(isPulsing ? 1.2 : 1.0)
+                    .animation(
+                        .easeInOut(duration: 0.6).repeatForever(autoreverses: true),
+                        value: isPulsing
+                    )
 
-                Text("Recording...")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                Text("Recording")
+                    .font(.headline)
+                    .fontWeight(.semibold)
                     .foregroundColor(.primary)
 
+                Spacer()
+
+                // Time display
                 Text(formatDuration(duration))
-                    .font(.subheadline)
-                    .monospacedDigit()
+                    .font(.system(size: 28, weight: .medium, design: .monospaced))
                     .foregroundColor(.red)
             }
 
-            if !liveSamples.isEmpty {
-                LiveWaveformView(samples: liveSamples)
-                    .frame(height: 50)
-                    .padding(.horizontal, 8)
+            // Middle: Live waveform spanning full width
+            ZStack {
+                if liveSamples.isEmpty {
+                    // Placeholder when no samples yet
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(colorScheme == .dark ? Color(.systemGray5) : Color(.systemGray6))
+                        .frame(height: 60)
+                } else {
+                    LiveWaveformView(samples: liveSamples)
+                        .frame(height: 60)
+                }
+            }
+
+            // Bottom row: Input indicator + level hint
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(AudioSessionManager.shared.currentInput?.portName ?? "Built-in Mic")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                // Simple level indicator
+                if let lastSample = liveSamples.last {
+                    LevelIndicator(level: lastSample)
+                }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.red.opacity(0.15))
-        .cornerRadius(16)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.3 : 0.1), radius: 8, y: 4)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color.red.opacity(0.3), lineWidth: 2)
+        )
+        .onAppear {
+            isPulsing = true
+        }
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -263,6 +311,37 @@ struct RecordingStatusView: View {
         let seconds = Int(duration) % 60
         let tenths = Int((duration.truncatingRemainder(dividingBy: 1)) * 10)
         return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+    }
+}
+
+// MARK: - Level Indicator
+struct LevelIndicator: View {
+    let level: Float
+
+    private var barCount: Int { 5 }
+
+    private func barColor(at index: Int) -> Color {
+        let threshold = Float(index) / Float(barCount)
+        if level >= threshold {
+            if index >= barCount - 1 {
+                return .red
+            } else if index >= barCount - 2 {
+                return .orange
+            } else {
+                return .green
+            }
+        }
+        return Color(.systemGray4)
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(barColor(at: index))
+                    .frame(width: 4, height: CGFloat(8 + index * 3))
+            }
+        }
     }
 }
 

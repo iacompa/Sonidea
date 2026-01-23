@@ -117,6 +117,36 @@ struct EQSettings: Codable, Equatable {
     static let lowMidFrequency: Float = 500
     static let highMidFrequency: Float = 2000
     static let highFrequency: Float = 8000
+
+    // Gain range
+    static let minGain: Float = -12
+    static let maxGain: Float = 12
+
+    // Band labels
+    static let bandLabels = ["Low", "LM", "HM", "High"]
+
+    // Get gain for band index
+    func gain(for index: Int) -> Float {
+        switch index {
+        case 0: return lowGain
+        case 1: return lowMidGain
+        case 2: return highMidGain
+        case 3: return highGain
+        default: return 0
+        }
+    }
+
+    // Set gain for band index
+    mutating func setGain(_ gain: Float, for index: Int) {
+        let clampedGain = max(EQSettings.minGain, min(EQSettings.maxGain, gain))
+        switch index {
+        case 0: lowGain = clampedGain
+        case 1: lowMidGain = clampedGain
+        case 2: highMidGain = clampedGain
+        case 3: highGain = clampedGain
+        default: break
+        }
+    }
 }
 
 // MARK: - Silence Skip Settings
@@ -137,6 +167,7 @@ struct AppSettings: Codable {
     var autoTranscribe: Bool = false
     var skipInterval: SkipInterval = .fifteen
     var playbackSpeed: Float = 1.0
+    var playbackVolume: Float = 1.0  // 0.0 to 1.0
     var eqSettings: EQSettings = .flat
     var silenceSkipSettings: SilenceSkipSettings = .default
 

@@ -16,6 +16,7 @@ final class PlaybackEngine {
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
     var playbackSpeed: Float = 1.0
+    var playbackVolume: Float = 1.0
     var eqSettings: EQSettings = .flat
 
     private var audioEngine: AVAudioEngine?
@@ -152,6 +153,13 @@ final class PlaybackEngine {
         timePitchNode?.rate = playbackSpeed
     }
 
+    // MARK: - Volume Control
+
+    func setVolume(_ volume: Float) {
+        playbackVolume = max(0.0, min(1.0, volume))
+        audioEngine?.mainMixerNode.outputVolume = playbackVolume
+    }
+
     // MARK: - EQ Control
 
     func setEQ(_ settings: EQSettings) {
@@ -174,6 +182,9 @@ final class PlaybackEngine {
 
         // Configure time pitch
         timePitch.rate = playbackSpeed
+
+        // Configure volume
+        engine.mainMixerNode.outputVolume = playbackVolume
 
         // Configure EQ bands
         configurEQBands()
