@@ -37,29 +37,115 @@ final class AudioExporter {
 
     private let tempDirectory: URL
     private let wavCacheDirectory: URL
+    private let shareDirectory: URL
 
     private init() {
         let temp = FileManager.default.temporaryDirectory
         tempDirectory = temp.appendingPathComponent("VoiceMemoProExport", isDirectory: true)
         wavCacheDirectory = temp.appendingPathComponent("VoiceMemoProWAVCache", isDirectory: true)
+        shareDirectory = temp.appendingPathComponent("VoiceMemoProShare", isDirectory: true)
 
         // Create directories if needed
         try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: wavCacheDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: shareDirectory, withIntermediateDirectories: true)
+    }
+
+    // MARK: - Safe Filename Generation
+
+    /// Generates a safe WAV filename from a recording's title
+    /// - Parameters:
+    ///   - recording: The recording to generate a filename for
+    ///   - existingNames: Set of already-used filenames (without extension) to avoid collisions
+    /// - Returns: A safe filename with .wav extension
+    func safeWAVFileName(for recording: RecordingItem, existingNames: Set<String> = []) -> String {
+        let baseName = sanitizeFilename(recording.title)
+
+        // If base name is unique, use it directly
+        if !existingNames.contains(baseName) {
+            return "\(baseName).wav"
+        }
+
+        // Otherwise, append a counter to make it unique
+        var counter = 2
+        var uniqueName = "\(baseName) (\(counter))"
+        while existingNames.contains(uniqueName) {
+            counter += 1
+            uniqueName = "\(baseName) (\(counter))"
+        }
+
+        return "\(uniqueName).wav"
+    }
+
+    /// Sanitizes a string for use as a filename
+    /// - Parameter name: The original name (e.g., recording title)
+    /// - Returns: A filesystem-safe version of the name
+    private func sanitizeFilename(_ name: String) -> String {
+        var sanitized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Fallback if empty
+        if sanitized.isEmpty {
+            return "Recording"
+        }
+
+        // Replace illegal filename characters with dash
+        // Illegal: / \ : * ? " < > | and newlines
+        let illegalCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|\r\n")
+        sanitized = sanitized.components(separatedBy: illegalCharacters).joined(separator: "-")
+
+        // Collapse repeated spaces and dashes
+        while sanitized.contains("  ") {
+            sanitized = sanitized.replacingOccurrences(of: "  ", with: " ")
+        }
+        while sanitized.contains("--") {
+            sanitized = sanitized.replacingOccurrences(of: "--", with: "-")
+        }
+
+        // Trim leading/trailing dashes and spaces
+        sanitized = sanitized.trimmingCharacters(in: CharacterSet(charactersIn: "- "))
+
+        // Limit length to 80 characters to avoid filesystem issues
+        if sanitized.count > 80 {
+            sanitized = String(sanitized.prefix(80)).trimmingCharacters(in: CharacterSet(charactersIn: "- "))
+        }
+
+        // Final fallback if somehow empty after sanitization
+        if sanitized.isEmpty {
+            return "Recording"
+        }
+
+        return sanitized
     }
 
     // MARK: - Single Recording WAV Export
 
     func exportToWAV(recording: RecordingItem) async throws -> URL {
-        // Check cache first
+        // Check cache first (using UUID for internal caching)
         let cachedURL = wavCacheDirectory.appendingPathComponent("\(recording.id.uuidString).wav")
-        if FileManager.default.fileExists(atPath: cachedURL.path) {
-            return cachedURL
+        if !FileManager.default.fileExists(atPath: cachedURL.path) {
+            // Convert to WAV and cache
+            _ = try await convertToWAV(sourceURL: recording.fileURL, outputURL: cachedURL)
         }
 
-        // Convert to WAV
-        let wavURL = try await convertToWAV(sourceURL: recording.fileURL, outputURL: cachedURL)
-        return wavURL
+        // Clean up old share files
+        cleanShareDirectory()
+
+        // Create a properly named file for sharing
+        let shareFilename = safeWAVFileName(for: recording)
+        let shareURL = shareDirectory.appendingPathComponent(shareFilename)
+
+        // Remove existing share file if present
+        try? FileManager.default.removeItem(at: shareURL)
+
+        // Create a hard link to avoid duplicating the file data
+        // If hard link fails (e.g., different volumes), fall back to copy
+        do {
+            try FileManager.default.linkItem(at: cachedURL, to: shareURL)
+        } catch {
+            try FileManager.default.copyItem(at: cachedURL, to: shareURL)
+        }
+
+        return shareURL
     }
 
     // MARK: - Bulk Export to ZIP
@@ -78,6 +164,9 @@ final class AudioExporter {
 
         var manifestItems: [ExportManifestItem] = []
         let dateFormatter = ISO8601DateFormatter()
+
+        // Track used filenames per folder to ensure uniqueness
+        var usedNamesByFolder: [String: Set<String>] = [:]
 
         for recording in recordings {
             let album = albumLookup(recording.albumID)
@@ -104,8 +193,17 @@ final class AudioExporter {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             }
 
-            // Convert to WAV
-            let wavFilename = "\(sanitizeFilename(recording.title)).wav"
+            // Get or create the set of used names for this folder
+            var usedNames = usedNamesByFolder[folderName] ?? []
+
+            // Generate unique filename
+            let wavFilename = safeWAVFileName(for: recording, existingNames: usedNames)
+
+            // Track this name (without extension) as used
+            let nameWithoutExtension = String(wavFilename.dropLast(4)) // Remove ".wav"
+            usedNames.insert(nameWithoutExtension)
+            usedNamesByFolder[folderName] = usedNames
+
             let wavDestination = folder.appendingPathComponent(wavFilename)
 
             do {
@@ -284,12 +382,7 @@ final class AudioExporter {
         }
     }
 
-    // MARK: - Helpers
-
-    private func sanitizeFilename(_ name: String) -> String {
-        let invalidCharacters = CharacterSet(charactersIn: ":/\\?%*|\"<>")
-        return name.components(separatedBy: invalidCharacters).joined(separator: "_")
-    }
+    // MARK: - Cleanup Helpers
 
     private func cleanTempDirectory() {
         let exportFolder = tempDirectory.appendingPathComponent("export", isDirectory: true)
@@ -303,8 +396,18 @@ final class AudioExporter {
         }
     }
 
+    private func cleanShareDirectory() {
+        // Remove all files in share directory (they're just hard links anyway)
+        if let contents = try? FileManager.default.contentsOfDirectory(at: shareDirectory, includingPropertiesForKeys: nil) {
+            for url in contents {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     func clearWAVCache() {
         try? FileManager.default.removeItem(at: wavCacheDirectory)
         try? FileManager.default.createDirectory(at: wavCacheDirectory, withIntermediateDirectories: true)
+        cleanShareDirectory()
     }
 }
