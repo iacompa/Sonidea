@@ -33,6 +33,9 @@ struct RecordingDetailView: View {
     @State private var isExporting = false
 
     @State private var editedIconColor: Color
+    // Track if icon color was explicitly modified by user (to avoid lossy round-trip conversion)
+    @State private var iconColorWasModified = false
+    private let originalIconColorHex: String?
 
     // EQ panel state
     @State private var showEQPanel = false
@@ -52,6 +55,8 @@ struct RecordingDetailView: View {
         _currentRecording = State(initialValue: recording)
         _editedIconColor = State(initialValue: recording.iconColor)
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
+        // Store original hex to avoid overwriting with lossy Color -> hex conversion
+        self.originalIconColorHex = recording.iconColorHex
     }
 
     var body: some View {
@@ -392,6 +397,10 @@ struct RecordingDetailView: View {
                     Spacer()
                     ColorPicker("", selection: $editedIconColor, supportsOpacity: false)
                         .labelsHidden()
+                        .onChange(of: editedIconColor) { _, _ in
+                            // Mark icon color as explicitly modified by user
+                            iconColorWasModified = true
+                        }
                 }
                 .padding(12)
                 .background(Color(.systemGray6))
@@ -825,7 +834,13 @@ struct RecordingDetailView: View {
         updated.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
-        updated.iconColorHex = editedIconColor.toHex()
+        // IMPORTANT: Only update iconColorHex if user explicitly changed it via ColorPicker
+        // This prevents lossy Color -> hex round-trip conversion from changing the color
+        // when user edits other fields (title, notes, tags, album, EQ, etc.)
+        if iconColorWasModified {
+            updated.iconColorHex = editedIconColor.toHex()
+        }
+        // Otherwise preserve the original iconColorHex (already in currentRecording)
         updated.eqSettings = localEQSettings
         appState.updateRecording(updated)
     }
