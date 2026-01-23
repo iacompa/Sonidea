@@ -53,61 +53,51 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         return Color(hex: Self.defaultIconColorHex) ?? Color(.systemGray4)
     }
 
-    // MARK: - Adaptive Icon Colors
+    // MARK: - Stable Icon Tile Colors (no automatic changes based on edits/tags/selection)
 
-    /// Returns the background color for the icon tile, adapting to color scheme
+    /// Returns whether this recording has a user-set custom icon color
+    var hasCustomIconColor: Bool {
+        if let hex = iconColorHex, Color(hex: hex) != nil {
+            return true
+        }
+        return false
+    }
+
+    /// Returns the stable background color for the icon tile
+    /// This color is ONLY determined by iconColorHex - nothing else affects it
     func iconTileBackground(for colorScheme: ColorScheme) -> Color {
         if let hex = iconColorHex, let baseColor = Color(hex: hex) {
-            // User has chosen a custom color
-            if colorScheme == .light {
-                // Light mode: show a lighter, tinted version
-                return baseColor.opacity(0.2)
-            } else {
-                // Dark mode: show a richer version
-                return baseColor.opacity(0.35)
-            }
+            // User has explicitly set a custom color
+            // Use a fixed, stable opacity that works well in both modes
+            return baseColor.opacity(colorScheme == .light ? 0.15 : 0.25)
         } else {
-            // Default case - no custom color
-            if colorScheme == .light {
-                return Color(.systemGray5)
-            } else {
-                return Color(.systemGray4)
-            }
+            // Default: stable system gray that doesn't change based on any recording state
+            return colorScheme == .light ? Color(.systemGray5) : Color(.systemGray5)
         }
     }
 
-    /// Returns the border color for the icon tile
+    /// Returns the stable border color for the icon tile
     func iconTileBorder(for colorScheme: ColorScheme) -> Color {
         if let hex = iconColorHex, let baseColor = Color(hex: hex) {
-            // User has chosen a custom color
-            if colorScheme == .light {
-                return baseColor.opacity(0.4)
-            } else {
-                return baseColor.opacity(0.5)
-            }
+            return baseColor.opacity(colorScheme == .light ? 0.3 : 0.4)
         } else {
-            // Default case
-            if colorScheme == .light {
-                return Color(.systemGray4)
-            } else {
-                return Color.clear
-            }
+            return colorScheme == .light ? Color(.systemGray4) : Color.clear
         }
     }
 
-    /// Returns the symbol color for the waveform icon
+    /// Returns the symbol color for the waveform icon with proper contrast
     func iconSymbolColor(for colorScheme: ColorScheme) -> Color {
-        if let hex = iconColorHex, Color(hex: hex) != nil {
-            // User has chosen a custom color - use the base color for the symbol
+        if let hex = iconColorHex, let baseColor = Color(hex: hex) {
+            // User has a custom color - ensure good contrast
             if colorScheme == .light {
-                // Light mode with tinted bg: use the actual color for contrast
-                return Color(hex: hex) ?? .primary
+                // Light mode: use the custom color itself (darker on light bg)
+                return baseColor
             } else {
-                // Dark mode: use white for better visibility on darker bg
+                // Dark mode: use white for visibility on darker backgrounds
                 return .white
             }
         } else {
-            // Default case - use primary color
+            // Default: primary color works well on system gray backgrounds
             return .primary
         }
     }

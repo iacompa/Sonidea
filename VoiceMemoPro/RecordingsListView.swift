@@ -285,6 +285,7 @@ struct RecordingsListView: View {
                     .tint(.pink)
                 }
                 .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             }
 
             // Bottom spacer for floating record button
@@ -421,18 +422,11 @@ struct RecordingRow: View {
             if isSelectionMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(isSelected ? .blue : .secondary)
+                    .font(.system(size: 22))
             }
 
-            Image(systemName: "waveform")
-                .font(.system(size: 24))
-                .foregroundColor(recording.iconSymbolColor(for: colorScheme))
-                .frame(width: 44, height: 44)
-                .background(recording.iconTileBackground(for: colorScheme))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
-                )
+            // Icon tile - isolated from row highlight states
+            RecordingIconTile(recording: recording, colorScheme: colorScheme)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)
@@ -481,6 +475,30 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Recording Icon Tile (Isolated, Stable Colors)
+
+/// A dedicated view for the recording icon tile that maintains stable colors
+/// regardless of row selection, highlight, or edit state.
+struct RecordingIconTile: View {
+    let recording: RecordingItem
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        Image(systemName: "waveform")
+            .font(.system(size: 24))
+            .foregroundColor(recording.iconSymbolColor(for: colorScheme))
+            .frame(width: 44, height: 44)
+            .background(recording.iconTileBackground(for: colorScheme))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
+            )
+            // Prevent any inherited opacity/highlight from affecting this view
+            .compositingGroup()
     }
 }
 
