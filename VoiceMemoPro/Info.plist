@@ -2,7 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key></key>
-	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>VoiceMemoPro needs access to the microphone to record voice memos.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>VoiceMemoPro needs access to speech recognition to transcribe your voice memos.</string>
 </dict>
 </plist>

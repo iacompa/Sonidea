@@ -20,6 +20,14 @@ final class AppState {
             saveAppearanceMode()
         }
     }
+    var appSettings: AppSettings = .default {
+        didSet {
+            saveAppSettings()
+            // Apply quality preset to recorder
+            recorder.qualityPreset = appSettings.recordingQuality
+        }
+    }
+
     let recorder = RecorderManager()
 
     private(set) var nextRecordingNumber: Int = 1
@@ -30,15 +38,38 @@ final class AppState {
     private let nextNumberKey = "nextRecordingNumber"
     private let appearanceModeKey = "appearanceMode"
     private let tagMigrationKey = "didMigrateFavToFavorite"
+    private let appSettingsKey = "appSettings"
+    private let inboxMigrationKey = "didMigrateToInbox"
 
     init() {
         loadAppearanceMode()
+        loadAppSettings()
         loadNextRecordingNumber()
         loadTags()
         loadAlbums()
         loadRecordings()
         seedDefaultTagsIfNeeded()
+        ensureInboxAlbum()
         migrateFavTagToFavorite()
+        migrateRecordingsToInbox()
+        purgeOldTrashedRecordings()
+        recorder.qualityPreset = appSettings.recordingQuality
+    }
+
+    // MARK: - Filtered Recording Lists
+
+    /// Active recordings (not trashed)
+    var activeRecordings: [RecordingItem] {
+        recordings.filter { !$0.isTrashed }
+    }
+
+    /// Trashed recordings
+    var trashedRecordings: [RecordingItem] {
+        recordings.filter { $0.isTrashed }
+    }
+
+    var trashedCount: Int {
+        trashedRecordings.count
     }
 
     // MARK: - Recording Management
@@ -52,11 +83,31 @@ final class AppState {
             fileURL: rawData.fileURL,
             createdAt: rawData.createdAt,
             duration: rawData.duration,
-            title: title
+            title: title,
+            albumID: Album.inboxID  // Default to Inbox
         )
 
         recordings.insert(recording, at: 0)
         saveRecordings()
+
+        // Auto-transcribe if enabled
+        if appSettings.autoTranscribe {
+            Task {
+                await autoTranscribe(recording: recording)
+            }
+        }
+    }
+
+    private func autoTranscribe(recording: RecordingItem) async {
+        do {
+            let transcript = try await TranscriptionManager.shared.transcribe(
+                audioURL: recording.fileURL,
+                language: appSettings.transcriptionLanguage
+            )
+            updateTranscript(transcript, for: recording.id)
+        } catch {
+            print("Auto-transcribe failed: \(error)")
+        }
     }
 
     func updateRecording(_ updated: RecordingItem) {
@@ -75,19 +126,75 @@ final class AppState {
         saveRecordings()
     }
 
-    func deleteRecording(_ recording: RecordingItem) {
+    func updatePlaybackPosition(_ position: TimeInterval, for recordingID: UUID) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
+            return
+        }
+        recordings[index].lastPlaybackPosition = position
+        saveRecordings()
+    }
+
+    // MARK: - Trash Management
+
+    func moveToTrash(_ recording: RecordingItem) {
+        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else {
+            return
+        }
+        recordings[index].trashedAt = Date()
+        saveRecordings()
+    }
+
+    func moveToTrash(at offsets: IndexSet, from list: [RecordingItem]) {
+        for index in offsets {
+            let recording = list[index]
+            moveToTrash(recording)
+        }
+    }
+
+    func restoreFromTrash(_ recording: RecordingItem) {
+        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else {
+            return
+        }
+        recordings[index].trashedAt = nil
+        saveRecordings()
+    }
+
+    func permanentlyDelete(_ recording: RecordingItem) {
         try? FileManager.default.removeItem(at: recording.fileURL)
         recordings.removeAll { $0.id == recording.id }
         saveRecordings()
     }
 
-    func deleteRecordings(at offsets: IndexSet) {
-        for index in offsets {
-            let recording = recordings[index]
+    func emptyTrash() {
+        for recording in trashedRecordings {
             try? FileManager.default.removeItem(at: recording.fileURL)
         }
-        recordings.remove(atOffsets: offsets)
+        recordings.removeAll { $0.isTrashed }
         saveRecordings()
+    }
+
+    private func purgeOldTrashedRecordings() {
+        let toDelete = recordings.filter { $0.shouldPurge }
+        for recording in toDelete {
+            try? FileManager.default.removeItem(at: recording.fileURL)
+        }
+        recordings.removeAll { $0.shouldPurge }
+        if !toDelete.isEmpty {
+            saveRecordings()
+        }
+    }
+
+    func deleteRecording(_ recording: RecordingItem) {
+        // Now moves to trash instead of permanent delete
+        moveToTrash(recording)
+    }
+
+    func deleteRecordings(at offsets: IndexSet) {
+        // Now moves to trash instead of permanent delete
+        for index in offsets {
+            let recording = activeRecordings[index]
+            moveToTrash(recording)
+        }
     }
 
     // MARK: - Tag Helpers
@@ -97,18 +204,48 @@ final class AppState {
     }
 
     func tags(for ids: [UUID]) -> [Tag] {
-        ids.compactMap { tag(for: $0) }
+        // Return in tag order
+        ids.compactMap { id in tags.first { $0.id == id } }
+    }
+
+    func tagUsageCount(_ tag: Tag) -> Int {
+        recordings.filter { $0.tagIDs.contains(tag.id) }.count
+    }
+
+    func tagExists(name: String, excludingID: UUID? = nil) -> Bool {
+        tags.contains { tag in
+            tag.name.lowercased() == name.lowercased() && tag.id != excludingID
+        }
     }
 
     @discardableResult
-    func createTag(name: String, colorHex: String) -> Tag {
+    func createTag(name: String, colorHex: String) -> Tag? {
+        guard !tagExists(name: name) else { return nil }
         let tag = Tag(name: name, colorHex: colorHex)
         tags.append(tag)
         saveTags()
         return tag
     }
 
-    func deleteTag(_ tag: Tag) {
+    func updateTag(_ tag: Tag, name: String, colorHex: String) -> Bool {
+        guard let index = tags.firstIndex(where: { $0.id == tag.id }) else {
+            return false
+        }
+        // Check for duplicate name (excluding current tag)
+        if tagExists(name: name, excludingID: tag.id) {
+            return false
+        }
+        tags[index].name = name
+        tags[index].colorHex = colorHex
+        saveTags()
+        return true
+    }
+
+    func deleteTag(_ tag: Tag) -> Bool {
+        // Cannot delete protected tags
+        if tag.isProtected {
+            return false
+        }
         tags.removeAll { $0.id == tag.id }
         // Remove tag from all recordings
         for i in recordings.indices {
@@ -116,6 +253,43 @@ final class AppState {
         }
         saveTags()
         saveRecordings()
+        return true
+    }
+
+    func mergeTags(sourceTagIDs: Set<UUID>, destinationTagID: UUID) {
+        guard let destTag = tag(for: destinationTagID) else { return }
+
+        // Update all recordings to use destination tag
+        for i in recordings.indices {
+            var newTagIDs = recordings[i].tagIDs
+
+            // Check if recording has any of the source tags
+            let hasSourceTag = newTagIDs.contains { sourceTagIDs.contains($0) }
+            if hasSourceTag {
+                // Remove all source tags
+                newTagIDs.removeAll { sourceTagIDs.contains($0) }
+                // Add destination tag if not already present
+                if !newTagIDs.contains(destinationTagID) {
+                    newTagIDs.append(destinationTagID)
+                }
+                recordings[i].tagIDs = newTagIDs
+            }
+        }
+
+        // Delete merged tags (except destination)
+        for tagID in sourceTagIDs where tagID != destinationTagID {
+            if let tag = tag(for: tagID), !tag.isProtected {
+                tags.removeAll { $0.id == tagID }
+            }
+        }
+
+        saveTags()
+        saveRecordings()
+    }
+
+    func moveTag(from source: IndexSet, to destination: Int) {
+        tags.move(fromOffsets: source, toOffset: destination)
+        saveTags()
     }
 
     func toggleTag(_ tag: Tag, for recording: RecordingItem) -> RecordingItem {
@@ -127,6 +301,20 @@ final class AppState {
         }
         updateRecording(updated)
         return updated
+    }
+
+    func toggleFavorite(for recording: RecordingItem) -> RecordingItem {
+        guard let favoriteTag = tags.first(where: { $0.name.lowercased() == "favorite" }) else {
+            return recording
+        }
+        return toggleTag(favoriteTag, for: recording)
+    }
+
+    func isFavorite(_ recording: RecordingItem) -> Bool {
+        guard let favoriteTag = tags.first(where: { $0.name.lowercased() == "favorite" }) else {
+            return false
+        }
+        return recording.tagIDs.contains(favoriteTag.id)
     }
 
     // MARK: - Album Helpers
@@ -145,11 +333,12 @@ final class AppState {
     }
 
     func deleteAlbum(_ album: Album) {
+        guard album.canDelete else { return }
         albums.removeAll { $0.id == album.id }
-        // Remove album from all recordings
+        // Move recordings to Inbox
         for i in recordings.indices {
             if recordings[i].albumID == album.id {
-                recordings[i].albumID = nil
+                recordings[i].albumID = Album.inboxID
             }
         }
         saveAlbums()
@@ -158,19 +347,44 @@ final class AppState {
 
     func setAlbum(_ album: Album?, for recording: RecordingItem) -> RecordingItem {
         var updated = recording
-        updated.albumID = album?.id
+        updated.albumID = album?.id ?? Album.inboxID
         updateRecording(updated)
         return updated
+    }
+
+    private func ensureInboxAlbum() {
+        if !albums.contains(where: { $0.id == Album.inboxID }) {
+            albums.insert(Album.inbox, at: 0)
+            saveAlbums()
+        }
+    }
+
+    private func migrateRecordingsToInbox() {
+        let didMigrate = UserDefaults.standard.bool(forKey: inboxMigrationKey)
+        guard !didMigrate else { return }
+
+        var changed = false
+        for i in recordings.indices {
+            if recordings[i].albumID == nil {
+                recordings[i].albumID = Album.inboxID
+                changed = true
+            }
+        }
+
+        if changed {
+            saveRecordings()
+        }
+        UserDefaults.standard.set(true, forKey: inboxMigrationKey)
     }
 
     // MARK: - Album Search Helpers
 
     func recordings(in album: Album) -> [RecordingItem] {
-        recordings.filter { $0.albumID == album.id }
+        activeRecordings.filter { $0.albumID == album.id }
     }
 
     func recordingCount(in album: Album) -> Int {
-        recordings.filter { $0.albumID == album.id }.count
+        activeRecordings.filter { $0.albumID == album.id }.count
     }
 
     func searchAlbums(query: String) -> [Album] {
@@ -182,7 +396,7 @@ final class AppState {
     // MARK: - Search
 
     func searchRecordings(query: String, filterTagIDs: Set<UUID> = []) -> [RecordingItem] {
-        var results = recordings
+        var results = activeRecordings
 
         // Filter by tags if any selected
         if !filterTagIDs.isEmpty {
@@ -226,6 +440,78 @@ final class AppState {
         }
 
         return results
+    }
+
+    // MARK: - Batch Operations
+
+    func addTagToRecordings(_ tag: Tag, recordingIDs: Set<UUID>) {
+        for i in recordings.indices {
+            if recordingIDs.contains(recordings[i].id) && !recordings[i].tagIDs.contains(tag.id) {
+                recordings[i].tagIDs.append(tag.id)
+            }
+        }
+        saveRecordings()
+    }
+
+    func removeTagFromRecordings(_ tag: Tag, recordingIDs: Set<UUID>) {
+        for i in recordings.indices {
+            if recordingIDs.contains(recordings[i].id) {
+                recordings[i].tagIDs.removeAll { $0 == tag.id }
+            }
+        }
+        saveRecordings()
+    }
+
+    func setAlbumForRecordings(_ album: Album?, recordingIDs: Set<UUID>) {
+        for i in recordings.indices {
+            if recordingIDs.contains(recordings[i].id) {
+                recordings[i].albumID = album?.id ?? Album.inboxID
+            }
+        }
+        saveRecordings()
+    }
+
+    func moveRecordingsToTrash(recordingIDs: Set<UUID>) {
+        for i in recordings.indices {
+            if recordingIDs.contains(recordings[i].id) {
+                recordings[i].trashedAt = Date()
+            }
+        }
+        saveRecordings()
+    }
+
+    // MARK: - Import
+
+    func importRecording(from url: URL, duration: TimeInterval) {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let filename = url.lastPathComponent
+        let destURL = documentsPath.appendingPathComponent(filename)
+
+        // Copy file to documents
+        do {
+            if FileManager.default.fileExists(atPath: destURL.path) {
+                try FileManager.default.removeItem(at: destURL)
+            }
+            try FileManager.default.copyItem(at: url, to: destURL)
+        } catch {
+            print("Failed to copy imported file: \(error)")
+            return
+        }
+
+        let title = "Recording \(nextRecordingNumber)"
+        nextRecordingNumber += 1
+        saveNextRecordingNumber()
+
+        let recording = RecordingItem(
+            fileURL: destURL,
+            createdAt: Date(),
+            duration: duration,
+            title: title,
+            albumID: Album.inboxID
+        )
+
+        recordings.insert(recording, at: 0)
+        saveRecordings()
     }
 
     // MARK: - Tag Migration
@@ -317,6 +603,20 @@ final class AppState {
             return
         }
         appearanceMode = mode
+    }
+
+    private func saveAppSettings() {
+        if let data = try? JSONEncoder().encode(appSettings) {
+            UserDefaults.standard.set(data, forKey: appSettingsKey)
+        }
+    }
+
+    private func loadAppSettings() {
+        guard let data = UserDefaults.standard.data(forKey: appSettingsKey),
+              let saved = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+            return
+        }
+        appSettings = saved
     }
 
     private func seedDefaultTagsIfNeeded() {

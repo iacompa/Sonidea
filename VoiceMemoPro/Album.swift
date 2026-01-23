@@ -11,10 +11,27 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     var name: String
     let createdAt: Date
+    var isSystem: Bool
 
-    init(id: UUID = UUID(), name: String, createdAt: Date = Date()) {
+    // System albums cannot be deleted
+    var canDelete: Bool {
+        !isSystem
+    }
+
+    init(id: UUID = UUID(), name: String, createdAt: Date = Date(), isSystem: Bool = false) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
+        self.isSystem = isSystem
     }
+
+    // Well-known system album IDs
+    static let inboxID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+    static let inbox = Album(
+        id: inboxID,
+        name: "Inbox",
+        createdAt: Date(timeIntervalSince1970: 0),
+        isSystem: true
+    )
 }

@@ -20,6 +20,23 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     var locationLabel: String
     var transcript: String
 
+    // Trash support
+    var trashedAt: Date?
+
+    // Smart resume - last playback position
+    var lastPlaybackPosition: TimeInterval
+
+    var isTrashed: Bool {
+        trashedAt != nil
+    }
+
+    // Auto-purge after 30 days
+    var shouldPurge: Bool {
+        guard let trashedAt = trashedAt else { return false }
+        let daysSinceTrashed = Calendar.current.dateComponents([.day], from: trashedAt, to: Date()).day ?? 0
+        return daysSinceTrashed >= 30
+    }
+
     var formattedDuration: String {
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
@@ -33,6 +50,20 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         return formatter.string(from: createdAt)
     }
 
+    var trashedDateFormatted: String? {
+        guard let trashedAt = trashedAt else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: trashedAt)
+    }
+
+    var daysUntilPurge: Int? {
+        guard let trashedAt = trashedAt else { return nil }
+        let daysSinceTrashed = Calendar.current.dateComponents([.day], from: trashedAt, to: Date()).day ?? 0
+        return max(0, 30 - daysSinceTrashed)
+    }
+
     init(
         id: UUID = UUID(),
         fileURL: URL,
@@ -43,7 +74,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         tagIDs: [UUID] = [],
         albumID: UUID? = nil,
         locationLabel: String = "",
-        transcript: String = ""
+        transcript: String = "",
+        trashedAt: Date? = nil,
+        lastPlaybackPosition: TimeInterval = 0
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -55,6 +88,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.albumID = albumID
         self.locationLabel = locationLabel
         self.transcript = transcript
+        self.trashedAt = trashedAt
+        self.lastPlaybackPosition = lastPlaybackPosition
     }
 }
 

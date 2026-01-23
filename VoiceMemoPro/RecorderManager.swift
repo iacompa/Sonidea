@@ -15,23 +15,56 @@ final class RecorderManager: NSObject {
     var isRecording = false
     var currentDuration: TimeInterval = 0
     var liveMeterSamples: [Float] = []
+    var qualityPreset: RecordingQualityPreset = .better
 
     private var audioRecorder: AVAudioRecorder?
     private var recordingStartTime: Date?
     private var timer: Timer?
     private var currentFileURL: URL?
+    private var wasRecordingBeforeInterruption = false
 
     private let maxLiveSamples = 60
 
     override init() {
         super.init()
+        setupInterruptionHandling()
     }
 
+    // MARK: - Interruption Handling
+
+    private func setupInterruptionHandling() {
+        AudioSessionManager.shared.onInterruptionBegan = { [weak self] in
+            Task { @MainActor in
+                guard let self = self, self.isRecording else { return }
+                self.wasRecordingBeforeInterruption = true
+                self.pauseRecording()
+            }
+        }
+
+        AudioSessionManager.shared.onInterruptionEnded = { [weak self] shouldResume in
+            Task { @MainActor in
+                guard let self = self, self.wasRecordingBeforeInterruption else { return }
+                self.wasRecordingBeforeInterruption = false
+                if shouldResume {
+                    self.resumeRecording()
+                }
+            }
+        }
+
+        AudioSessionManager.shared.onRouteChange = { [weak self] in
+            Task { @MainActor in
+                // Route changed - keep recording stable if possible
+                // The recording will continue with whatever input is available
+                self?.audioRecorder?.updateMeters()
+            }
+        }
+    }
+
+    // MARK: - Recording Control
+
     func startRecording() {
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: .defaultToSpeaker)
-            try session.setActive(true)
+            try AudioSessionManager.shared.configureForRecording()
         } catch {
             print("Failed to set up audio session: \(error)")
             return
@@ -40,12 +73,7 @@ final class RecorderManager: NSObject {
         let fileURL = generateFileURL()
         currentFileURL = fileURL
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
+        let settings = recordingSettings(for: qualityPreset)
 
         do {
             audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
@@ -78,6 +106,7 @@ final class RecorderManager: NSObject {
         audioRecorder = nil
         currentFileURL = nil
         liveMeterSamples = []
+        wasRecordingBeforeInterruption = false
 
         return RawRecordingData(
             fileURL: fileURL,
@@ -85,6 +114,30 @@ final class RecorderManager: NSObject {
             duration: duration
         )
     }
+
+    func pauseRecording() {
+        audioRecorder?.pause()
+        stopTimer()
+    }
+
+    func resumeRecording() {
+        audioRecorder?.record()
+        startTimer()
+    }
+
+    // MARK: - Quality Settings
+
+    private func recordingSettings(for preset: RecordingQualityPreset) -> [String: Any] {
+        return [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: preset.sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: preset.bitRate,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+    }
+
+    // MARK: - Helpers
 
     private func generateFileURL() -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

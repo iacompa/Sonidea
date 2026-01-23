@@ -5,7 +5,9 @@
 //  Created by Michael Ramos on 1/22/26.
 //
 
+import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Route Enum
 enum AppRoute: String, CaseIterable {
@@ -693,12 +695,78 @@ struct SettingsSheetView: View {
     @State private var showShareSheet = false
     @State private var exportedZIPURL: URL?
     @State private var showAlbumPicker = false
+    @State private var showTagManager = false
+    @State private var showTrashView = false
+    @State private var showEmptyTrashAlert = false
+    @State private var showFileImporter = false
 
     var body: some View {
         @Bindable var appState = appState
 
         NavigationStack {
             List {
+                // MARK: Recording Quality
+                Section {
+                    Picker("Quality", selection: $appState.appSettings.recordingQuality) {
+                        ForEach(RecordingQualityPreset.allCases) { preset in
+                            VStack(alignment: .leading) {
+                                Text(preset.displayName)
+                            }
+                            .tag(preset)
+                        }
+                    }
+                } header: {
+                    Text("Recording Quality")
+                } footer: {
+                    Text(appState.appSettings.recordingQuality.description)
+                }
+
+                // MARK: Input Selection
+                Section {
+                    HStack {
+                        Text("Current Input")
+                        Spacer()
+                        Text(AudioSessionManager.shared.currentInput?.portName ?? "Default")
+                            .foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("Audio Input")
+                }
+
+                // MARK: Playback
+                Section {
+                    Picker("Skip Interval", selection: $appState.appSettings.skipInterval) {
+                        ForEach(SkipInterval.allCases) { interval in
+                            Text(interval.displayName).tag(interval)
+                        }
+                    }
+
+                    HStack {
+                        Text("Playback Speed")
+                        Spacer()
+                        Text(String(format: "%.1fx", appState.appSettings.playbackSpeed))
+                            .foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("Playback")
+                }
+
+                // MARK: Transcription
+                Section {
+                    Toggle("Auto-Transcribe", isOn: $appState.appSettings.autoTranscribe)
+
+                    Picker("Language", selection: $appState.appSettings.transcriptionLanguage) {
+                        ForEach(TranscriptionLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                } header: {
+                    Text("Transcription")
+                } footer: {
+                    Text("Auto-transcribe new recordings when saved.")
+                }
+
+                // MARK: Appearance
                 Section {
                     Picker("Appearance", selection: $appState.appearanceMode) {
                         ForEach(AppearanceMode.allCases) { mode in
@@ -708,10 +776,31 @@ struct SettingsSheetView: View {
                     .pickerStyle(.segmented)
                 } header: {
                     Text("Appearance")
-                } footer: {
-                    Text("Choose how the app appears. System follows your device settings.")
                 }
 
+                // MARK: Tags
+                Section {
+                    Button {
+                        showTagManager = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "tag.fill")
+                                .foregroundColor(.blue)
+                            Text("Manage Tags")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("\(appState.tags.count)")
+                                .foregroundColor(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Tags")
+                }
+
+                // MARK: Export & Import
                 Section {
                     Button {
                         exportAllRecordings()
@@ -728,7 +817,7 @@ struct SettingsSheetView: View {
                             }
                         }
                     }
-                    .disabled(isExporting || appState.recordings.isEmpty)
+                    .disabled(isExporting || appState.activeRecordings.isEmpty)
 
                     Button {
                         showAlbumPicker = true
@@ -746,12 +835,58 @@ struct SettingsSheetView: View {
                         }
                     }
                     .disabled(isExporting || appState.albums.isEmpty)
+
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                                .foregroundColor(.blue)
+                            Text("Import Recordings")
+                                .foregroundColor(.primary)
+                        }
+                    }
                 } header: {
-                    Text("Export")
+                    Text("Export & Import")
                 } footer: {
-                    Text("Export recordings as WAV files in a ZIP archive with metadata.")
+                    Text("Export as WAV files in ZIP. Import m4a, wav, mp3, or aiff files.")
                 }
 
+                // MARK: Trash
+                Section {
+                    Button {
+                        showTrashView = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                            Text("View Trash")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("\(appState.trashedCount) items")
+                                .foregroundColor(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Button(role: .destructive) {
+                        showEmptyTrashAlert = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "trash.slash")
+                            Text("Empty Trash Now")
+                        }
+                    }
+                    .disabled(appState.trashedCount == 0)
+                } header: {
+                    Text("Trash")
+                } footer: {
+                    Text("Items in trash are automatically deleted after 30 days.")
+                }
+
+                // MARK: About
                 Section {
                     HStack {
                         Image(systemName: "info.circle")
@@ -782,6 +917,27 @@ struct SettingsSheetView: View {
                     exportAlbum(album)
                 }
             }
+            .sheet(isPresented: $showTagManager) {
+                TagManagerView()
+            }
+            .sheet(isPresented: $showTrashView) {
+                TrashView()
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.audio, .mpeg4Audio, .wav, .mp3, .aiff],
+                allowsMultipleSelection: true
+            ) { result in
+                handleFileImport(result)
+            }
+            .alert("Empty Trash?", isPresented: $showEmptyTrashAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Empty Trash", role: .destructive) {
+                    appState.emptyTrash()
+                }
+            } message: {
+                Text("This will permanently delete \(appState.trashedCount) items. This cannot be undone.")
+            }
         }
     }
 
@@ -791,7 +947,7 @@ struct SettingsSheetView: View {
         Task {
             do {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
-                    appState.recordings,
+                    appState.activeRecordings,
                     scope: .all,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
@@ -828,6 +984,111 @@ struct SettingsSheetView: View {
                 exportProgress = ""
             }
         }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else { continue }
+                defer { url.stopAccessingSecurityScopedResource() }
+
+                // Get duration
+                let duration = getAudioDuration(url: url)
+                appState.importRecording(from: url, duration: duration)
+            }
+        case .failure(let error):
+            print("Import failed: \(error)")
+        }
+    }
+
+    private func getAudioDuration(url: URL) -> TimeInterval {
+        do {
+            let audioFile = try AVAudioFile(forReading: url)
+            let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+            return duration
+        } catch {
+            return 0
+        }
+    }
+}
+
+// MARK: - Trash View
+struct TrashView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if appState.trashedRecordings.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("Trash is Empty")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                    }
+                } else {
+                    List {
+                        ForEach(appState.trashedRecordings) { recording in
+                            TrashItemRow(recording: recording)
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("Trash")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+struct TrashItemRow: View {
+    @Environment(AppState.self) private var appState
+    let recording: RecordingItem
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recording.title)
+                    .font(.body)
+                    .fontWeight(.medium)
+
+                if let days = recording.daysUntilPurge {
+                    Text("Deletes in \(days) day\(days == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                appState.restoreFromTrash(recording)
+            } label: {
+                Text("Restore")
+                    .font(.subheadline)
+                    .foregroundColor(.blue)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                appState.permanentlyDelete(recording)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 8)
+        }
+        .padding(.vertical, 4)
     }
 }
 

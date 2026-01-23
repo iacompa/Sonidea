@@ -16,6 +16,11 @@ struct Tag: Identifiable, Codable, Equatable, Hashable {
         Color(hex: colorHex) ?? .blue
     }
 
+    // Protected tags cannot be deleted (but can be renamed/recolored)
+    var isProtected: Bool {
+        name.lowercased() == "favorite"
+    }
+
     init(id: UUID = UUID(), name: String, colorHex: String) {
         self.id = id
         self.name = name

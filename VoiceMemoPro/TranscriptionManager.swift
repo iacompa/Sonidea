@@ -77,7 +77,7 @@ final class TranscriptionManager {
         }
     }
 
-    func transcribe(audioURL: URL) async throws -> String {
+    func transcribe(audioURL: URL, language: TranscriptionLanguage = .system) async throws -> String {
         // Check authorization
         let status = authorizationStatus
         if status == .notDetermined {
@@ -94,9 +94,15 @@ final class TranscriptionManager {
             throw TranscriptionError.fileNotFound
         }
 
-        // Get recognizer
-        guard let recognizer = SFSpeechRecognizer(locale: Locale.current),
-              recognizer.isAvailable else {
+        // Get recognizer with specified language
+        let recognizer: SFSpeechRecognizer?
+        if let locale = language.locale {
+            recognizer = SFSpeechRecognizer(locale: locale)
+        } else {
+            recognizer = SFSpeechRecognizer(locale: Locale.current)
+        }
+
+        guard let recognizer = recognizer, recognizer.isAvailable else {
             throw TranscriptionError.notAvailable
         }
 
@@ -123,5 +129,10 @@ final class TranscriptionManager {
                 }
             }
         }
+    }
+
+    // Convenience method using current locale (backward compatibility)
+    func transcribe(audioURL: URL) async throws -> String {
+        try await transcribe(audioURL: audioURL, language: .system)
     }
 }

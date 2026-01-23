@@ -10,7 +10,7 @@ import SwiftUI
 struct RecordingDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
-    @State private var playback = PlaybackManager()
+    @State private var playback = PlaybackEngine()
 
     @State private var editedTitle: String
     @State private var editedNotes: String
@@ -20,6 +20,7 @@ struct RecordingDetailView: View {
     @State private var showManageTags = false
     @State private var showChooseAlbum = false
     @State private var showShareSheet = false
+    @State private var showSpeedPicker = false
 
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
@@ -70,16 +71,17 @@ struct RecordingDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         saveChanges()
+                        savePlaybackPosition()
                         playback.stop()
                         dismiss()
                     }
                 }
             }
             .onAppear {
-                playback.load(url: currentRecording.fileURL)
-                loadWaveform()
+                setupPlayback()
             }
             .onDisappear {
+                savePlaybackPosition()
                 playback.stop()
             }
             .sheet(isPresented: $showManageTags) {
@@ -144,6 +146,7 @@ struct RecordingDetailView: View {
                 }
             }
 
+            // Time display
             HStack {
                 Text(formatTime(playback.currentTime))
                     .font(.caption)
@@ -156,6 +159,7 @@ struct RecordingDetailView: View {
                     .monospacedDigit()
             }
 
+            // Progress bar
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Rectangle()
@@ -167,15 +171,64 @@ struct RecordingDetailView: View {
                         .frame(width: progressWidth(in: geometry.size.width), height: 4)
                         .cornerRadius(2)
                 }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let progress = max(0, min(1, value.location.x / geometry.size.width))
+                            let newTime = progress * playback.duration
+                            playback.seek(to: newTime)
+                        }
+                )
             }
-            .frame(height: 4)
+            .frame(height: 20)
 
-            Button {
-                playback.togglePlayPause()
-            } label: {
-                Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundColor(.accentColor)
+            // Playback controls
+            HStack(spacing: 32) {
+                // Skip backward
+                Button {
+                    playback.skip(seconds: -Double(appState.appSettings.skipInterval.rawValue))
+                } label: {
+                    Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
+                        .font(.system(size: 28))
+                        .foregroundColor(.primary)
+                }
+
+                // Play/Pause
+                Button {
+                    playback.togglePlayPause()
+                } label: {
+                    Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundColor(.accentColor)
+                }
+
+                // Skip forward
+                Button {
+                    playback.skip(seconds: Double(appState.appSettings.skipInterval.rawValue))
+                } label: {
+                    Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
+                        .font(.system(size: 28))
+                        .foregroundColor(.primary)
+                }
+            }
+
+            // Speed control
+            HStack {
+                Spacer()
+                Button {
+                    cycleSpeed()
+                } label: {
+                    Text(String(format: "%.1fx", playback.playbackSpeed))
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.15))
+                        .cornerRadius(8)
+                }
+                Spacer()
             }
 
             Text(currentRecording.formattedDate)
@@ -375,12 +428,42 @@ struct RecordingDetailView: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
+    private func setupPlayback() {
+        playback.load(url: currentRecording.fileURL)
+        playback.setSpeed(appState.appSettings.playbackSpeed)
+        playback.setEQ(appState.appSettings.eqSettings)
+
+        // Smart resume - seek to last position
+        if currentRecording.lastPlaybackPosition > 0 && currentRecording.lastPlaybackPosition < playback.duration {
+            playback.seek(to: currentRecording.lastPlaybackPosition)
+        }
+
+        loadWaveform()
+    }
+
     private func saveChanges() {
         var updated = currentRecording
         updated.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
         appState.updateRecording(updated)
+    }
+
+    private func savePlaybackPosition() {
+        appState.updatePlaybackPosition(playback.currentTime, for: currentRecording.id)
+    }
+
+    private func cycleSpeed() {
+        let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+        let currentIndex = speeds.firstIndex(of: playback.playbackSpeed) ?? 2
+        let nextIndex = (currentIndex + 1) % speeds.count
+        let newSpeed = speeds[nextIndex]
+        playback.setSpeed(newSpeed)
+
+        // Save to settings
+        var settings = appState.appSettings
+        settings.playbackSpeed = newSpeed
+        appState.appSettings = settings
     }
 
     private func loadWaveform() {
@@ -402,7 +485,10 @@ struct RecordingDetailView: View {
         transcriptionError = nil
         Task {
             do {
-                let transcript = try await TranscriptionManager.shared.transcribe(audioURL: currentRecording.fileURL)
+                let transcript = try await TranscriptionManager.shared.transcribe(
+                    audioURL: currentRecording.fileURL,
+                    language: appState.appSettings.transcriptionLanguage
+                )
                 currentRecording.transcript = transcript
                 appState.updateTranscript(transcript, for: currentRecording.id)
                 isTranscribing = false
@@ -513,12 +599,22 @@ struct ManageTagsSheet: View {
                                 .fill(tag.color)
                                 .frame(width: 24, height: 24)
                             Text(tag.name)
+                            if tag.isProtected {
+                                Spacer()
+                                Text("SYSTEM")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange.opacity(0.2))
+                                    .cornerRadius(4)
+                            }
                             Spacer()
                         }
                     }
                     .onDelete { offsets in
                         for index in offsets {
-                            appState.deleteTag(appState.tags[index])
+                            _ = appState.deleteTag(appState.tags[index])
                         }
                     }
                 } header: {
@@ -534,7 +630,7 @@ struct ManageTagsSheet: View {
 
                     Button("Create Tag") {
                         guard !newTagName.isEmpty else { return }
-                        appState.createTag(name: newTagName, colorHex: newTagColor.toHex())
+                        _ = appState.createTag(name: newTagName, colorHex: newTagColor.toHex())
                         newTagName = ""
                         newTagColor = .blue
                     }
@@ -567,20 +663,6 @@ struct ChooseAlbumSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Button {
-                        recording = appState.setAlbum(nil, for: recording)
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Text("None")
-                            Spacer()
-                            if recording.albumID == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                    }
-
                     ForEach(appState.albums) { album in
                         Button {
                             recording = appState.setAlbum(album, for: recording)
@@ -588,6 +670,15 @@ struct ChooseAlbumSheet: View {
                         } label: {
                             HStack {
                                 Text(album.name)
+                                if album.isSystem {
+                                    Text("SYSTEM")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.orange.opacity(0.2))
+                                        .cornerRadius(4)
+                                }
                                 Spacer()
                                 if recording.albumID == album.id {
                                     Image(systemName: "checkmark")
@@ -598,7 +689,10 @@ struct ChooseAlbumSheet: View {
                     }
                     .onDelete { offsets in
                         for index in offsets {
-                            appState.deleteAlbum(appState.albums[index])
+                            let album = appState.albums[index]
+                            if album.canDelete {
+                                appState.deleteAlbum(album)
+                            }
                         }
                     }
                 } header: {
