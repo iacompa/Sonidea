@@ -7,9 +7,9 @@
 
 import SwiftUI
 
-// MARK: - Anchor Preference Key for Select All Button
+// MARK: - Anchor Preference Key for Options Button
 
-struct SelectAllAnchorKey: PreferenceKey {
+struct OptionsButtonAnchorKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = value ?? nextValue()
@@ -77,15 +77,14 @@ struct RecordingsListView: View {
                                 .zIndex(1)
                         }
                     }
-                    .overlayPreferenceValue(SelectAllAnchorKey.self) { anchor in
+                    .overlayPreferenceValue(OptionsButtonAnchorKey.self) { anchor in
                         if isSelectionMode && showActionsMenu, let anchor = anchor {
                             GeometryReader { geo in
                                 let rect = geo[anchor]
                                 let screenWidth = geo.size.width
 
-                                // Calculate X position: align menu's right edge with button's right edge
-                                // But clamp so menu doesn't go off-screen
-                                let idealX = rect.maxX - menuWidth / 2
+                                // Calculate X position: center menu under the Options button
+                                let idealX = rect.midX
                                 let minX = menuWidth / 2 + 16 // 16pt from left edge
                                 let maxX = screenWidth - menuWidth / 2 - 16 // 16pt from right edge
                                 let clampedX = min(max(idealX, minX), maxX)
@@ -194,25 +193,17 @@ struct RecordingsListView: View {
 
             Spacer()
 
-            // Tappable selection count to toggle menu
-            Button {
-                withAnimation(menuAnimation) {
-                    showActionsMenu.toggle()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text("\(selectedRecordingIDs.count) selected")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Image(systemName: showActionsMenu ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-            }
+            // Options button with liquid glass style
+            SelectOptionsButton(
+                selectedCount: selectedRecordingIDs.count,
+                isExpanded: $showActionsMenu,
+                animation: menuAnimation
+            )
+            .anchorPreference(key: OptionsButtonAnchorKey.self, value: .bounds) { $0 }
 
             Spacer()
 
-            // Select All button with anchor preference
+            // Select All button
             Button(selectedRecordingIDs.count == appState.activeRecordings.count ? "Deselect All" : "Select All") {
                 withAnimation(menuAnimation) {
                     if selectedRecordingIDs.count == appState.activeRecordings.count {
@@ -222,10 +213,9 @@ struct RecordingsListView: View {
                     }
                 }
             }
-            .anchorPreference(key: SelectAllAnchorKey.self, value: .bounds) { $0 }
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
+        .frame(height: 52)
         .background(Color(.secondarySystemBackground))
     }
 
@@ -424,6 +414,76 @@ struct RecordingsListView: View {
                 print("Export failed: \(error)")
             }
         }
+    }
+}
+
+// MARK: - Select Options Button (Liquid Glass Style)
+
+struct SelectOptionsButton: View {
+    let selectedCount: Int
+    @Binding var isExpanded: Bool
+    let animation: Animation
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button {
+            withAnimation(animation) {
+                isExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Options")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    Text("\(selectedCount) selected")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary.opacity(0.65))
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary.opacity(0.65))
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minHeight: 44)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .shadow(
+                        color: isExpanded ? .black.opacity(0.15) : .clear,
+                        radius: isExpanded ? 8 : 0,
+                        x: 0,
+                        y: isExpanded ? 4 : 0
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        colorScheme == .dark
+                            ? Color.white.opacity(0.12)
+                            : Color.black.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(OptionsButtonStyle())
+    }
+}
+
+// MARK: - Options Button Style
+
+struct OptionsButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 
