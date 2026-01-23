@@ -38,12 +38,15 @@ class RecordButtonPositionManager: ObservableObject {
     private let posYKey = "recordButtonPosY"
     private let hasStoredKey = "recordButtonHasStored"
 
-    // Stored absolute position (center of button)
     @Published var storedX: CGFloat = 0
     @Published var storedY: CGFloat = 0
     @Published var hasStoredPosition: Bool = false
 
     init() {
+        load()
+    }
+
+    private func load() {
         let defaults = UserDefaults.standard
         hasStoredPosition = defaults.bool(forKey: hasStoredKey)
         if hasStoredPosition {
@@ -61,18 +64,24 @@ class RecordButtonPositionManager: ObservableObject {
         UserDefaults.standard.set(true, forKey: hasStoredKey)
     }
 
-    /// Reset button to default position with animation support
-    /// Pass defaultX/Y to animate smoothly to default; omit to just clear persistence
-    func reset(toDefaultX: CGFloat? = nil, toDefaultY: CGFloat? = nil) {
-        // If default coordinates provided, set stored position to animate there
-        if let x = toDefaultX, let y = toDefaultY {
-            storedX = x
-            storedY = y
-        }
+    /// Reset to default position - clears storage so default will be used
+    func resetToDefault() {
+        storedX = 0
+        storedY = 0
         hasStoredPosition = false
         UserDefaults.standard.removeObject(forKey: posXKey)
         UserDefaults.standard.removeObject(forKey: posYKey)
         UserDefaults.standard.set(false, forKey: hasStoredKey)
+    }
+
+    /// Clamp position to valid bounds
+    func clampToBounds(minX: CGFloat, maxX: CGFloat, minY: CGFloat, maxY: CGFloat) {
+        guard hasStoredPosition else { return }
+        let newX = min(max(storedX, minX), maxX)
+        let newY = min(max(storedY, minY), maxY)
+        if newX != storedX || newY != storedY {
+            save(x: newX, y: newY)
+        }
     }
 }
 
@@ -84,76 +93,77 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showTipJar = false
 
-    // Record button position
+    // Record button position state
     @StateObject private var buttonPosition = RecordButtonPositionManager.shared
-    @GestureState private var dragTranslation: CGSize = .zero
+    @State private var dragOffset: CGSize = .zero  // Live drag offset (not persisted)
     @State private var isDragging = false
 
-    // Reset bubble state
+    // Long-press reset bubble
     @State private var showResetBubble = false
 
     // Layout constants
     private let topBarHeight: CGFloat = 56
     private let buttonSize: CGFloat = 80
-    private let edgePadding: CGFloat = 16
 
     var body: some View {
         GeometryReader { geometry in
             let safeArea = geometry.safeAreaInsets
-            let screenWidth = geometry.size.width
-            let screenHeight = geometry.size.height + safeArea.top + safeArea.bottom
-
-            // Default button position: bottom center, just above home indicator
-            // This mimics Apple Voice Memos positioning
-            let defaultX = geometry.size.width / 2
-            let defaultY = geometry.size.height + safeArea.top - buttonSize / 2 - 16
-
-            // Calculate bounds for button center
-            // BOUNDS EXPLANATION:
-            // - minY: Top menu bar is forbidden (safe area top + bar height + button radius + padding)
-            // - maxY: Button can go all the way to bottom, just above home indicator area
-            // - minX/maxX: Keep button fully on screen with edge padding
             let buttonRadius = buttonSize / 2
-            let minX = edgePadding + buttonRadius
-            let maxX = geometry.size.width - edgePadding - buttonRadius
+
+            // Calculate bounds for button CENTER position
+            let minX = buttonRadius + 8
+            let maxX = geometry.size.width - buttonRadius - 8
             let minY = safeArea.top + topBarHeight + buttonRadius + 8
-            let maxY = geometry.size.height + safeArea.top - safeArea.bottom - buttonRadius - 8
+            let maxY = geometry.size.height - safeArea.bottom - buttonRadius - 8
 
-            // Determine current button position
-            // Use stored position if we have one (or if storedX/Y were set for animation), otherwise use default
-            let hasPosition = buttonPosition.hasStoredPosition || buttonPosition.storedX != 0 || buttonPosition.storedY != 0
-            let baseX = hasPosition ? buttonPosition.storedX : defaultX
-            let baseY = hasPosition ? buttonPosition.storedY : defaultY
+            // Default position: bottom center, above home indicator
+            let defaultX = geometry.size.width / 2
+            let defaultY = geometry.size.height - safeArea.bottom - buttonRadius - 20
 
-            // Apply drag translation and clamp to bounds
-            let buttonX = clamp(baseX + dragTranslation.width, min: minX, max: maxX)
-            let buttonY = clamp(baseY + dragTranslation.height, min: minY, max: maxY)
+            // Base position: use stored if available, otherwise default
+            let baseX = buttonPosition.hasStoredPosition ? buttonPosition.storedX : defaultX
+            let baseY = buttonPosition.hasStoredPosition ? buttonPosition.storedY : defaultY
+
+            // Displayed position = base + live drag offset, clamped to bounds
+            let displayX = clamp(baseX + dragOffset.width, min: minX, max: maxX)
+            let displayY = clamp(baseY + dragOffset.height, min: minY, max: maxY)
 
             ZStack(alignment: .top) {
-                // Layer 1: Main Content (fills screen)
+                // Layer 1: Main Content
                 mainContentLayer(safeArea: safeArea)
 
-                // Layer 2: Fixed Top Bar (always on top, never moves)
+                // Layer 2: Fixed Top Bar
                 fixedTopBar(safeArea: safeArea)
 
-                // Layer 3: Floating Record Button + Reset Bubble (only on Recordings screen)
+                // Layer 3: Floating Record Button (only on Recordings screen)
                 if currentRoute == .recordings {
-                    // Reset bubble (shown on long-press, positioned below button)
+                    // Tap catcher to dismiss reset bubble
                     if showResetBubble {
-                        resetBubbleOverlay(
-                            buttonX: buttonX,
-                            buttonY: buttonY,
-                            defaultX: defaultX,
-                            defaultY: defaultY,
-                            screenHeight: geometry.size.height + safeArea.top
+                        Color.black.opacity(0.001)
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    showResetBubble = false
+                                }
+                            }
+                            .zIndex(98)
+                    }
+
+                    // Reset bubble (anchored below button)
+                    if showResetBubble {
+                        resetBubble(
+                            buttonX: displayX,
+                            buttonY: displayY,
+                            screenHeight: geometry.size.height,
+                            safeAreaBottom: safeArea.bottom
                         )
                         .zIndex(99)
                     }
 
-                    // The record button
-                    floatingRecordButton(
-                        x: buttonX,
-                        y: buttonY,
+                    // The floating record button
+                    recordButton(
+                        displayX: displayX,
+                        displayY: displayY,
                         defaultX: defaultX,
                         defaultY: defaultY,
                         minX: minX, maxX: maxX,
@@ -163,25 +173,34 @@ struct ContentView: View {
                 }
             }
             .ignoresSafeArea()
-            .coordinateSpace(name: "ContentView")
+            .onAppear {
+                // Validate bounds on appear
+                buttonPosition.clampToBounds(minX: minX, maxX: maxX, minY: minY, maxY: maxY)
+            }
+            .onChange(of: geometry.size) { _, _ in
+                // Re-validate on rotation/size change
+                let newMinX = buttonRadius + 8
+                let newMaxX = geometry.size.width - buttonRadius - 8
+                let newMinY = safeArea.top + topBarHeight + buttonRadius + 8
+                let newMaxY = geometry.size.height - safeArea.bottom - buttonRadius - 8
+                buttonPosition.clampToBounds(minX: newMinX, maxX: newMaxX, minY: newMinY, maxY: newMaxY)
+            }
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
         }
         .sheet(isPresented: $showSettings) {
-            SettingsSheetView()
+            SettingsSheetView(buttonPosition: buttonPosition)
         }
         .sheet(isPresented: $showTipJar) {
             TipJarSheetView()
         }
-        // Dismiss reset bubble when tapping outside
-        .onTapGesture {
-            if showResetBubble {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    showResetBubble = false
-                }
-            }
-        }
+    }
+
+    // MARK: - Clamp Helper
+
+    private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
+        Swift.min(Swift.max(value, min), max)
     }
 
     // MARK: - Main Content Layer
@@ -194,11 +213,8 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .overlay(
                     VStack(spacing: 0) {
-                        // Space for fixed top bar
-                        Color.clear
-                            .frame(height: safeArea.top + topBarHeight)
+                        Color.clear.frame(height: safeArea.top + topBarHeight)
 
-                        // Recording HUD (when recording)
                         if appState.recorder.isRecording {
                             RecordingHUDCard(
                                 duration: appState.recorder.currentDuration,
@@ -209,14 +225,12 @@ struct ContentView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
 
-                        // Recordings list
                         RecordingsListView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 )
 
         case .map:
-            // Full-screen map
             GPSInsightsMapView()
                 .ignoresSafeArea()
         }
@@ -235,134 +249,128 @@ struct ContentView: View {
                         .fill(currentRoute == .map ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color(.systemBackground)))
                         .ignoresSafeArea(edges: .top)
                 )
-
             Spacer()
         }
     }
 
-    // MARK: - Floating Record Button
+    // MARK: - Record Button
 
-    private func floatingRecordButton(
-        x: CGFloat, y: CGFloat,
+    private func recordButton(
+        displayX: CGFloat, displayY: CGFloat,
         defaultX: CGFloat, defaultY: CGFloat,
         minX: CGFloat, maxX: CGFloat,
         minY: CGFloat, maxY: CGFloat
     ) -> some View {
         VoiceMemosRecordButton {
-            // Only handle tap if not showing reset bubble
             if !showResetBubble {
                 handleRecordTap()
             }
         }
         .frame(width: buttonSize, height: buttonSize)
-        .contentShape(Circle())
-        .position(x: x, y: y)
+        .position(x: displayX, y: displayY)
         .shadow(color: .black.opacity(isDragging ? 0.3 : 0.2), radius: isDragging ? 12 : 8, y: isDragging ? 6 : 4)
         .scaleEffect(isDragging ? 1.05 : 1.0)
-        // Long-press gesture for reset bubble
-        .onLongPressGesture(minimumDuration: 0.5) {
-            // Show reset bubble with animation
-            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-            impactFeedback.impactOccurred()
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                showResetBubble = true
-            }
-        }
-        // Drag gesture for moving the button
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 5, coordinateSpace: .named("ContentView"))
-                .updating($dragTranslation) { value, state, _ in
-                    state = value.translation
-                }
-                .onChanged { _ in
-                    // Dismiss reset bubble when starting drag
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
+        // Drag gesture for smooth movement
+        .gesture(
+            DragGesture(minimumDistance: 5)
+                .onChanged { value in
+                    // Dismiss reset bubble if dragging
                     if showResetBubble {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            showResetBubble = false
-                        }
+                        showResetBubble = false
                     }
-                    if !isDragging {
-                        isDragging = true
-                    }
+                    isDragging = true
+                    // Update live offset (position is computed as base + offset)
+                    dragOffset = value.translation
                 }
                 .onEnded { value in
                     isDragging = false
 
-                    // Calculate final position from current base + translation
-                    let currentBaseX: CGFloat
-                    let currentBaseY: CGFloat
-                    if buttonPosition.hasStoredPosition {
-                        currentBaseX = buttonPosition.storedX
-                        currentBaseY = buttonPosition.storedY
-                    } else if buttonPosition.storedX != 0 || buttonPosition.storedY != 0 {
-                        currentBaseX = buttonPosition.storedX
-                        currentBaseY = buttonPosition.storedY
-                    } else {
-                        currentBaseX = defaultX
-                        currentBaseY = defaultY
-                    }
+                    // Calculate final position
+                    let baseX = buttonPosition.hasStoredPosition ? buttonPosition.storedX : defaultX
+                    let baseY = buttonPosition.hasStoredPosition ? buttonPosition.storedY : defaultY
 
-                    let finalX = clamp(currentBaseX + value.translation.width, min: minX, max: maxX)
-                    let finalY = clamp(currentBaseY + value.translation.height, min: minY, max: maxY)
+                    let finalX = clamp(baseX + value.translation.width, min: minX, max: maxX)
+                    let finalY = clamp(baseY + value.translation.height, min: minY, max: maxY)
 
-                    // Save with spring animation
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        buttonPosition.save(x: finalX, y: finalY)
+                    // Commit to storage
+                    buttonPosition.save(x: finalX, y: finalY)
+
+                    // Reset drag offset
+                    dragOffset = .zero
+                }
+        )
+        // Long-press gesture for reset bubble
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5)
+                .onEnded { _ in
+                    // Only show if not currently dragging
+                    if !isDragging {
+                        let generator = UIImpactFeedbackGenerator(style: .medium)
+                        generator.impactOccurred()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            showResetBubble = true
+                        }
                     }
                 }
         )
-        .animation(isDragging ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: isDragging)
     }
 
-    // MARK: - Reset Bubble Overlay
+    // MARK: - Reset Bubble
 
-    private func resetBubbleOverlay(
+    private func resetBubble(
         buttonX: CGFloat,
         buttonY: CGFloat,
-        defaultX: CGFloat,
-        defaultY: CGFloat,
-        screenHeight: CGFloat
+        screenHeight: CGFloat,
+        safeAreaBottom: CGFloat
     ) -> some View {
-        // Position bubble below button, or above if too close to bottom
         let bubbleHeight: CGFloat = 44
-        let bubbleSpacing: CGFloat = 12
+        let spacing: CGFloat = 12
         let buttonBottom = buttonY + buttonSize / 2
-        let spaceBelow = screenHeight - buttonBottom
-        let showAbove = spaceBelow < (bubbleHeight + bubbleSpacing + 20)
+        let spaceBelow = screenHeight - safeAreaBottom - buttonBottom
 
-        let bubbleY: CGFloat
-        if showAbove {
-            bubbleY = buttonY - buttonSize / 2 - bubbleSpacing - bubbleHeight / 2
-        } else {
-            bubbleY = buttonY + buttonSize / 2 + bubbleSpacing + bubbleHeight / 2
-        }
+        // Show above if not enough space below
+        let showAbove = spaceBelow < (bubbleHeight + spacing + 20)
+        let bubbleY = showAbove
+            ? buttonY - buttonSize / 2 - spacing - bubbleHeight / 2
+            : buttonY + buttonSize / 2 + spacing + bubbleHeight / 2
 
-        return ResetBubble(showAbove: showAbove) {
+        return Button {
             // Reset action
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                buttonPosition.reset(toDefaultX: defaultX, toDefaultY: defaultY)
+            let generator = UIImpactFeedbackGenerator(style: .light)
+            generator.impactOccurred()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                buttonPosition.resetToDefault()
                 showResetBubble = false
             }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Reset Position")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            .foregroundColor(.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+            )
         }
+        .buttonStyle(.plain)
         .position(x: buttonX, y: bubbleY)
-        .transition(.opacity.combined(with: .scale(scale: 0.8)))
-    }
-
-    // MARK: - Helper Functions
-
-    private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
-        Swift.min(Swift.max(value, min), max)
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
     // MARK: - Top Navigation Bar
 
     private var topNavigationBar: some View {
         HStack(spacing: 8) {
-            // Left cluster: Settings, Map, Recordings
             HStack(spacing: 8) {
-                Button {
-                    showSettings = true
-                } label: {
+                Button { showSettings = true } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
@@ -370,9 +378,7 @@ struct ContentView: View {
                 }
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        currentRoute = .map
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .map }
                 } label: {
                     Image(systemName: "map.fill")
                         .font(.system(size: 24, weight: .medium))
@@ -381,9 +387,7 @@ struct ContentView: View {
                 }
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        currentRoute = .recordings
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .recordings }
                 } label: {
                     Image(systemName: "waveform")
                         .font(.system(size: 24, weight: .medium))
@@ -394,20 +398,15 @@ struct ContentView: View {
 
             Spacer()
 
-            // Right cluster: Search, Tip Jar
             HStack(spacing: 8) {
-                Button {
-                    showSearch = true
-                } label: {
+                Button { showSearch = true } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
                 }
 
-                Button {
-                    showTipJar = true
-                } label: {
+                Button { showTipJar = true } label: {
                     Image(systemName: "heart.fill")
                         .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
@@ -431,40 +430,6 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Reset Bubble View
-
-struct ResetBubble: View {
-    let showAbove: Bool
-    let onReset: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Button(action: onReset) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Reset")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            }
-            .foregroundColor(.primary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                Capsule()
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.4 : 0.15), radius: 8, y: 2)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Voice Memos Style Record Button
 
 struct VoiceMemosRecordButton: View {
@@ -480,7 +445,6 @@ struct VoiceMemosRecordButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer ring
                 Circle()
                     .stroke(isRecording ? Color.red : Color.red.opacity(0.3), lineWidth: 4)
                     .frame(width: 80, height: 80)
@@ -490,12 +454,10 @@ struct VoiceMemosRecordButton: View {
                         value: isPulsing
                     )
 
-                // Inner fill
                 Circle()
                     .fill(Color.red)
                     .frame(width: 68, height: 68)
 
-                // Mic icon
                 Image(systemName: "mic.fill")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundColor(.white)
@@ -533,18 +495,13 @@ struct RecordingHUDCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top section: Recording indicator + Timer
             HStack(alignment: .center) {
-                // Left: Pulsing dot + Recording label
                 HStack(spacing: 10) {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 12, height: 12)
                         .scaleEffect(isPulsing ? 1.3 : 1.0)
-                        .animation(
-                            .easeInOut(duration: 0.6).repeatForever(autoreverses: true),
-                            value: isPulsing
-                        )
+                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
                         .shadow(color: .red.opacity(0.5), radius: isPulsing ? 6 : 2)
 
                     Text("Recording")
@@ -555,7 +512,6 @@ struct RecordingHUDCard: View {
 
                 Spacer()
 
-                // Right: Large timer
                 Text(formattedDuration)
                     .font(.system(size: 34, weight: .medium, design: .monospaced))
                     .monospacedDigit()
@@ -566,7 +522,6 @@ struct RecordingHUDCard: View {
             .padding(.top, 20)
             .padding(.bottom, 16)
 
-            // Middle: Waveform visualization
             ZStack {
                 if liveSamples.isEmpty {
                     RoundedRectangle(cornerRadius: 8)
@@ -579,14 +534,12 @@ struct RecordingHUDCard: View {
             }
             .padding(.horizontal, 20)
 
-            // Divider
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
 
-            // Bottom section: Input + Level meter
             HStack {
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
@@ -617,9 +570,7 @@ struct RecordingHUDCard: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
-        .onAppear {
-            isPulsing = true
-        }
+        .onAppear { isPulsing = true }
     }
 }
 
@@ -640,21 +591,14 @@ struct PremiumLevelMeter: View {
     }
 
     private func isActive(at index: Int) -> Bool {
-        let threshold = Float(index) / Float(barCount)
-        return level >= threshold
+        Float(index) / Float(barCount) <= level
     }
 
     private func barColor(at index: Int) -> Color {
-        guard isActive(at: index) else {
-            return Color(.systemGray4)
-        }
-        if index >= barCount - 1 {
-            return .red
-        } else if index >= barCount - 2 {
-            return .orange
-        } else {
-            return .green
-        }
+        guard isActive(at: index) else { return Color(.systemGray4) }
+        if index >= barCount - 1 { return .red }
+        if index >= barCount - 2 { return .orange }
+        return .green
     }
 
     var body: some View {
@@ -668,22 +612,17 @@ struct PremiumLevelMeter: View {
     }
 }
 
-// MARK: - Legacy Level Indicator (kept for compatibility)
+// MARK: - Legacy Level Indicator
 struct LevelIndicator: View {
     let level: Float
-
     private var barCount: Int { 5 }
 
     private func barColor(at index: Int) -> Color {
         let threshold = Float(index) / Float(barCount)
         if level >= threshold {
-            if index >= barCount - 1 {
-                return .red
-            } else if index >= barCount - 2 {
-                return .orange
-            } else {
-                return .green
-            }
+            if index >= barCount - 1 { return .red }
+            if index >= barCount - 2 { return .orange }
+            return .green
         }
         return Color(.systemGray4)
     }
@@ -709,7 +648,6 @@ struct MapPlaceholderView: View {
             Text("Map")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.primary)
             Text("Recording locations will appear here")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -765,10 +703,7 @@ struct SearchSheetView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(appState.tags) { tag in
-                                    TagFilterChip(
-                                        tag: tag,
-                                        isSelected: selectedTagIDs.contains(tag.id)
-                                    ) {
+                                    TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
                                         if selectedTagIDs.contains(tag.id) {
                                             selectedTagIDs.remove(tag.id)
                                         } else {
@@ -803,9 +738,7 @@ struct SearchSheetView: View {
                 AlbumDetailSheet(album: album)
             }
             .onChange(of: searchScope) { _, _ in
-                if searchScope == .albums {
-                    selectedTagIDs.removeAll()
-                }
+                if searchScope == .albums { selectedTagIDs.removeAll() }
             }
         }
     }
@@ -821,7 +754,6 @@ struct SearchSheetView: View {
                         .foregroundColor(.secondary)
                     Text("Search your recordings")
                         .font(.headline)
-                        .foregroundColor(.primary)
                     Text("Search by title, notes, location, tags, or album")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -834,7 +766,6 @@ struct SearchSheetView: View {
                         .foregroundColor(.secondary)
                     Text("No recordings found")
                         .font(.headline)
-                        .foregroundColor(.primary)
                 }
             }
             Spacer()
@@ -843,9 +774,7 @@ struct SearchSheetView: View {
                 ForEach(recordingResults) { recording in
                     SearchResultRow(recording: recording)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedRecording = recording
-                        }
+                        .onTapGesture { selectedRecording = recording }
                         .listRowBackground(Color.clear)
                 }
             }
@@ -865,11 +794,9 @@ struct SearchSheetView: View {
                         .foregroundColor(.secondary)
                     Text("Search your albums")
                         .font(.headline)
-                        .foregroundColor(.primary)
                     Text("Find albums by name")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
                 }
             } else {
                 VStack(spacing: 12) {
@@ -878,7 +805,6 @@ struct SearchSheetView: View {
                         .foregroundColor(.secondary)
                     Text("No albums found")
                         .font(.headline)
-                        .foregroundColor(.primary)
                 }
             }
             Spacer()
@@ -887,9 +813,7 @@ struct SearchSheetView: View {
                 ForEach(albumResults) { album in
                     AlbumSearchRow(album: album)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedAlbum = album
-                        }
+                        .onTapGesture { selectedAlbum = album }
                         .listRowBackground(Color.clear)
                 }
             }
@@ -922,7 +846,6 @@ struct AlbumSearchRow: View {
                 Text(album.name)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.primary)
                     .lineLimit(1)
 
                 Text("\(recordingCount) recording\(recordingCount == 1 ? "" : "s")")
@@ -953,14 +876,8 @@ struct AlbumDetailSheet: View {
 
     private var albumRecordings: [RecordingItem] {
         let recordings = appState.recordings(in: album)
-
-        if selectedTagIDs.isEmpty {
-            return recordings
-        }
-
-        return recordings.filter { recording in
-            !selectedTagIDs.isDisjoint(with: Set(recording.tagIDs))
-        }
+        if selectedTagIDs.isEmpty { return recordings }
+        return recordings.filter { !selectedTagIDs.isDisjoint(with: Set($0.tagIDs)) }
     }
 
     var body: some View {
@@ -973,10 +890,7 @@ struct AlbumDetailSheet: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(appState.tags) { tag in
-                                    TagFilterChip(
-                                        tag: tag,
-                                        isSelected: selectedTagIDs.contains(tag.id)
-                                    ) {
+                                    TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
                                         if selectedTagIDs.contains(tag.id) {
                                             selectedTagIDs.remove(tag.id)
                                         } else {
@@ -995,15 +909,8 @@ struct AlbumDetailSheet: View {
                             Image(systemName: "waveform.circle")
                                 .font(.system(size: 48))
                                 .foregroundColor(.secondary)
-                            if selectedTagIDs.isEmpty {
-                                Text("No recordings in this album")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                            } else {
-                                Text("No recordings match selected tags")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                            }
+                            Text(selectedTagIDs.isEmpty ? "No recordings in this album" : "No recordings match selected tags")
+                                .font(.headline)
                         }
                         Spacer()
                     } else {
@@ -1011,9 +918,7 @@ struct AlbumDetailSheet: View {
                             ForEach(albumRecordings) { recording in
                                 SearchResultRow(recording: recording)
                                     .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedRecording = recording
-                                    }
+                                    .onTapGesture { selectedRecording = recording }
                                     .listRowBackground(Color.clear)
                             }
                         }
@@ -1069,24 +974,17 @@ struct SearchResultRow: View {
     @Environment(\.colorScheme) var colorScheme
     let recording: RecordingItem
 
-    private var recordingTags: [Tag] {
-        appState.tags(for: recording.tagIDs)
-    }
-
-    private var album: Album? {
-        appState.album(for: recording.albumID)
-    }
+    private var recordingTags: [Tag] { appState.tags(for: recording.tagIDs) }
+    private var album: Album? { appState.album(for: recording.albumID) }
 
     var body: some View {
         HStack(spacing: 12) {
-            // Use the same isolated icon tile component
             RecordingIconTile(recording: recording, colorScheme: colorScheme)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.primary)
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
@@ -1095,9 +993,7 @@ struct SearchResultRow: View {
                         .foregroundColor(.secondary)
 
                     if let album = album {
-                        Text("•")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Text("•").font(.caption).foregroundColor(.secondary)
                         Text(album.name)
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -1128,6 +1024,7 @@ struct SearchResultRow: View {
 struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @ObservedObject var buttonPosition: RecordButtonPositionManager
 
     @State private var isExporting = false
     @State private var exportProgress: String = ""
@@ -1148,10 +1045,9 @@ struct SettingsSheetView: View {
 
         NavigationStack {
             List {
+                // MARK: Quick Access Section
                 Section {
-                    Button {
-                        showLockScreenHelp = true
-                    } label: {
+                    Button { showLockScreenHelp = true } label: {
                         HStack {
                             Image(systemName: "lock.rectangle.on.rectangle")
                                 .foregroundColor(.blue)
@@ -1165,9 +1061,7 @@ struct SettingsSheetView: View {
                         }
                     }
 
-                    Button {
-                        showActionButtonHelp = true
-                    } label: {
+                    Button { showActionButtonHelp = true } label: {
                         HStack {
                             Image(systemName: "button.horizontal.top.press")
                                 .foregroundColor(.blue)
@@ -1181,9 +1075,7 @@ struct SettingsSheetView: View {
                         }
                     }
 
-                    Button {
-                        showSiriShortcutsHelp = true
-                    } label: {
+                    Button { showSiriShortcutsHelp = true } label: {
                         HStack {
                             Image(systemName: "mic.badge.plus")
                                 .foregroundColor(.blue)
@@ -1202,13 +1094,33 @@ struct SettingsSheetView: View {
                     Text("Set up fast ways to start recording from anywhere.")
                 }
 
+                // MARK: Reset Record Button Section (NEW - after Quick Access)
+                Section {
+                    Button {
+                        let generator = UIImpactFeedbackGenerator(style: .light)
+                        generator.impactOccurred()
+                        buttonPosition.resetToDefault()
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise")
+                                .foregroundColor(.blue)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Reset Record Button Position")
+                                    .foregroundColor(.primary)
+                                Text("Moves the record button back to its default location.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                // MARK: Recording Quality Section
                 Section {
                     Picker("Quality", selection: $appState.appSettings.recordingQuality) {
                         ForEach(RecordingQualityPreset.allCases) { preset in
-                            VStack(alignment: .leading) {
-                                Text(preset.displayName)
-                            }
-                            .tag(preset)
+                            Text(preset.displayName).tag(preset)
                         }
                     }
                 } header: {
@@ -1271,9 +1183,7 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Button {
-                        showTagManager = true
-                    } label: {
+                    Button { showTagManager = true } label: {
                         HStack {
                             Image(systemName: "tag.fill")
                                 .foregroundColor(.blue)
@@ -1292,9 +1202,7 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Button {
-                        exportAllRecordings()
-                    } label: {
+                    Button { exportAllRecordings() } label: {
                         HStack {
                             Image(systemName: "square.and.arrow.up")
                                 .foregroundColor(.blue)
@@ -1303,15 +1211,12 @@ struct SettingsSheetView: View {
                             Spacer()
                             if isExporting && exportProgress == "all" {
                                 ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
                             }
                         }
                     }
                     .disabled(isExporting || appState.activeRecordings.isEmpty)
 
-                    Button {
-                        showAlbumPicker = true
-                    } label: {
+                    Button { showAlbumPicker = true } label: {
                         HStack {
                             Image(systemName: "square.stack")
                                 .foregroundColor(.blue)
@@ -1320,15 +1225,12 @@ struct SettingsSheetView: View {
                             Spacer()
                             if isExporting && exportProgress == "album" {
                                 ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
                             }
                         }
                     }
                     .disabled(isExporting || appState.albums.isEmpty)
 
-                    Button {
-                        showFileImporter = true
-                    } label: {
+                    Button { showFileImporter = true } label: {
                         HStack {
                             Image(systemName: "square.and.arrow.down")
                                 .foregroundColor(.blue)
@@ -1343,9 +1245,7 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Button {
-                        showTrashView = true
-                    } label: {
+                    Button { showTrashView = true } label: {
                         HStack {
                             Image(systemName: "trash")
                                 .foregroundColor(.red)
@@ -1360,9 +1260,7 @@ struct SettingsSheetView: View {
                         }
                     }
 
-                    Button(role: .destructive) {
-                        showEmptyTrashAlert = true
-                    } label: {
+                    Button(role: .destructive) { showEmptyTrashAlert = true } label: {
                         HStack {
                             Image(systemName: "trash.slash")
                             Text("Empty Trash Now")
@@ -1401,9 +1299,7 @@ struct SettingsSheetView: View {
                 }
             }
             .sheet(isPresented: $showAlbumPicker) {
-                ExportAlbumPickerSheet { album in
-                    exportAlbum(album)
-                }
+                ExportAlbumPickerSheet { album in exportAlbum(album) }
             }
             .sheet(isPresented: $showTagManager) {
                 TagManagerView()
@@ -1420,9 +1316,7 @@ struct SettingsSheetView: View {
             }
             .alert("Empty Trash?", isPresented: $showEmptyTrashAlert) {
                 Button("Cancel", role: .cancel) {}
-                Button("Empty Trash", role: .destructive) {
-                    appState.emptyTrash()
-                }
+                Button("Empty Trash", role: .destructive) { appState.emptyTrash() }
             } message: {
                 Text("This will permanently delete \(appState.trashedCount) items. This cannot be undone.")
             }
@@ -1500,8 +1394,7 @@ struct SettingsSheetView: View {
     private func getAudioDuration(url: URL) -> TimeInterval {
         do {
             let audioFile = try AVAudioFile(forReading: url)
-            let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
-            return duration
+            return Double(audioFile.length) / audioFile.processingFormat.sampleRate
         } catch {
             return 0
         }
@@ -1565,18 +1458,14 @@ struct TrashItemRow: View {
 
             Spacer()
 
-            Button {
-                appState.restoreFromTrash(recording)
-            } label: {
+            Button { appState.restoreFromTrash(recording) } label: {
                 Text("Restore")
                     .font(.subheadline)
                     .foregroundColor(.blue)
             }
             .buttonStyle(.plain)
 
-            Button {
-                appState.permanentlyDelete(recording)
-            } label: {
+            Button { appState.permanentlyDelete(recording) } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.red)
             }
@@ -1639,7 +1528,6 @@ struct TipJarSheetView: View {
                     Text("Tip Jar")
                         .font(.title2)
                         .fontWeight(.semibold)
-                        .foregroundColor(.primary)
                     Text("Support the developer")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
