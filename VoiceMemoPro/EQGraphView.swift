@@ -7,125 +7,120 @@
 
 import SwiftUI
 
-// MARK: - EQ Graph View
+// MARK: - Parametric EQ Graph View
 
-struct EQGraphView: View {
+struct ParametricEQView: View {
     @Binding var settings: EQSettings
-    var isEnabled: Bool = true
+    @State private var selectedBand: Int? = nil
+    var onSettingsChanged: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private let bandCount = 4
-    private let graphHeight: CGFloat = 120
+    private let graphHeight: CGFloat = 160
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Graph area
-            GeometryReader { geometry in
-                let width = geometry.size.width
-                let height = geometry.size.height
-                let bandWidth = width / CGFloat(bandCount)
+        VStack(spacing: 16) {
+            // EQ Graph
+            eqGraph
 
-                ZStack {
-                    // Background grid
-                    gridBackground(width: width, height: height)
-
-                    // Center line (0 dB)
-                    Path { path in
-                        path.move(to: CGPoint(x: 0, y: height / 2))
-                        path.addLine(to: CGPoint(x: width, y: height / 2))
-                    }
-                    .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
-
-                    // Connecting line between points
-                    Path { path in
-                        for i in 0..<bandCount {
-                            let x = bandWidth * CGFloat(i) + bandWidth / 2
-                            let y = yPosition(for: settings.gain(for: i), height: height)
-
-                            if i == 0 {
-                                path.move(to: CGPoint(x: x, y: y))
-                            } else {
-                                path.addLine(to: CGPoint(x: x, y: y))
-                            }
-                        }
-                    }
-                    .stroke(
-                        isEnabled ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.4),
-                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
-                    )
-
-                    // Draggable points
-                    ForEach(0..<bandCount, id: \.self) { index in
-                        let x = bandWidth * CGFloat(index) + bandWidth / 2
-                        let y = yPosition(for: settings.gain(for: index), height: height)
-
-                        EQDragPoint(
-                            gain: settings.gain(for: index),
-                            isEnabled: isEnabled
-                        )
-                        .position(x: x, y: y)
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    guard isEnabled else { return }
-                                    let newGain = gainFromY(value.location.y, height: height)
-                                    settings.setGain(newGain, for: index)
-                                }
-                        )
-                    }
-                }
-            }
-            .frame(height: graphHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .opacity(isEnabled ? 1.0 : 0.5)
-
-            // Band labels with dB values
-            HStack(spacing: 0) {
-                ForEach(0..<bandCount, id: \.self) { index in
-                    VStack(spacing: 2) {
-                        Text(EQSettings.bandLabels[index])
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundColor(.secondary)
-
-                        Text(formatGain(settings.gain(for: index)))
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundColor(isEnabled ? gainColor(settings.gain(for: index)) : .secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+            // Band controls (when a band is selected)
+            if let band = selectedBand {
+                bandControls(for: band)
+            } else {
+                // Hint text when no band selected
+                Text("Tap a point to adjust its settings")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             // Reset button
-            if isEnabled && settings != .flat {
+            if !settings.isFlat {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        settings = .flat
+                        settings.reset()
+                        onSettingsChanged?()
                     }
                 } label: {
-                    Text("Reset EQ")
-                        .font(.caption)
+                    Label("Reset EQ", systemImage: "arrow.counterclockwise")
+                        .font(.subheadline)
                         .foregroundColor(.blue)
                 }
             }
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - EQ Graph
 
-    private func gridBackground(width: CGFloat, height: CGFloat) -> some View {
+    private var eqGraph: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+
+            ZStack {
+                // Background
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
+
+                // Grid
+                gridLines(width: width, height: height)
+
+                // Center line (0 dB)
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: height / 2))
+                    path.addLine(to: CGPoint(x: width, y: height / 2))
+                }
+                .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
+
+                // Frequency response curve (approximate)
+                frequencyResponseCurve(width: width, height: height)
+
+                // Band points
+                ForEach(0..<4, id: \.self) { index in
+                    let band = settings.bands[index]
+                    let x = frequencyToX(band.frequency, width: width)
+                    let y = gainToY(band.gain, height: height)
+
+                    EQBandPoint(
+                        isSelected: selectedBand == index,
+                        bandIndex: index,
+                        colorScheme: colorScheme
+                    )
+                    .position(x: x, y: y)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                selectedBand = index
+                                // Update frequency (X) and gain (Y)
+                                let newFreq = xToFrequency(value.location.x, width: width)
+                                let newGain = yToGain(value.location.y, height: height)
+                                settings.bands[index].frequency = newFreq
+                                settings.bands[index].gain = newGain
+                                onSettingsChanged?()
+                            }
+                    )
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedBand = selectedBand == index ? nil : index
+                        }
+                    }
+                }
+
+                // Frequency labels
+                frequencyLabels(width: width, height: height)
+            }
+        }
+        .frame(height: graphHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Grid Lines
+
+    private func gridLines(width: CGFloat, height: CGFloat) -> some View {
         Canvas { context, size in
-            // Horizontal grid lines at -6dB and +6dB
-            let quarterHeight = height / 4
-
-            for i in 1...3 {
-                let y = quarterHeight * CGFloat(i)
+            // Horizontal lines at +6, 0, -6 dB
+            let gainLines: [Float] = [6, 0, -6]
+            for gain in gainLines {
+                let y = gainToY(gain, height: height)
                 let path = Path { p in
                     p.move(to: CGPoint(x: 0, y: y))
                     p.addLine(to: CGPoint(x: width, y: y))
@@ -133,42 +128,254 @@ struct EQGraphView: View {
                 context.stroke(path, with: .color(.secondary.opacity(0.2)), lineWidth: 0.5)
             }
 
-            // Vertical separator lines
-            let bandWidth = width / CGFloat(bandCount)
-            for i in 1..<bandCount {
-                let x = bandWidth * CGFloat(i)
+            // Vertical lines at key frequencies (100, 1k, 10k)
+            let freqLines: [Float] = [100, 1000, 10000]
+            for freq in freqLines {
+                let x = frequencyToX(freq, width: width)
                 let path = Path { p in
                     p.move(to: CGPoint(x: x, y: 0))
                     p.addLine(to: CGPoint(x: x, y: height))
                 }
-                context.stroke(path, with: .color(.secondary.opacity(0.15)), lineWidth: 0.5)
+                context.stroke(path, with: .color(.secondary.opacity(0.2)), lineWidth: 0.5)
             }
         }
     }
 
-    private func yPosition(for gain: Float, height: CGFloat) -> CGFloat {
-        // Map gain (-12 to +12) to y position (height to 0)
-        let normalizedGain = (gain - EQSettings.minGain) / (EQSettings.maxGain - EQSettings.minGain)
-        return height - (CGFloat(normalizedGain) * height)
+    // MARK: - Frequency Response Curve
+
+    private func frequencyResponseCurve(width: CGFloat, height: CGFloat) -> some View {
+        Path { path in
+            let steps = 100
+            for i in 0...steps {
+                let x = width * CGFloat(i) / CGFloat(steps)
+                let freq = xToFrequency(x, width: width)
+
+                // Sum contributions from all bands (simplified approximation)
+                var totalGain: Float = 0
+                for band in settings.bands {
+                    totalGain += bandContribution(at: freq, band: band)
+                }
+
+                let y = gainToY(totalGain, height: height)
+
+                if i == 0 {
+                    path.move(to: CGPoint(x: x, y: y))
+                } else {
+                    path.addLine(to: CGPoint(x: x, y: y))
+                }
+            }
+        }
+        .stroke(
+            LinearGradient(
+                colors: [.blue, .purple],
+                startPoint: .leading,
+                endPoint: .trailing
+            ),
+            style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+        )
     }
 
-    private func gainFromY(_ y: CGFloat, height: CGFloat) -> Float {
-        // Map y position to gain
+    /// Simplified bell curve contribution for a parametric band
+    private func bandContribution(at freq: Float, band: EQBandSettings) -> Float {
+        let logFreq = log10(freq)
+        let logCenter = log10(band.frequency)
+        let bandwidth = band.bandwidth
+
+        // Bell curve in log-frequency domain
+        let distance = (logFreq - logCenter) / (bandwidth * 0.5)
+        let contribution = band.gain * exp(-distance * distance * 0.5)
+
+        return contribution
+    }
+
+    // MARK: - Frequency Labels
+
+    private func frequencyLabels(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            // 100 Hz
+            Text("100")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: frequencyToX(100, width: width), y: height - 8)
+
+            // 1k Hz
+            Text("1k")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: frequencyToX(1000, width: width), y: height - 8)
+
+            // 10k Hz
+            Text("10k")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: frequencyToX(10000, width: width), y: height - 8)
+
+            // dB labels
+            Text("+12")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: 16, y: gainToY(12, height: height))
+
+            Text("0")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: 10, y: height / 2)
+
+            Text("-12")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .position(x: 16, y: gainToY(-12, height: height))
+        }
+    }
+
+    // MARK: - Band Controls
+
+    @ViewBuilder
+    private func bandControls(for index: Int) -> some View {
+        let band = settings.bands[index]
+
+        VStack(spacing: 12) {
+            // Band name
+            Text(EQSettings.bandLabels[index])
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+
+            // Frequency control
+            VStack(spacing: 4) {
+                HStack {
+                    Text("Freq")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(formatFrequency(band.frequency))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundColor(.primary)
+                }
+
+                LogSlider(
+                    value: Binding(
+                        get: { band.frequency },
+                        set: {
+                            settings.bands[index].frequency = $0
+                            onSettingsChanged?()
+                        }
+                    ),
+                    range: EQBandSettings.minFrequency...EQBandSettings.maxFrequency
+                )
+            }
+
+            // Gain control
+            VStack(spacing: 4) {
+                HStack {
+                    Text("Gain")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(formatGain(band.gain))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundColor(gainColor(band.gain))
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { band.gain },
+                        set: {
+                            settings.bands[index].gain = $0
+                            onSettingsChanged?()
+                        }
+                    ),
+                    in: EQBandSettings.minGain...EQBandSettings.maxGain
+                )
+                .tint(.accentColor)
+            }
+
+            // Q control
+            VStack(spacing: 4) {
+                HStack {
+                    Text("Q")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(String(format: "%.1f", band.q))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundColor(.primary)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { band.q },
+                        set: {
+                            settings.bands[index].q = $0
+                            onSettingsChanged?()
+                        }
+                    ),
+                    in: EQBandSettings.minQ...EQBandSettings.maxQ
+                )
+                .tint(.orange)
+            }
+        }
+        .padding(12)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+
+    // MARK: - Coordinate Conversion
+
+    /// Convert frequency (Hz) to X position using log scale
+    private func frequencyToX(_ freq: Float, width: CGFloat) -> CGFloat {
+        let minLog = log10(EQBandSettings.minFrequency)
+        let maxLog = log10(EQBandSettings.maxFrequency)
+        let freqLog = log10(max(EQBandSettings.minFrequency, min(EQBandSettings.maxFrequency, freq)))
+        let normalized = (freqLog - minLog) / (maxLog - minLog)
+        return CGFloat(normalized) * width
+    }
+
+    /// Convert X position to frequency (Hz) using log scale
+    private func xToFrequency(_ x: CGFloat, width: CGFloat) -> Float {
+        let minLog = log10(EQBandSettings.minFrequency)
+        let maxLog = log10(EQBandSettings.maxFrequency)
+        let normalized = Float(max(0, min(width, x)) / width)
+        let freqLog = minLog + normalized * (maxLog - minLog)
+        return pow(10, freqLog)
+    }
+
+    /// Convert gain (dB) to Y position
+    private func gainToY(_ gain: Float, height: CGFloat) -> CGFloat {
+        let normalized = (gain - EQBandSettings.minGain) / (EQBandSettings.maxGain - EQBandSettings.minGain)
+        return height - (CGFloat(normalized) * height)
+    }
+
+    /// Convert Y position to gain (dB)
+    private func yToGain(_ y: CGFloat, height: CGFloat) -> Float {
         let clampedY = max(0, min(height, y))
-        let normalizedY = 1.0 - (clampedY / height)
-        return EQSettings.minGain + Float(normalizedY) * (EQSettings.maxGain - EQSettings.minGain)
+        let normalized = 1.0 - Float(clampedY / height)
+        return EQBandSettings.minGain + normalized * (EQBandSettings.maxGain - EQBandSettings.minGain)
+    }
+
+    // MARK: - Formatting
+
+    private func formatFrequency(_ freq: Float) -> String {
+        if freq >= 1000 {
+            return String(format: "%.1fk Hz", freq / 1000)
+        } else {
+            return String(format: "%.0f Hz", freq)
+        }
     }
 
     private func formatGain(_ gain: Float) -> String {
         if gain >= 0 {
-            return String(format: "+%.0f", gain)
+            return String(format: "+%.1f dB", gain)
         } else {
-            return String(format: "%.0f", gain)
+            return String(format: "%.1f dB", gain)
         }
     }
 
     private func gainColor(_ gain: Float) -> Color {
-        if abs(gain) < 1 {
+        if abs(gain) < 0.5 {
             return .secondary
         } else if gain > 0 {
             return .orange
@@ -178,152 +385,80 @@ struct EQGraphView: View {
     }
 }
 
-// MARK: - EQ Drag Point
+// MARK: - EQ Band Point
 
-struct EQDragPoint: View {
-    let gain: Float
-    var isEnabled: Bool = true
+struct EQBandPoint: View {
+    let isSelected: Bool
+    let bandIndex: Int
+    let colorScheme: ColorScheme
 
-    @Environment(\.colorScheme) private var colorScheme
+    private var bandColor: Color {
+        switch bandIndex {
+        case 0: return .red
+        case 1: return .orange
+        case 2: return .green
+        case 3: return .blue
+        default: return .purple
+        }
+    }
 
     var body: some View {
         ZStack {
+            // Selection ring
+            if isSelected {
+                Circle()
+                    .stroke(bandColor, lineWidth: 2)
+                    .frame(width: 36, height: 36)
+            }
+
             // Outer glow
             Circle()
-                .fill(isEnabled ? Color.accentColor.opacity(0.3) : Color.secondary.opacity(0.2))
-                .frame(width: 32, height: 32)
+                .fill(bandColor.opacity(0.3))
+                .frame(width: 28, height: 28)
 
             // Inner circle
             Circle()
-                .fill(isEnabled ? Color.accentColor : Color.secondary)
-                .frame(width: 20, height: 20)
+                .fill(bandColor)
+                .frame(width: 18, height: 18)
 
-            // Center dot
-            Circle()
-                .fill(colorScheme == .dark ? Color.white : Color.white)
-                .frame(width: 8, height: 8)
+            // Band number
+            Text("\(bandIndex + 1)")
+                .font(.caption2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
         }
     }
 }
 
-// MARK: - Compact EQ View (for smaller spaces)
+// MARK: - Logarithmic Slider
 
-struct CompactEQView: View {
-    @Binding var settings: EQSettings
-    var isEnabled: Bool = true
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ForEach(0..<4, id: \.self) { index in
-                VStack(spacing: 4) {
-                    Text(EQSettings.bandLabels[index])
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                    CompactEQSlider(
-                        value: Binding(
-                            get: { settings.gain(for: index) },
-                            set: { settings.setGain($0, for: index) }
-                        ),
-                        isEnabled: isEnabled
-                    )
-                    .frame(height: 80)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Compact EQ Slider (vertical)
-
-struct CompactEQSlider: View {
+struct LogSlider: View {
     @Binding var value: Float
-    var isEnabled: Bool = true
+    let range: ClosedRange<Float>
 
-    @Environment(\.colorScheme) private var colorScheme
+    private var normalizedValue: Float {
+        let minLog = log10(range.lowerBound)
+        let maxLog = log10(range.upperBound)
+        let valueLog = log10(max(range.lowerBound, value))
+        return (valueLog - minLog) / (maxLog - minLog)
+    }
+
+    private func valueFromNormalized(_ normalized: Float) -> Float {
+        let minLog = log10(range.lowerBound)
+        let maxLog = log10(range.upperBound)
+        let valueLog = minLog + normalized * (maxLog - minLog)
+        return pow(10, valueLog)
+    }
 
     var body: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.height
-            let thumbY = yPosition(for: value, height: height)
-
-            ZStack {
-                // Track background
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 8)
-
-                // Center marker
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.5))
-                    .frame(width: 12, height: 1)
-                    .position(x: geometry.size.width / 2, y: height / 2)
-
-                // Value fill
-                VStack {
-                    Spacer()
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isEnabled ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.4))
-                        .frame(width: 8, height: max(0, height / 2 - thumbY))
-                }
-
-                // Thumb
-                Circle()
-                    .fill(isEnabled ? Color.accentColor : Color.secondary)
-                    .frame(width: 16, height: 16)
-                    .position(x: geometry.size.width / 2, y: thumbY)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { dragValue in
-                                guard isEnabled else { return }
-                                value = gainFromY(dragValue.location.y, height: height)
-                            }
-                    )
-            }
-        }
-        .opacity(isEnabled ? 1.0 : 0.5)
-    }
-
-    private func yPosition(for gain: Float, height: CGFloat) -> CGFloat {
-        let normalizedGain = (gain - EQSettings.minGain) / (EQSettings.maxGain - EQSettings.minGain)
-        return height - (CGFloat(normalizedGain) * height)
-    }
-
-    private func gainFromY(_ y: CGFloat, height: CGFloat) -> Float {
-        let clampedY = max(0, min(height, y))
-        let normalizedY = 1.0 - (clampedY / height)
-        let gain = EQSettings.minGain + Float(normalizedY) * (EQSettings.maxGain - EQSettings.minGain)
-        return max(EQSettings.minGain, min(EQSettings.maxGain, gain))
-    }
-}
-
-// MARK: - Volume Slider
-
-struct VolumeSliderView: View {
-    @Binding var volume: Float
-    var isEnabled: Bool = true
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "speaker.fill")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Slider(value: $volume, in: 0...1)
-                .tint(.accentColor)
-                .disabled(!isEnabled)
-
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text("\(Int(volume * 100))%")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundColor(.secondary)
-                .frame(width: 40, alignment: .trailing)
-        }
-        .opacity(isEnabled ? 1.0 : 0.5)
+        Slider(
+            value: Binding(
+                get: { normalizedValue },
+                set: { value = valueFromNormalized($0) }
+            ),
+            in: 0...1
+        )
+        .tint(.purple)
     }
 }
 
@@ -331,23 +466,17 @@ struct VolumeSliderView: View {
 
 #Preview {
     VStack(spacing: 24) {
-        EQGraphView(settings: .constant(.flat))
+        ParametricEQView(settings: .constant(.flat))
             .padding()
 
-        EQGraphView(
-            settings: .constant(EQSettings(
-                lowGain: 6,
-                lowMidGain: -3,
-                highMidGain: 4,
-                highGain: 8
-            ))
+        ParametricEQView(
+            settings: .constant(EQSettings(bands: [
+                EQBandSettings(frequency: 80, gain: 6, q: 1.5),
+                EQBandSettings(frequency: 500, gain: -3, q: 1.0),
+                EQBandSettings(frequency: 2500, gain: 4, q: 2.0),
+                EQBandSettings(frequency: 10000, gain: 8, q: 0.7)
+            ]))
         )
         .padding()
-
-        VolumeSliderView(volume: .constant(0.75))
-            .padding()
-
-        CompactEQView(settings: .constant(.flat))
-            .padding()
     }
 }

@@ -102,50 +102,91 @@ enum SkipInterval: Int, CaseIterable, Identifiable, Codable {
     }
 }
 
-// MARK: - EQ Settings
+// MARK: - Parametric EQ Band Settings
 
-struct EQSettings: Codable, Equatable {
-    var lowGain: Float = 0       // -12 to +12 dB
-    var lowMidGain: Float = 0
-    var highMidGain: Float = 0
-    var highGain: Float = 0
-
-    static let flat = EQSettings()
-
-    // Fixed center frequencies for 4-band EQ
-    static let lowFrequency: Float = 100
-    static let lowMidFrequency: Float = 500
-    static let highMidFrequency: Float = 2000
-    static let highFrequency: Float = 8000
+struct EQBandSettings: Codable, Equatable {
+    var frequency: Float  // Hz (20 - 20000)
+    var gain: Float       // dB (-12 to +12)
+    var q: Float          // Q factor (0.3 to 10.0)
 
     // Gain range
     static let minGain: Float = -12
     static let maxGain: Float = 12
 
-    // Band labels
-    static let bandLabels = ["Low", "LM", "HM", "High"]
+    // Frequency range
+    static let minFrequency: Float = 20
+    static let maxFrequency: Float = 20000
 
-    // Get gain for band index
-    func gain(for index: Int) -> Float {
-        switch index {
-        case 0: return lowGain
-        case 1: return lowMidGain
-        case 2: return highMidGain
-        case 3: return highGain
-        default: return 0
+    // Q range (user-facing)
+    static let minQ: Float = 0.3
+    static let maxQ: Float = 10.0
+
+    /// Convert user-facing Q to AVAudioUnitEQ bandwidth (octaves)
+    /// Formula: bandwidth = 2 * asinh(1 / (2 * Q)) / ln(2)
+    /// This is the standard conversion from Q to bandwidth in octaves
+    var bandwidth: Float {
+        // bandwidth (octaves) = 2 * asinh(1/(2*Q)) / ln(2)
+        let clampedQ = max(0.1, q) // Avoid division issues
+        return 2 * asinh(1 / (2 * clampedQ)) / log(2)
+    }
+
+    /// Create bandwidth from Q for AVAudioUnitEQ
+    static func bandwidthFromQ(_ q: Float) -> Float {
+        let clampedQ = max(0.1, q)
+        return 2 * asinh(1 / (2 * clampedQ)) / log(2)
+    }
+
+    init(frequency: Float, gain: Float = 0, q: Float = 1.0) {
+        self.frequency = max(Self.minFrequency, min(Self.maxFrequency, frequency))
+        self.gain = max(Self.minGain, min(Self.maxGain, gain))
+        self.q = max(Self.minQ, min(Self.maxQ, q))
+    }
+}
+
+// MARK: - Full EQ Settings (4 bands)
+
+struct EQSettings: Codable, Equatable {
+    var bands: [EQBandSettings]
+
+    // Default frequencies for 4-band parametric EQ
+    static let defaultFrequencies: [Float] = [100, 400, 2000, 8000]
+
+    // Band labels
+    static let bandLabels = ["Low", "Low-Mid", "High-Mid", "High"]
+
+    static let flat = EQSettings(bands: [
+        EQBandSettings(frequency: 100, gain: 0, q: 1.0),
+        EQBandSettings(frequency: 400, gain: 0, q: 1.0),
+        EQBandSettings(frequency: 2000, gain: 0, q: 1.0),
+        EQBandSettings(frequency: 8000, gain: 0, q: 1.0)
+    ])
+
+    init(bands: [EQBandSettings]) {
+        // Ensure we always have exactly 4 bands
+        if bands.count == 4 {
+            self.bands = bands
+        } else {
+            self.bands = Self.flat.bands
         }
     }
 
-    // Set gain for band index
-    mutating func setGain(_ gain: Float, for index: Int) {
-        let clampedGain = max(EQSettings.minGain, min(EQSettings.maxGain, gain))
-        switch index {
-        case 0: lowGain = clampedGain
-        case 1: lowMidGain = clampedGain
-        case 2: highMidGain = clampedGain
-        case 3: highGain = clampedGain
-        default: break
-        }
+    init() {
+        self.bands = Self.flat.bands
+    }
+
+    // Check if EQ is flat (all gains at 0)
+    var isFlat: Bool {
+        bands.allSatisfy { abs($0.gain) < 0.1 }
+    }
+
+    // Reset to flat
+    mutating func reset() {
+        bands = [
+            EQBandSettings(frequency: 100, gain: 0, q: 1.0),
+            EQBandSettings(frequency: 400, gain: 0, q: 1.0),
+            EQBandSettings(frequency: 2000, gain: 0, q: 1.0),
+            EQBandSettings(frequency: 8000, gain: 0, q: 1.0)
+        ]
     }
 }
 
@@ -167,8 +208,6 @@ struct AppSettings: Codable {
     var autoTranscribe: Bool = false
     var skipInterval: SkipInterval = .fifteen
     var playbackSpeed: Float = 1.0
-    var playbackVolume: Float = 1.0  // 0.0 to 1.0
-    var eqSettings: EQSettings = .flat
     var silenceSkipSettings: SilenceSkipSettings = .default
 
     static let `default` = AppSettings()

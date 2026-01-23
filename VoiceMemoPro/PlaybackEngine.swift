@@ -16,7 +16,6 @@ final class PlaybackEngine {
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
     var playbackSpeed: Float = 1.0
-    var playbackVolume: Float = 1.0
     var eqSettings: EQSettings = .flat
 
     private var audioEngine: AVAudioEngine?
@@ -153,18 +152,28 @@ final class PlaybackEngine {
         timePitchNode?.rate = playbackSpeed
     }
 
-    // MARK: - Volume Control
-
-    func setVolume(_ volume: Float) {
-        playbackVolume = max(0.0, min(1.0, volume))
-        audioEngine?.mainMixerNode.outputVolume = playbackVolume
-    }
-
     // MARK: - EQ Control
 
     func setEQ(_ settings: EQSettings) {
         eqSettings = settings
         applyEQSettings()
+    }
+
+    /// Update a single band's settings in real-time
+    func updateBand(_ index: Int, frequency: Float? = nil, gain: Float? = nil, q: Float? = nil) {
+        guard index >= 0 && index < 4 else { return }
+
+        if let freq = frequency {
+            eqSettings.bands[index].frequency = max(EQBandSettings.minFrequency, min(EQBandSettings.maxFrequency, freq))
+        }
+        if let g = gain {
+            eqSettings.bands[index].gain = max(EQBandSettings.minGain, min(EQBandSettings.maxGain, g))
+        }
+        if let qVal = q {
+            eqSettings.bands[index].q = max(EQBandSettings.minQ, min(EQBandSettings.maxQ, qVal))
+        }
+
+        applyBandSettings(index)
     }
 
     // MARK: - Private
@@ -183,11 +192,8 @@ final class PlaybackEngine {
         // Configure time pitch
         timePitch.rate = playbackSpeed
 
-        // Configure volume
-        engine.mainMixerNode.outputVolume = playbackVolume
-
-        // Configure EQ bands
-        configurEQBands()
+        // Configure all EQ bands as parametric
+        configureEQBands()
 
         // Attach nodes
         engine.attach(player)
@@ -202,32 +208,14 @@ final class PlaybackEngine {
         engine.prepare()
     }
 
-    private func configurEQBands() {
+    private func configureEQBands() {
         guard let eq = eqNode else { return }
 
-        // Band 0: Low (100 Hz)
-        eq.bands[0].filterType = .lowShelf
-        eq.bands[0].frequency = EQSettings.lowFrequency
-        eq.bands[0].bandwidth = 1.0
-        eq.bands[0].bypass = false
-
-        // Band 1: Low-Mid (500 Hz)
-        eq.bands[1].filterType = .parametric
-        eq.bands[1].frequency = EQSettings.lowMidFrequency
-        eq.bands[1].bandwidth = 1.0
-        eq.bands[1].bypass = false
-
-        // Band 2: High-Mid (2000 Hz)
-        eq.bands[2].filterType = .parametric
-        eq.bands[2].frequency = EQSettings.highMidFrequency
-        eq.bands[2].bandwidth = 1.0
-        eq.bands[2].bypass = false
-
-        // Band 3: High (8000 Hz)
-        eq.bands[3].filterType = .highShelf
-        eq.bands[3].frequency = EQSettings.highFrequency
-        eq.bands[3].bandwidth = 1.0
-        eq.bands[3].bypass = false
+        // Configure all 4 bands as parametric filters
+        for i in 0..<4 {
+            eq.bands[i].filterType = .parametric
+            eq.bands[i].bypass = false
+        }
 
         applyEQSettings()
     }
@@ -235,10 +223,21 @@ final class PlaybackEngine {
     private func applyEQSettings() {
         guard let eq = eqNode else { return }
 
-        eq.bands[0].gain = eqSettings.lowGain
-        eq.bands[1].gain = eqSettings.lowMidGain
-        eq.bands[2].gain = eqSettings.highMidGain
-        eq.bands[3].gain = eqSettings.highGain
+        for i in 0..<4 {
+            let band = eqSettings.bands[i]
+            eq.bands[i].frequency = band.frequency
+            eq.bands[i].gain = band.gain
+            eq.bands[i].bandwidth = band.bandwidth
+        }
+    }
+
+    private func applyBandSettings(_ index: Int) {
+        guard let eq = eqNode, index >= 0 && index < 4 else { return }
+
+        let band = eqSettings.bands[index]
+        eq.bands[index].frequency = band.frequency
+        eq.bands[index].gain = band.gain
+        eq.bands[index].bandwidth = band.bandwidth
     }
 
     private func startTimer() {

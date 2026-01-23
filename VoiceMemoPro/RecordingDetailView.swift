@@ -34,6 +34,10 @@ struct RecordingDetailView: View {
 
     @State private var editedIconColor: Color
 
+    // EQ panel state
+    @State private var showEQPanel = false
+    @State private var localEQSettings: EQSettings
+
     // Location search state
     @State private var locationSearchQuery = ""
     @State private var isSearchingLocation = false
@@ -47,6 +51,7 @@ struct RecordingDetailView: View {
         _editedLocationLabel = State(initialValue: recording.locationLabel)
         _currentRecording = State(initialValue: recording)
         _editedIconColor = State(initialValue: recording.iconColor)
+        _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
     }
 
     var body: some View {
@@ -225,9 +230,11 @@ struct RecordingDetailView: View {
                 }
             }
 
-            // Speed control
-            HStack {
+            // Speed and EQ controls
+            HStack(spacing: 12) {
                 Spacer()
+
+                // Speed button
                 Button {
                     cycleSpeed()
                 } label: {
@@ -240,6 +247,27 @@ struct RecordingDetailView: View {
                         .background(Color.blue.opacity(0.15))
                         .cornerRadius(8)
                 }
+
+                // EQ button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showEQPanel.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 12))
+                        Text("EQ")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(showEQPanel ? .white : .purple)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
+                    .cornerRadius(8)
+                }
+
                 Spacer()
             }
 
@@ -247,58 +275,32 @@ struct RecordingDetailView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            // EQ & Volume Section
-            eqVolumeSection
+            // Collapsible EQ Panel
+            if showEQPanel {
+                eqPanel
+            }
         }
     }
 
-    // MARK: - EQ & Volume Section
+    // MARK: - EQ Panel
 
     @ViewBuilder
-    private var eqVolumeSection: some View {
-        @Bindable var appState = appState
-
-        VStack(alignment: .leading, spacing: 16) {
-            // Section header
-            HStack {
-                Image(systemName: "slider.horizontal.3")
-                    .foregroundColor(.accentColor)
-                Text("EQ & Volume")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
-                Spacer()
-            }
-
-            // Volume slider
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Volume")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-
-                VolumeSliderView(volume: $appState.appSettings.playbackVolume)
-                    .onChange(of: appState.appSettings.playbackVolume) { _, newValue in
-                        playback.setVolume(newValue)
-                    }
-            }
-
-            // EQ Graph
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Equalizer")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-
-                EQGraphView(settings: $appState.appSettings.eqSettings)
-                    .onChange(of: appState.appSettings.eqSettings) { _, newValue in
-                        playback.setEQ(newValue)
-                    }
-            }
+    private var eqPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ParametricEQView(
+                settings: $localEQSettings,
+                onSettingsChanged: {
+                    // Apply EQ changes in real-time to playback
+                    playback.setEQ(localEQSettings)
+                    // Save to recording
+                    saveEQSettings()
+                }
+            )
         }
         .padding(16)
         .background(Color(.systemGray6))
         .cornerRadius(12)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // MARK: - Metadata Section
@@ -807,8 +809,8 @@ struct RecordingDetailView: View {
     private func setupPlayback() {
         playback.load(url: currentRecording.fileURL)
         playback.setSpeed(appState.appSettings.playbackSpeed)
-        playback.setVolume(appState.appSettings.playbackVolume)
-        playback.setEQ(appState.appSettings.eqSettings)
+        // Apply per-recording EQ settings
+        playback.setEQ(localEQSettings)
 
         // Smart resume - seek to last position
         if currentRecording.lastPlaybackPosition > 0 && currentRecording.lastPlaybackPosition < playback.duration {
@@ -824,6 +826,14 @@ struct RecordingDetailView: View {
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
         updated.iconColorHex = editedIconColor.toHex()
+        updated.eqSettings = localEQSettings
+        appState.updateRecording(updated)
+    }
+
+    private func saveEQSettings() {
+        var updated = currentRecording
+        updated.eqSettings = localEQSettings
+        currentRecording = updated
         appState.updateRecording(updated)
     }
 

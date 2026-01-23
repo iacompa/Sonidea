@@ -33,8 +33,11 @@ struct RecordingsListView: View {
                         selectionHeader
                     }
                     recordingsList
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // Selection mode action bar - sits above the record button
                     if isSelectionMode && !selectedRecordingIDs.isEmpty {
-                        batchActionBar
+                        selectionActionBar
                     }
                 }
             }
@@ -186,56 +189,60 @@ struct RecordingsListView: View {
                 }
                 .listRowBackground(Color.clear)
             }
+
+            // Bottom spacer for floating record button
+            Color.clear
+                .frame(height: 100)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
 
-    private var batchActionBar: some View {
-        HStack(spacing: 20) {
-            Button {
+    // MARK: - Selection Mode Action Bar (Floating Pill Style)
+
+    private var selectionActionBar: some View {
+        HStack(spacing: 4) {
+            SelectionActionButton(
+                icon: "square.stack",
+                label: "Album",
+                color: .primary
+            ) {
                 showBatchAlbumPicker = true
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "square.stack")
-                    Text("Album")
-                        .font(.caption)
-                }
             }
 
-            Button {
+            SelectionActionButton(
+                icon: "tag",
+                label: "Tags",
+                color: .primary
+            ) {
                 showBatchTagPicker = true
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "tag")
-                    Text("Tags")
-                        .font(.caption)
-                }
             }
 
-            Button {
+            SelectionActionButton(
+                icon: "square.and.arrow.up",
+                label: "Export",
+                color: .primary
+            ) {
                 exportSelectedRecordings()
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.up")
-                    Text("Export")
-                        .font(.caption)
-                }
             }
 
-            Button(role: .destructive) {
+            SelectionActionButton(
+                icon: "trash",
+                label: "Delete",
+                color: .red
+            ) {
                 appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
                 clearSelection()
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "trash")
-                    Text("Delete")
-                        .font(.caption)
-                }
             }
         }
-        .padding()
-        .background(Color(.systemGray6))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(Capsule())
+        .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 4)
+        .padding(.bottom, 110) // Space for the floating record button
     }
 
     private func toggleSelection(_ recording: RecordingItem) {
@@ -282,6 +289,34 @@ struct RecordingsListView: View {
         }
     }
 }
+
+// MARK: - Selection Action Button
+
+struct SelectionActionButton: View {
+    let icon: String
+    let label: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(color)
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(color)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Recording Row
 
 struct RecordingRow: View {
     @Environment(AppState.self) var appState

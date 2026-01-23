@@ -35,6 +35,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     // Icon color customization (hex string, e.g. "#3A3A3C")
     var iconColorHex: String?
 
+    // Per-recording EQ settings
+    var eqSettings: EQSettings?
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
@@ -170,7 +173,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         longitude: Double? = nil,
         trashedAt: Date? = nil,
         lastPlaybackPosition: TimeInterval = 0,
-        iconColorHex: String? = nil
+        iconColorHex: String? = nil,
+        eqSettings: EQSettings? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -187,6 +191,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.trashedAt = trashedAt
         self.lastPlaybackPosition = lastPlaybackPosition
         self.iconColorHex = iconColorHex
+        self.eqSettings = eqSettings
     }
 }
 

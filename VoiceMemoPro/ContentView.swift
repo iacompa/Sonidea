@@ -68,25 +68,12 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            // Bottom Record Button
-            VStack(spacing: 0) {
-                VoiceMemosRecordButton {
-                    handleRecordTap()
-                }
-                .padding(.bottom, 16)
+        .overlay(alignment: .bottom) {
+            // Floating Record Button - NO background
+            VoiceMemosRecordButton {
+                handleRecordTap()
             }
-            .frame(maxWidth: .infinity)
-            .background(
-                LinearGradient(
-                    colors: [Color(.systemBackground).opacity(0), Color(.systemBackground)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 60)
-                .allowsHitTesting(false),
-                alignment: .top
-            )
+            .padding(.bottom, 24)
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
