@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 struct RecordingItem: Identifiable, Codable, Equatable {
     let id: UUID
@@ -26,8 +27,22 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     // Smart resume - last playback position
     var lastPlaybackPosition: TimeInterval
 
+    // Icon color customization (hex string, e.g. "#3A3A3C")
+    var iconColorHex: String?
+
+    // Default icon color (dark neutral gray)
+    static let defaultIconColorHex = "#3A3A3C"
+
     var isTrashed: Bool {
         trashedAt != nil
+    }
+
+    // Icon color with fallback to default
+    var iconColor: Color {
+        if let hex = iconColorHex, let color = Color(hex: hex) {
+            return color
+        }
+        return Color(hex: Self.defaultIconColorHex) ?? Color(.systemGray4)
     }
 
     // Auto-purge after 30 days
@@ -76,7 +91,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         locationLabel: String = "",
         transcript: String = "",
         trashedAt: Date? = nil,
-        lastPlaybackPosition: TimeInterval = 0
+        lastPlaybackPosition: TimeInterval = 0,
+        iconColorHex: String? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -90,6 +106,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.transcript = transcript
         self.trashedAt = trashedAt
         self.lastPlaybackPosition = lastPlaybackPosition
+        self.iconColorHex = iconColorHex
     }
 }
 

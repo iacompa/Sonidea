@@ -267,7 +267,7 @@ struct RecordingRow: View {
                 .font(.system(size: 24))
                 .foregroundColor(.primary)
                 .frame(width: 44, height: 44)
-                .background(Color(.systemGray4))
+                .background(recording.iconColor)
                 .cornerRadius(8)
 
             VStack(alignment: .leading, spacing: 4) {

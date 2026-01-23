@@ -31,11 +31,14 @@ struct RecordingDetailView: View {
     @State private var exportedWAVURL: URL?
     @State private var isExporting = false
 
+    @State private var editedIconColor: Color
+
     init(recording: RecordingItem) {
         _editedTitle = State(initialValue: recording.title)
         _editedNotes = State(initialValue: recording.notes)
         _editedLocationLabel = State(initialValue: recording.locationLabel)
         _currentRecording = State(initialValue: recording)
+        _editedIconColor = State(initialValue: recording.iconColor)
     }
 
     var body: some View {
@@ -323,6 +326,25 @@ struct RecordingDetailView: View {
                     .cornerRadius(8)
             }
 
+            // Icon Color
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Icon Color")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+                HStack {
+                    Text("Choose a color for this recording's icon")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    ColorPicker("", selection: $editedIconColor, supportsOpacity: false)
+                        .labelsHidden()
+                }
+                .padding(12)
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+            }
+
             // Transcription
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -446,6 +468,7 @@ struct RecordingDetailView: View {
         updated.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
+        updated.iconColorHex = editedIconColor.toHex()
         appState.updateRecording(updated)
     }
 

@@ -43,9 +43,9 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 HStack {
                     Button {
-                        showSearch = true
+                        showSettings = true
                     } label: {
-                        Image(systemName: "magnifyingglass")
+                        Image(systemName: "gearshape.fill")
                             .font(.system(size: 20, weight: .medium))
                             .foregroundColor(.primary)
                             .frame(width: 44, height: 44)
@@ -54,9 +54,9 @@ struct ContentView: View {
                     Spacer()
 
                     Button {
-                        showSettings = true
+                        showTipJar = true
                     } label: {
-                        Image(systemName: "gearshape.fill")
+                        Image(systemName: "heart.fill")
                             .font(.system(size: 20, weight: .medium))
                             .foregroundColor(.primary)
                             .frame(width: 44, height: 44)
@@ -90,7 +90,7 @@ struct ContentView: View {
                 Spacer()
                 BottomDockView(
                     currentRoute: $currentRoute,
-                    showTipJar: $showTipJar
+                    showSearch: $showSearch
                 )
             }
         }
@@ -153,7 +153,7 @@ struct RecordingStatusView: View {
 struct BottomDockView: View {
     @Environment(AppState.self) var appState
     @Binding var currentRoute: AppRoute
-    @Binding var showTipJar: Bool
+    @Binding var showSearch: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -163,14 +163,6 @@ struct BottomDockView: View {
                 isSelected: currentRoute == .map
             ) {
                 currentRoute = .map
-            }
-
-            DockButton(
-                icon: "waveform",
-                label: "Recordings",
-                isSelected: currentRoute == .recordings
-            ) {
-                currentRoute = .recordings
             }
 
             Button {
@@ -195,11 +187,11 @@ struct BottomDockView: View {
             .padding(.horizontal, 16)
 
             DockButton(
-                icon: "heart.fill",
-                label: "Tip Jar",
+                icon: "magnifyingglass",
+                label: "Search",
                 isSelected: false
             ) {
-                showTipJar = true
+                showSearch = true
             }
         }
         .padding(.horizontal, 20)
@@ -640,7 +632,7 @@ struct SearchResultRow: View {
                 .font(.system(size: 20))
                 .foregroundColor(.primary)
                 .frame(width: 36, height: 36)
-                .background(Color(.systemGray4))
+                .background(recording.iconColor)
                 .cornerRadius(6)
 
             VStack(alignment: .leading, spacing: 4) {
