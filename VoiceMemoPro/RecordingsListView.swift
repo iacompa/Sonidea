@@ -9,6 +9,8 @@ import SwiftUI
 
 struct RecordingsListView: View {
     @Environment(AppState.self) var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
     @State private var selectedRecordingIDs: Set<UUID> = []
@@ -22,6 +24,13 @@ struct RecordingsListView: View {
     @State private var recordingToMove: RecordingItem?
     @State private var showMoveToAlbumSheet = false
 
+    // Animation spring configuration
+    private var revealAnimation: Animation {
+        reduceMotion
+            ? .easeInOut(duration: 0.2)
+            : .spring(response: 0.35, dampingFraction: 0.8, blendDuration: 0)
+    }
+
     var body: some View {
         Group {
             if appState.activeRecordings.isEmpty {
@@ -29,16 +38,13 @@ struct RecordingsListView: View {
             } else {
                 VStack(spacing: 0) {
                     listHeader
+
+                    // Selection mode: header + actions panel (stacked, animated)
                     if isSelectionMode {
-                        selectionHeader
+                        selectionControlsStack
                     }
+
                     recordingsList
-                }
-                .safeAreaInset(edge: .bottom) {
-                    // Selection mode action bar - sits above the record button
-                    if isSelectionMode && !selectedRecordingIDs.isEmpty {
-                        selectionActionBar
-                    }
                 }
             }
         }
@@ -93,7 +99,9 @@ struct RecordingsListView: View {
 
             if !isSelectionMode {
                 Button {
-                    isSelectionMode = true
+                    withAnimation(revealAnimation) {
+                        isSelectionMode = true
+                    }
                 } label: {
                     Text("Select")
                         .font(.subheadline)
@@ -105,10 +113,30 @@ struct RecordingsListView: View {
         .padding(.vertical, 8)
     }
 
+    // MARK: - Selection Controls Stack (Header + Actions)
+
+    private var selectionControlsStack: some View {
+        VStack(spacing: 0) {
+            // Selection header row
+            selectionHeader
+
+            // Actions panel - animates down from header
+            selectionActionsPanel
+                .transition(
+                    .asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    )
+                )
+        }
+    }
+
     private var selectionHeader: some View {
         HStack {
             Button("Cancel") {
-                clearSelection()
+                withAnimation(revealAnimation) {
+                    clearSelection()
+                }
             }
 
             Spacer()
@@ -120,16 +148,71 @@ struct RecordingsListView: View {
             Spacer()
 
             Button(selectedRecordingIDs.count == appState.activeRecordings.count ? "Deselect All" : "Select All") {
-                if selectedRecordingIDs.count == appState.activeRecordings.count {
-                    selectedRecordingIDs.removeAll()
-                } else {
-                    selectedRecordingIDs = Set(appState.activeRecordings.map { $0.id })
+                withAnimation(revealAnimation) {
+                    if selectedRecordingIDs.count == appState.activeRecordings.count {
+                        selectedRecordingIDs.removeAll()
+                    } else {
+                        selectedRecordingIDs = Set(appState.activeRecordings.map { $0.id })
+                    }
                 }
             }
         }
         .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemBackground))
+    }
+
+    // MARK: - Selection Actions Panel (Drops down from header)
+
+    private var selectionActionsPanel: some View {
+        HStack(spacing: 0) {
+            SelectionActionButton(
+                icon: "square.stack",
+                label: "Album",
+                color: .primary
+            ) {
+                showBatchAlbumPicker = true
+            }
+
+            SelectionActionButton(
+                icon: "tag",
+                label: "Tags",
+                color: .primary
+            ) {
+                showBatchTagPicker = true
+            }
+
+            SelectionActionButton(
+                icon: "square.and.arrow.up",
+                label: "Export",
+                color: .primary
+            ) {
+                exportSelectedRecordings()
+            }
+
+            SelectionActionButton(
+                icon: "trash",
+                label: "Delete",
+                color: .red
+            ) {
+                withAnimation(revealAnimation) {
+                    appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
+                    clearSelection()
+                }
+            }
+        }
+        .padding(.horizontal, 8)
         .padding(.vertical, 8)
-        .background(Color(.systemGray6))
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemBackground))
+        .overlay(
+            // Subtle top separator
+            Rectangle()
+                .fill(Color(.separator).opacity(0.3))
+                .frame(height: 0.5),
+            alignment: .top
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
     private var recordingsList: some View {
@@ -150,8 +233,10 @@ struct RecordingsListView: View {
                 }
                 .onLongPressGesture {
                     if !isSelectionMode {
-                        isSelectionMode = true
-                        selectedRecordingIDs.insert(recording.id)
+                        withAnimation(revealAnimation) {
+                            isSelectionMode = true
+                            selectedRecordingIDs.insert(recording.id)
+                        }
                     }
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -200,56 +285,13 @@ struct RecordingsListView: View {
         .scrollContentBackground(.hidden)
     }
 
-    // MARK: - Selection Mode Action Bar (Floating Pill Style)
-
-    private var selectionActionBar: some View {
-        HStack(spacing: 4) {
-            SelectionActionButton(
-                icon: "square.stack",
-                label: "Album",
-                color: .primary
-            ) {
-                showBatchAlbumPicker = true
-            }
-
-            SelectionActionButton(
-                icon: "tag",
-                label: "Tags",
-                color: .primary
-            ) {
-                showBatchTagPicker = true
-            }
-
-            SelectionActionButton(
-                icon: "square.and.arrow.up",
-                label: "Export",
-                color: .primary
-            ) {
-                exportSelectedRecordings()
-            }
-
-            SelectionActionButton(
-                icon: "trash",
-                label: "Delete",
-                color: .red
-            ) {
-                appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
-                clearSelection()
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(Capsule())
-        .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 4)
-        .padding(.bottom, 110) // Space for the floating record button
-    }
-
     private func toggleSelection(_ recording: RecordingItem) {
-        if selectedRecordingIDs.contains(recording.id) {
-            selectedRecordingIDs.remove(recording.id)
-        } else {
-            selectedRecordingIDs.insert(recording.id)
+        withAnimation(revealAnimation) {
+            if selectedRecordingIDs.contains(recording.id) {
+                selectedRecordingIDs.remove(recording.id)
+            } else {
+                selectedRecordingIDs.insert(recording.id)
+            }
         }
     }
 
@@ -282,7 +324,9 @@ struct RecordingsListView: View {
                 )
                 exportedURL = zipURL
                 showShareSheet = true
-                clearSelection()
+                withAnimation(revealAnimation) {
+                    clearSelection()
+                }
             } catch {
                 print("Export failed: \(error)")
             }
