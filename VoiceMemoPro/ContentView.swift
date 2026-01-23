@@ -41,58 +41,52 @@ struct ContentView: View {
             Color(.systemBackground).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                HStack {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundColor(.primary)
-                            .frame(width: 44, height: 44)
-                    }
+                // Top Navigation Bar
+                topNavigationBar
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
 
-                    Spacer()
-
-                    Button {
-                        showTipJar = true
-                    } label: {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundColor(.primary)
-                            .frame(width: 44, height: 44)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
+                // Recording Status (when recording)
                 if appState.recorder.isRecording {
                     RecordingStatusView(
                         duration: appState.recorder.currentDuration,
                         liveSamples: appState.recorder.liveMeterSamples
                     )
                     .padding(.top, 8)
+                    .padding(.horizontal, 16)
                 }
 
+                // Main Content
                 Group {
                     switch currentRoute {
                     case .recordings:
                         RecordingsListView()
                     case .map:
-                        MapPlaceholderView()
+                        GPSInsightsMapView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                Spacer(minLength: 100)
             }
-
-            VStack {
-                Spacer()
-                BottomDockView(
-                    currentRoute: $currentRoute,
-                    showSearch: $showSearch
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Bottom Record Button
+            VStack(spacing: 0) {
+                VoiceMemosRecordButton {
+                    handleRecordTap()
+                }
+                .padding(.bottom, 16)
+            }
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [Color(.systemBackground).opacity(0), Color(.systemBackground)],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-            }
+                .frame(height: 60)
+                .allowsHitTesting(false),
+                alignment: .top
+            )
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
@@ -102,6 +96,129 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showTipJar) {
             TipJarSheetView()
+        }
+    }
+
+    // MARK: - Top Navigation Bar
+
+    private var topNavigationBar: some View {
+        HStack(spacing: 8) {
+            // Left cluster: Settings, Map, Recordings
+            HStack(spacing: 8) {
+                // Settings
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                }
+
+                // Map
+                Button {
+                    currentRoute = .map
+                } label: {
+                    Image(systemName: "map.fill")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundColor(currentRoute == .map ? .accentColor : .primary)
+                        .frame(width: 44, height: 44)
+                }
+
+                // Recordings/Home
+                Button {
+                    currentRoute = .recordings
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundColor(currentRoute == .recordings ? .accentColor : .primary)
+                        .frame(width: 44, height: 44)
+                }
+            }
+
+            Spacer()
+
+            // Right cluster: Search, Tip Jar
+            HStack(spacing: 8) {
+                // Search
+                Button {
+                    showSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                }
+
+                // Tip Jar
+                Button {
+                    showTipJar = true
+                } label: {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                }
+            }
+        }
+    }
+
+    // MARK: - Record Button Handler
+
+    private func handleRecordTap() {
+        if appState.recorder.isRecording {
+            if let rawData = appState.recorder.stopRecording() {
+                appState.addRecording(from: rawData)
+                currentRoute = .recordings
+            }
+        } else {
+            appState.recorder.startRecording()
+        }
+    }
+}
+
+// MARK: - Voice Memos Style Record Button
+
+struct VoiceMemosRecordButton: View {
+    @Environment(AppState.self) var appState
+    let action: () -> Void
+
+    @State private var isPulsing = false
+
+    private var isRecording: Bool {
+        appState.recorder.isRecording
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                // Outer ring
+                Circle()
+                    .stroke(isRecording ? Color.red : Color.red.opacity(0.3), lineWidth: 4)
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(isRecording && isPulsing ? 1.08 : 1.0)
+                    .animation(
+                        isRecording ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default,
+                        value: isPulsing
+                    )
+
+                // Inner fill
+                Circle()
+                    .fill(isRecording ? Color.red : Color.red)
+                    .frame(width: 68, height: 68)
+
+                // Mic icon
+                Image(systemName: isRecording ? "mic.fill" : "mic.fill")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundColor(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .onChange(of: isRecording) { _, newValue in
+            isPulsing = newValue
+        }
+        .onAppear {
+            isPulsing = isRecording
         }
     }
 }
@@ -137,8 +254,8 @@ struct RecordingStatusView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.red.opacity(0.2))
-        .cornerRadius(20)
+        .background(Color.red.opacity(0.15))
+        .cornerRadius(16)
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -146,94 +263,6 @@ struct RecordingStatusView: View {
         let seconds = Int(duration) % 60
         let tenths = Int((duration.truncatingRemainder(dividingBy: 1)) * 10)
         return String(format: "%d:%02d.%d", minutes, seconds, tenths)
-    }
-}
-
-// MARK: - Bottom Dock
-struct BottomDockView: View {
-    @Environment(AppState.self) var appState
-    @Binding var currentRoute: AppRoute
-    @Binding var showSearch: Bool
-
-    var body: some View {
-        HStack(spacing: 0) {
-            DockButton(
-                icon: "map.fill",
-                label: "Map",
-                isSelected: currentRoute == .map
-            ) {
-                currentRoute = .map
-            }
-
-            Button {
-                handleRecordTap()
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(appState.recorder.isRecording ? Color.gray : Color.red)
-                        .frame(width: 64, height: 64)
-
-                    if appState.recorder.isRecording {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.red)
-                            .frame(width: 24, height: 24)
-                    } else {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-
-            DockButton(
-                icon: "magnifyingglass",
-                label: "Search",
-                isSelected: false
-            ) {
-                showSearch = true
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 24)
-                .fill(Color(.systemGray5).opacity(0.95))
-        )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-    }
-
-    private func handleRecordTap() {
-        if appState.recorder.isRecording {
-            if let rawData = appState.recorder.stopRecording() {
-                appState.addRecording(from: rawData)
-                currentRoute = .recordings
-            }
-        } else {
-            appState.recorder.startRecording()
-        }
-    }
-}
-
-// MARK: - Dock Button
-struct DockButton: View {
-    let icon: String
-    let label: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .medium))
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .foregroundColor(isSelected ? .primary : .secondary)
-            .frame(maxWidth: .infinity)
-        }
     }
 }
 

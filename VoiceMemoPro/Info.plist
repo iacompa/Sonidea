@@ -6,6 +6,8 @@
 	<string>VoiceMemoPro needs access to the microphone to record voice memos.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>VoiceMemoPro needs access to speech recognition to transcribe your voice memos.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>VoiceMemoPro uses your location to tag recordings with where they were made, helping you organize and find them on the map.</string>
 	<key>UIApplicationShortcutItems</key>
 	<array>
 		<dict>

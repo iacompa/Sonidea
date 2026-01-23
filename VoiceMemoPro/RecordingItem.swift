@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import CoreLocation
 
 struct RecordingItem: Identifiable, Codable, Equatable {
     let id: UUID
@@ -20,6 +21,10 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     var albumID: UUID?
     var locationLabel: String
     var transcript: String
+
+    // GPS coordinates
+    var latitude: Double?
+    var longitude: Double?
 
     // Trash support
     var trashedAt: Date?
@@ -43,6 +48,18 @@ struct RecordingItem: Identifiable, Codable, Equatable {
             return color
         }
         return Color(hex: Self.defaultIconColorHex) ?? Color(.systemGray4)
+    }
+
+    // Check if recording has valid coordinates
+    var hasCoordinates: Bool {
+        guard let lat = latitude, let lon = longitude else { return false }
+        return lat != 0 || lon != 0
+    }
+
+    // Get CLLocationCoordinate2D if coordinates exist
+    var coordinate: CLLocationCoordinate2D? {
+        guard hasCoordinates, let lat = latitude, let lon = longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 
     // Auto-purge after 30 days
@@ -90,6 +107,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         albumID: UUID? = nil,
         locationLabel: String = "",
         transcript: String = "",
+        latitude: Double? = nil,
+        longitude: Double? = nil,
         trashedAt: Date? = nil,
         lastPlaybackPosition: TimeInterval = 0,
         iconColorHex: String? = nil
@@ -104,6 +123,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.albumID = albumID
         self.locationLabel = locationLabel
         self.transcript = transcript
+        self.latitude = latitude
+        self.longitude = longitude
         self.trashedAt = trashedAt
         self.lastPlaybackPosition = lastPlaybackPosition
         self.iconColorHex = iconColorHex
@@ -115,4 +136,88 @@ struct RawRecordingData {
     let fileURL: URL
     let createdAt: Date
     let duration: TimeInterval
+    let latitude: Double?
+    let longitude: Double?
+    let locationLabel: String
+}
+
+// MARK: - Recording Spot (for Map clustering)
+
+struct RecordingSpot: Identifiable, Equatable {
+    let id: String // cluster key based on rounded coordinates
+    let centerCoordinate: CLLocationCoordinate2D
+    var displayName: String
+    var totalCount: Int
+    var favoriteCount: Int
+    var recordingIDs: [UUID]
+
+    static func == (lhs: RecordingSpot, rhs: RecordingSpot) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+// MARK: - Spot Clustering Helper
+
+enum SpotClustering {
+    /// Cluster key by rounding to ~100m (3 decimal places)
+    static func clusterKey(latitude: Double, longitude: Double) -> String {
+        let roundedLat = (latitude * 1000).rounded() / 1000
+        let roundedLon = (longitude * 1000).rounded() / 1000
+        return "\(roundedLat),\(roundedLon)"
+    }
+
+    /// Compute spots from recordings
+    static func computeSpots(
+        recordings: [RecordingItem],
+        favoriteTagID: UUID?,
+        filterFavoritesOnly: Bool = false
+    ) -> [RecordingSpot] {
+        // Filter to recordings with coordinates
+        var recordingsToCluster = recordings.filter { $0.hasCoordinates }
+
+        // If filtering favorites only, apply that filter
+        if filterFavoritesOnly, let favID = favoriteTagID {
+            recordingsToCluster = recordingsToCluster.filter { $0.tagIDs.contains(favID) }
+        }
+
+        // Group by cluster key
+        var clusters: [String: (recordings: [RecordingItem], lat: Double, lon: Double)] = [:]
+
+        for recording in recordingsToCluster {
+            guard let lat = recording.latitude, let lon = recording.longitude else { continue }
+            let key = clusterKey(latitude: lat, longitude: lon)
+
+            if clusters[key] == nil {
+                clusters[key] = (recordings: [recording], lat: lat, lon: lon)
+            } else {
+                clusters[key]?.recordings.append(recording)
+            }
+        }
+
+        // Convert to RecordingSpot array
+        return clusters.map { key, value in
+            let recordings = value.recordings
+
+            // Find most common location label for display name
+            let labelCounts = Dictionary(grouping: recordings.filter { !$0.locationLabel.isEmpty }, by: { $0.locationLabel })
+            let mostCommonLabel = labelCounts.max(by: { $0.value.count < $1.value.count })?.key ?? "Unknown Spot"
+
+            // Count favorites
+            let favoriteCount: Int
+            if let favID = favoriteTagID {
+                favoriteCount = recordings.filter { $0.tagIDs.contains(favID) }.count
+            } else {
+                favoriteCount = 0
+            }
+
+            return RecordingSpot(
+                id: key,
+                centerCoordinate: CLLocationCoordinate2D(latitude: value.lat, longitude: value.lon),
+                displayName: mostCommonLabel,
+                totalCount: recordings.count,
+                favoriteCount: favoriteCount,
+                recordingIDs: recordings.map { $0.id }
+            )
+        }
+    }
 }

@@ -8,6 +8,7 @@
 import Foundation
 import Observation
 import SwiftUI
+import CoreLocation
 
 @MainActor
 @Observable
@@ -73,6 +74,11 @@ final class AppState {
         trashedRecordings.count
     }
 
+    /// Recordings with coordinates
+    var recordingsWithLocation: [RecordingItem] {
+        activeRecordings.filter { $0.hasCoordinates }
+    }
+
     // MARK: - Recording Management
 
     func addRecording(from rawData: RawRecordingData) {
@@ -85,7 +91,10 @@ final class AppState {
             createdAt: rawData.createdAt,
             duration: rawData.duration,
             title: title,
-            albumID: Album.draftsID  // Default to Drafts
+            albumID: Album.draftsID,
+            locationLabel: rawData.locationLabel,
+            latitude: rawData.latitude,
+            longitude: rawData.longitude
         )
 
         recordings.insert(recording, at: 0)
@@ -133,6 +142,14 @@ final class AppState {
         }
         recordings[index].lastPlaybackPosition = position
         saveRecordings()
+    }
+
+    func recording(for id: UUID) -> RecordingItem? {
+        recordings.first { $0.id == id }
+    }
+
+    func recordings(for ids: [UUID]) -> [RecordingItem] {
+        ids.compactMap { id in recordings.first { $0.id == id && !$0.isTrashed } }
     }
 
     // MARK: - Trash Management
@@ -318,6 +335,11 @@ final class AppState {
         return recording.tagIDs.contains(favoriteTag.id)
     }
 
+    /// Get the favorite tag ID if it exists
+    var favoriteTagID: UUID? {
+        tags.first(where: { $0.name.lowercased() == "favorite" })?.id
+    }
+
     // MARK: - Album Helpers
 
     func album(for id: UUID?) -> Album? {
@@ -450,6 +472,38 @@ final class AppState {
         }
 
         return results
+    }
+
+    // MARK: - Spot Computation (for Map)
+
+    /// All recording spots (clustered by location)
+    func allSpots() -> [RecordingSpot] {
+        SpotClustering.computeSpots(
+            recordings: activeRecordings,
+            favoriteTagID: favoriteTagID,
+            filterFavoritesOnly: false
+        )
+    }
+
+    /// Top spots by total recording count
+    func topSpots(limit: Int = 3) -> [RecordingSpot] {
+        Array(allSpots().sorted { $0.totalCount > $1.totalCount }.prefix(limit))
+    }
+
+    /// Top spots with favorite recordings (sorted by favorite count)
+    func topFavoriteSpots(limit: Int = 3) -> [RecordingSpot] {
+        let spotsWithFavorites = SpotClustering.computeSpots(
+            recordings: activeRecordings,
+            favoriteTagID: favoriteTagID,
+            filterFavoritesOnly: true
+        )
+        return Array(spotsWithFavorites.sorted { $0.favoriteCount > $1.favoriteCount }.prefix(limit))
+    }
+
+    /// Least used spots (at least 1 recording, sorted ascending)
+    func leastUsedSpots(limit: Int = 3) -> [RecordingSpot] {
+        let spots = allSpots().filter { $0.totalCount >= 1 }
+        return Array(spots.sorted { $0.totalCount < $1.totalCount }.prefix(limit))
     }
 
     // MARK: - Batch Operations

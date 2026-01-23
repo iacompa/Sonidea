@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CoreLocation
 import Foundation
 import Observation
 
@@ -25,9 +26,37 @@ final class RecorderManager: NSObject {
 
     private let maxLiveSamples = 60
 
+    // Location tracking
+    private let locationManager = CLLocationManager()
+    private var currentLocation: CLLocation?
+    private var currentLocationLabel: String = ""
+
     override init() {
         super.init()
         setupInterruptionHandling()
+        setupLocationManager()
+    }
+
+    // MARK: - Location Setup
+
+    private func setupLocationManager() {
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    }
+
+    private func requestLocationIfNeeded() {
+        let status = locationManager.authorizationStatus
+
+        switch status {
+        case .notDetermined:
+            locationManager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationManager.requestLocation()
+        default:
+            // Permission denied or restricted
+            currentLocation = nil
+            currentLocationLabel = ""
+        }
     }
 
     // MARK: - Interruption Handling
@@ -70,6 +99,9 @@ final class RecorderManager: NSObject {
             return
         }
 
+        // Request location at start of recording
+        requestLocationIfNeeded()
+
         let fileURL = generateFileURL()
         currentFileURL = fileURL
 
@@ -100,6 +132,11 @@ final class RecorderManager: NSObject {
         let duration = currentDuration
         let createdAt = Date()
 
+        // Capture location data
+        let latitude = currentLocation?.coordinate.latitude
+        let longitude = currentLocation?.coordinate.longitude
+        let locationLabel = currentLocationLabel
+
         isRecording = false
         currentDuration = 0
         recordingStartTime = nil
@@ -107,11 +144,16 @@ final class RecorderManager: NSObject {
         currentFileURL = nil
         liveMeterSamples = []
         wasRecordingBeforeInterruption = false
+        currentLocation = nil
+        currentLocationLabel = ""
 
         return RawRecordingData(
             fileURL: fileURL,
             createdAt: createdAt,
-            duration: duration
+            duration: duration,
+            latitude: latitude,
+            longitude: longitude,
+            locationLabel: locationLabel
         )
     }
 
@@ -185,6 +227,53 @@ final class RecorderManager: NSObject {
         // Keep only the most recent samples
         if liveMeterSamples.count > maxLiveSamples {
             liveMeterSamples.removeFirst()
+        }
+    }
+}
+
+// MARK: - CLLocationManagerDelegate
+
+extension RecorderManager: CLLocationManagerDelegate {
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+
+        Task { @MainActor in
+            self.currentLocation = location
+
+            // Reverse geocode to get a label
+            let geocoder = CLGeocoder()
+            do {
+                let placemarks = try await geocoder.reverseGeocodeLocation(location)
+                if let placemark = placemarks.first {
+                    // Build a location label from placemark
+                    var labelParts: [String] = []
+                    if let name = placemark.name {
+                        labelParts.append(name)
+                    }
+                    if let locality = placemark.locality {
+                        labelParts.append(locality)
+                    }
+                    self.currentLocationLabel = labelParts.joined(separator: ", ")
+                }
+            } catch {
+                // Use coordinates as fallback label
+                self.currentLocationLabel = String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("Location error: \(error.localizedDescription)")
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            let status = manager.authorizationStatus
+            if status == .authorizedWhenInUse || status == .authorizedAlways {
+                if self.isRecording {
+                    manager.requestLocation()
+                }
+            }
         }
     }
 }
