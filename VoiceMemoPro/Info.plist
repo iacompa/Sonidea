@@ -6,5 +6,18 @@
 	<string>VoiceMemoPro needs access to the microphone to record voice memos.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>VoiceMemoPro needs access to speech recognition to transcribe your voice memos.</string>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.voicememo.newrecording</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New Recording</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>Start recording immediately</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeCaptureVideo</string>
+		</dict>
+	</array>
 </dict>
 </plist>

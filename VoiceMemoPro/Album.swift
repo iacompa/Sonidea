@@ -26,11 +26,11 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
     }
 
     // Well-known system album IDs
-    static let inboxID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    static let draftsID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
-    static let inbox = Album(
-        id: inboxID,
-        name: "Inbox",
+    static let drafts = Album(
+        id: draftsID,
+        name: "Drafts",
         createdAt: Date(timeIntervalSince1970: 0),
         isSystem: true
     )

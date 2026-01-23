@@ -39,7 +39,7 @@ final class AppState {
     private let appearanceModeKey = "appearanceMode"
     private let tagMigrationKey = "didMigrateFavToFavorite"
     private let appSettingsKey = "appSettings"
-    private let inboxMigrationKey = "didMigrateToInbox"
+    private let draftsMigrationKey = "didMigrateToDrafts"
 
     init() {
         loadAppearanceMode()
@@ -49,9 +49,10 @@ final class AppState {
         loadAlbums()
         loadRecordings()
         seedDefaultTagsIfNeeded()
-        ensureInboxAlbum()
+        ensureDraftsAlbum()
         migrateFavTagToFavorite()
-        migrateRecordingsToInbox()
+        migrateRecordingsToDrafts()
+        migrateInboxToDrafts()
         purgeOldTrashedRecordings()
         recorder.qualityPreset = appSettings.recordingQuality
     }
@@ -84,7 +85,7 @@ final class AppState {
             createdAt: rawData.createdAt,
             duration: rawData.duration,
             title: title,
-            albumID: Album.inboxID  // Default to Inbox
+            albumID: Album.draftsID  // Default to Drafts
         )
 
         recordings.insert(recording, at: 0)
@@ -257,7 +258,7 @@ final class AppState {
     }
 
     func mergeTags(sourceTagIDs: Set<UUID>, destinationTagID: UUID) {
-        guard let destTag = tag(for: destinationTagID) else { return }
+        guard let _ = tag(for: destinationTagID) else { return }
 
         // Update all recordings to use destination tag
         for i in recordings.indices {
@@ -335,10 +336,10 @@ final class AppState {
     func deleteAlbum(_ album: Album) {
         guard album.canDelete else { return }
         albums.removeAll { $0.id == album.id }
-        // Move recordings to Inbox
+        // Move recordings to Drafts
         for i in recordings.indices {
             if recordings[i].albumID == album.id {
-                recordings[i].albumID = Album.inboxID
+                recordings[i].albumID = Album.draftsID
             }
         }
         saveAlbums()
@@ -347,26 +348,26 @@ final class AppState {
 
     func setAlbum(_ album: Album?, for recording: RecordingItem) -> RecordingItem {
         var updated = recording
-        updated.albumID = album?.id ?? Album.inboxID
+        updated.albumID = album?.id ?? Album.draftsID
         updateRecording(updated)
         return updated
     }
 
-    private func ensureInboxAlbum() {
-        if !albums.contains(where: { $0.id == Album.inboxID }) {
-            albums.insert(Album.inbox, at: 0)
+    private func ensureDraftsAlbum() {
+        if !albums.contains(where: { $0.id == Album.draftsID }) {
+            albums.insert(Album.drafts, at: 0)
             saveAlbums()
         }
     }
 
-    private func migrateRecordingsToInbox() {
-        let didMigrate = UserDefaults.standard.bool(forKey: inboxMigrationKey)
+    private func migrateRecordingsToDrafts() {
+        let didMigrate = UserDefaults.standard.bool(forKey: draftsMigrationKey)
         guard !didMigrate else { return }
 
         var changed = false
         for i in recordings.indices {
             if recordings[i].albumID == nil {
-                recordings[i].albumID = Album.inboxID
+                recordings[i].albumID = Album.draftsID
                 changed = true
             }
         }
@@ -374,7 +375,16 @@ final class AppState {
         if changed {
             saveRecordings()
         }
-        UserDefaults.standard.set(true, forKey: inboxMigrationKey)
+        UserDefaults.standard.set(true, forKey: draftsMigrationKey)
+    }
+
+    /// Migrate existing "Inbox" album to "Drafts"
+    private func migrateInboxToDrafts() {
+        // Find if there's an album with name "Inbox" and the system ID
+        if let index = albums.firstIndex(where: { $0.id == Album.draftsID && $0.name == "Inbox" }) {
+            albums[index].name = "Drafts"
+            saveAlbums()
+        }
     }
 
     // MARK: - Album Search Helpers
@@ -465,7 +475,7 @@ final class AppState {
     func setAlbumForRecordings(_ album: Album?, recordingIDs: Set<UUID>) {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) {
-                recordings[i].albumID = album?.id ?? Album.inboxID
+                recordings[i].albumID = album?.id ?? Album.draftsID
             }
         }
         saveRecordings()
@@ -507,7 +517,7 @@ final class AppState {
             createdAt: Date(),
             duration: duration,
             title: title,
-            albumID: Album.inboxID
+            albumID: Album.draftsID
         )
 
         recordings.insert(recording, at: 0)
@@ -624,5 +634,32 @@ final class AppState {
             tags = Tag.defaultTags
             saveTags()
         }
+    }
+}
+
+// MARK: - Pending Actions (for AppIntents, Widgets, Quick Actions)
+
+enum PendingActionKeys {
+    static let pendingStartRecording = "pendingStartRecording"
+}
+
+extension AppState {
+    /// Check and consume pending start recording action
+    func consumePendingStartRecording() {
+        let pending = UserDefaults.standard.bool(forKey: PendingActionKeys.pendingStartRecording)
+        guard pending else { return }
+
+        // Clear the flag first to prevent double triggers
+        UserDefaults.standard.set(false, forKey: PendingActionKeys.pendingStartRecording)
+
+        // Start recording if not already recording
+        if !recorder.isRecording {
+            recorder.startRecording()
+        }
+    }
+
+    /// Set the pending start recording flag (called from AppIntent/Quick Action)
+    static func setPendingStartRecording() {
+        UserDefaults.standard.set(true, forKey: PendingActionKeys.pendingStartRecording)
     }
 }
