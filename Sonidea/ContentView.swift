@@ -1018,6 +1018,10 @@ struct SettingsSheetView: View {
     @State private var showTrashView = false
     @State private var showEmptyTrashAlert = false
     @State private var showFileImporter = false
+    @State private var showImportDestinationSheet = false
+    @State private var pendingImportURLs: [URL] = []
+    @State private var importErrors: [String] = []
+    @State private var showImportErrorAlert = false
 
     @State private var showLockScreenHelp = false
     @State private var showActionButtonHelp = false
@@ -1112,14 +1116,43 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    HStack {
-                        Text("Current Input")
-                        Spacer()
-                        Text(AudioSessionManager.shared.currentInput?.portName ?? "Default")
-                            .foregroundColor(.secondary)
+                    let availableInputs = AudioSessionManager.shared.availableInputs
+                    if availableInputs.count > 1 {
+                        // Multiple inputs available - show picker
+                        ForEach(availableInputs, id: \.uid) { input in
+                            Button {
+                                try? AudioSessionManager.shared.setPreferredInput(input)
+                            } label: {
+                                HStack {
+                                    Image(systemName: inputIcon(for: input))
+                                        .foregroundColor(.blue)
+                                        .frame(width: 24)
+                                    Text(input.portName)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                    if AudioSessionManager.shared.currentInput?.uid == input.uid {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Single or no inputs - just show current
+                        HStack {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.blue)
+                                .frame(width: 24)
+                            Text("Current Input")
+                            Spacer()
+                            Text(AudioSessionManager.shared.currentInput?.portName ?? "Default")
+                                .foregroundColor(.secondary)
+                        }
                     }
                 } header: {
                     Text("Audio Input")
+                } footer: {
+                    Text("Select your preferred microphone for recording.")
                 }
 
                 Section {
@@ -1294,7 +1327,27 @@ struct SettingsSheetView: View {
                 allowedContentTypes: [.audio, .mpeg4Audio, .wav, .mp3, .aiff],
                 allowsMultipleSelection: true
             ) { result in
-                handleFileImport(result)
+                switch result {
+                case .success(let urls):
+                    pendingImportURLs = urls
+                    showImportDestinationSheet = true
+                case .failure(let error):
+                    importErrors = [error.localizedDescription]
+                    showImportErrorAlert = true
+                }
+            }
+            .sheet(isPresented: $showImportDestinationSheet) {
+                ImportDestinationSheet(
+                    urls: pendingImportURLs,
+                    onImport: { albumID in
+                        performImport(urls: pendingImportURLs, albumID: albumID)
+                    }
+                )
+            }
+            .alert("Import Error", isPresented: $showImportErrorAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importErrors.joined(separator: "\n"))
             }
             .alert("Empty Trash?", isPresented: $showEmptyTrashAlert) {
                 Button("Cancel", role: .cancel) {}
@@ -1359,18 +1412,56 @@ struct SettingsSheetView: View {
         }
     }
 
-    private func handleFileImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
-                let duration = getAudioDuration(url: url)
-                appState.importRecording(from: url, duration: duration)
+    private func performImport(urls: [URL], albumID: UUID) {
+        var errors: [String] = []
+
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else {
+                errors.append("\(url.lastPathComponent): Access denied")
+                continue
             }
-        case .failure(let error):
-            print("Import failed: \(error)")
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let duration = getAudioDuration(url: url)
+            let title = titleFromFilename(url.lastPathComponent)
+
+            do {
+                try appState.importRecording(from: url, duration: duration, title: title, albumID: albumID)
+            } catch {
+                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
         }
+
+        pendingImportURLs = []
+
+        if !errors.isEmpty {
+            importErrors = errors
+            showImportErrorAlert = true
+        }
+    }
+
+    private func titleFromFilename(_ filename: String) -> String {
+        // Remove extension
+        var name = (filename as NSString).deletingPathExtension
+
+        // Replace underscores and dashes with spaces
+        name = name.replacingOccurrences(of: "_", with: " ")
+        name = name.replacingOccurrences(of: "-", with: " ")
+
+        // Collapse multiple spaces
+        while name.contains("  ") {
+            name = name.replacingOccurrences(of: "  ", with: " ")
+        }
+
+        // Trim whitespace
+        name = name.trimmingCharacters(in: .whitespaces)
+
+        // Fallback if empty
+        if name.isEmpty {
+            return "Imported Recording"
+        }
+
+        return name
     }
 
     private func getAudioDuration(url: URL) -> TimeInterval {
@@ -1379,6 +1470,21 @@ struct SettingsSheetView: View {
             return Double(audioFile.length) / audioFile.processingFormat.sampleRate
         } catch {
             return 0
+        }
+    }
+
+    private func inputIcon(for input: AVAudioSessionPortDescription) -> String {
+        switch input.portType {
+        case .builtInMic:
+            return "mic.fill"
+        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE:
+            return "airpodspro"
+        case .headsetMic:
+            return "headphones"
+        case .usbAudio:
+            return "cable.connector"
+        default:
+            return "mic"
         }
     }
 }
@@ -1455,6 +1561,78 @@ struct TrashItemRow: View {
             .padding(.leading, 8)
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Import Destination Sheet
+struct ImportDestinationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    let urls: [URL]
+    let onImport: (UUID) -> Void
+
+    @State private var selectedAlbumID: UUID = Album.draftsID
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Image(systemName: "doc.badge.plus")
+                            .foregroundColor(.blue)
+                            .font(.title2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(urls.count) file\(urls.count == 1 ? "" : "s") selected")
+                                .font(.headline)
+                            Text(urls.map { $0.lastPathComponent }.prefix(3).joined(separator: ", ") + (urls.count > 3 ? "..." : ""))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section {
+                    ForEach(appState.albums) { album in
+                        Button {
+                            selectedAlbumID = album.id
+                        } label: {
+                            HStack {
+                                Image(systemName: album.isSystem ? "folder.fill" : "folder")
+                                    .foregroundColor(album.isSystem ? .orange : .blue)
+                                Text(album.name)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if selectedAlbumID == album.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Destination Album")
+                } footer: {
+                    Text("Choose where to save the imported recordings.")
+                }
+            }
+            .navigationTitle("Import")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Import") {
+                        dismiss()
+                        onImport(selectedAlbumID)
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
     }
 }
 

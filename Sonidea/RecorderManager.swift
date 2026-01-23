@@ -87,6 +87,17 @@ final class RecorderManager: NSObject {
                 self?.audioRecorder?.updateMeters()
             }
         }
+
+        // Handle rare media services reset (system audio crash recovery)
+        // Safely finalize any in-progress recording to prevent data loss
+        AudioSessionManager.shared.onMediaServicesReset = { [weak self] in
+            Task { @MainActor in
+                guard let self = self, self.isRecording else { return }
+                // Stop recording immediately - audio system is being rebuilt
+                // This saves whatever was recorded up to this point
+                self.stopRecording()
+            }
+        }
     }
 
     // MARK: - Recording Control

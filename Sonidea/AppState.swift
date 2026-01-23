@@ -680,36 +680,42 @@ final class AppState {
 
     // MARK: - Import
 
-    func importRecording(from url: URL, duration: TimeInterval) {
+    func importRecording(from url: URL, duration: TimeInterval, title: String? = nil, albumID: UUID = Album.draftsID) throws {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let filename = url.lastPathComponent
-        let destURL = documentsPath.appendingPathComponent(filename)
+
+        // Use UUID-based filename to avoid conflicts, preserving original extension
+        let fileExtension = url.pathExtension.lowercased()
+        let uniqueFilename = "\(UUID().uuidString).\(fileExtension)"
+        let destURL = documentsPath.appendingPathComponent(uniqueFilename)
 
         // Copy file to documents
-        do {
-            if FileManager.default.fileExists(atPath: destURL.path) {
-                try FileManager.default.removeItem(at: destURL)
-            }
-            try FileManager.default.copyItem(at: url, to: destURL)
-        } catch {
-            print("Failed to copy imported file: \(error)")
-            return
+        if FileManager.default.fileExists(atPath: destURL.path) {
+            try FileManager.default.removeItem(at: destURL)
         }
+        try FileManager.default.copyItem(at: url, to: destURL)
 
-        let title = "Recording \(nextRecordingNumber)"
-        nextRecordingNumber += 1
-        saveNextRecordingNumber()
+        // Use provided title or generate one
+        let recordingTitle = title ?? "Recording \(nextRecordingNumber)"
+        if title == nil {
+            nextRecordingNumber += 1
+            saveNextRecordingNumber()
+        }
 
         let recording = RecordingItem(
             fileURL: destURL,
             createdAt: Date(),
             duration: duration,
-            title: title,
-            albumID: Album.draftsID
+            title: recordingTitle,
+            albumID: albumID
         )
 
         recordings.insert(recording, at: 0)
         saveRecordings()
+
+        // Trigger async waveform sampling
+        Task {
+            _ = await WaveformSampler.shared.samples(for: destURL, targetSampleCount: 150)
+        }
     }
 
     // MARK: - Tag Migration

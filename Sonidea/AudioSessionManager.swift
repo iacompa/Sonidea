@@ -22,6 +22,7 @@ final class AudioSessionManager {
     var onInterruptionBegan: (() -> Void)?
     var onInterruptionEnded: ((Bool) -> Void)? // Bool = shouldResume
     var onRouteChange: (() -> Void)?
+    var onMediaServicesReset: (() -> Void)?
 
     private init() {
         setupNotifications()
@@ -110,6 +111,25 @@ final class AudioSessionManager {
             queue: .main
         ) { [weak self] notification in
             self?.handleRouteChange(notification)
+        }
+
+        // Handle media services reset (rare but critical - e.g., system audio crash recovery)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
+        }
+    }
+
+    private func handleMediaServicesReset() {
+        // Reset internal state - audio engine and session need to be rebuilt
+        isRecordingActive = false
+        isPlaybackActive = false
+
+        Task { @MainActor in
+            onMediaServicesReset?()
         }
     }
 
