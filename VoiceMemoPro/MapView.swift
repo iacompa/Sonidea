@@ -11,6 +11,7 @@ import MapKit
 struct GPSInsightsMapView: View {
     @Environment(AppState.self) var appState
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var selectedRecording: RecordingItem?
     @State private var selectedSpot: RecordingSpot?
     @State private var showSpotRecordings = false
 
@@ -20,12 +21,15 @@ struct GPSInsightsMapView: View {
                 // Insights Panels
                 insightsPanels
 
-                // Map View
+                // Map View with individual pins
                 mapSection
             }
             .padding(.horizontal)
             .padding(.top, 8)
             .padding(.bottom, 120) // Space for dock
+        }
+        .onAppear {
+            fitMapToAllRecordings()
         }
     }
 
@@ -35,16 +39,15 @@ struct GPSInsightsMapView: View {
     private var insightsPanels: some View {
         let topSpots = appState.topSpots()
         let favoriteSpots = appState.topFavoriteSpots()
-        let leastUsed = appState.leastUsedSpots()
         let hasLocations = !appState.recordingsWithLocation.isEmpty
 
         if !hasLocations {
             emptyInsightsState
         } else {
             VStack(spacing: 12) {
-                // Top Spots to Record
+                // Most Recorded Spots
                 InsightsPanelView(
-                    title: "Top Spots to Record",
+                    title: "Most Recorded Spots",
                     icon: "mappin.and.ellipse",
                     spots: topSpots,
                     emptyMessage: "No recording locations yet",
@@ -54,25 +57,13 @@ struct GPSInsightsMapView: View {
                     }
                 )
 
-                // Top Favorite Spots
+                // Most Favorited Spots
                 InsightsPanelView(
-                    title: "Top Favorite Spots",
+                    title: "Most Favorited Spots",
                     icon: "heart.fill",
                     spots: favoriteSpots,
                     emptyMessage: "No favorite recordings with locations",
                     countLabel: { "\($0.favoriteCount) favorites" },
-                    onSpotTap: { spot in
-                        zoomToSpot(spot)
-                    }
-                )
-
-                // Least Used Spots
-                InsightsPanelView(
-                    title: "Least Used Spots",
-                    icon: "arrow.down.circle",
-                    spots: leastUsed,
-                    emptyMessage: "Record in more locations to see insights",
-                    countLabel: { "\($0.totalCount) recordings" },
                     onSpotTap: { spot in
                         zoomToSpot(spot)
                     }
@@ -111,7 +102,7 @@ struct GPSInsightsMapView: View {
             if appState.recordingsWithLocation.isEmpty {
                 emptyMapState
             } else {
-                mapWithPins
+                mapWithIndividualPins
             }
         }
     }
@@ -121,13 +112,14 @@ struct GPSInsightsMapView: View {
             Image(systemName: "map.circle.fill")
                 .font(.system(size: 64))
                 .foregroundColor(.secondary)
-            Text("No locations yet")
+            Text("No recording locations yet")
                 .font(.title3)
                 .fontWeight(.semibold)
                 .foregroundColor(.primary)
-            Text("Recordings with location data will appear here")
+            Text("Enable Location While Using to drop pins automatically.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 300)
@@ -135,22 +127,26 @@ struct GPSInsightsMapView: View {
         .cornerRadius(12)
     }
 
-    private var mapWithPins: some View {
+    private var mapWithIndividualPins: some View {
         Map(position: $cameraPosition) {
-            ForEach(appState.allSpots()) { spot in
-                Annotation(spot.displayName, coordinate: spot.centerCoordinate) {
-                    Button {
-                        selectedSpot = spot
-                        showSpotRecordings = true
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 32, height: 32)
-                            Text("\(spot.totalCount)")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
+            // Show a pin for EACH recording with coordinates
+            ForEach(appState.recordingsWithLocation) { recording in
+                if let coordinate = recording.coordinate {
+                    Annotation(recording.title, coordinate: coordinate) {
+                        Button {
+                            selectedRecording = recording
+                        } label: {
+                            VStack(spacing: 0) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundColor(.red)
+                                    .background(
+                                        Circle()
+                                            .fill(Color.white)
+                                            .frame(width: 20, height: 20)
+                                            .offset(y: 2)
+                                    )
+                            }
                         }
                     }
                 }
@@ -159,6 +155,9 @@ struct GPSInsightsMapView: View {
         .mapStyle(.standard)
         .frame(height: 350)
         .cornerRadius(12)
+        .sheet(item: $selectedRecording) { recording in
+            RecordingDetailView(recording: recording)
+        }
         .sheet(isPresented: $showSpotRecordings) {
             if let spot = selectedSpot {
                 SpotRecordingsSheet(spot: spot)
@@ -167,6 +166,41 @@ struct GPSInsightsMapView: View {
     }
 
     // MARK: - Actions
+
+    private func fitMapToAllRecordings() {
+        let recordingsWithCoords = appState.recordingsWithLocation
+        guard !recordingsWithCoords.isEmpty else { return }
+
+        // Calculate bounding box
+        var minLat = Double.greatestFiniteMagnitude
+        var maxLat = -Double.greatestFiniteMagnitude
+        var minLon = Double.greatestFiniteMagnitude
+        var maxLon = -Double.greatestFiniteMagnitude
+
+        for recording in recordingsWithCoords {
+            guard let lat = recording.latitude, let lon = recording.longitude else { continue }
+            minLat = min(minLat, lat)
+            maxLat = max(maxLat, lat)
+            minLon = min(minLon, lon)
+            maxLon = max(maxLon, lon)
+        }
+
+        // Add padding
+        let latPadding = max(0.01, (maxLat - minLat) * 0.2)
+        let lonPadding = max(0.01, (maxLon - minLon) * 0.2)
+
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+
+        let span = MKCoordinateSpan(
+            latitudeDelta: (maxLat - minLat) + latPadding,
+            longitudeDelta: (maxLon - minLon) + lonPadding
+        )
+
+        cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
+    }
 
     private func zoomToSpot(_ spot: RecordingSpot) {
         withAnimation {
@@ -304,16 +338,21 @@ struct SpotRecordingsSheet: View {
 
 struct SpotRecordingRow: View {
     @Environment(AppState.self) var appState
+    @Environment(\.colorScheme) var colorScheme
     let recording: RecordingItem
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "waveform")
                 .font(.system(size: 20))
-                .foregroundColor(.primary)
+                .foregroundColor(recording.iconSymbolColor(for: colorScheme))
                 .frame(width: 36, height: 36)
-                .background(recording.iconColor)
+                .background(recording.iconTileBackground(for: colorScheme))
                 .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
+                )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)
