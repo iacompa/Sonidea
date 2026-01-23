@@ -7,6 +7,15 @@
 
 import SwiftUI
 
+// MARK: - Selection Bar Width Preference Key
+
+struct SelectionBarWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct RecordingsListView: View {
     @Environment(AppState.self) var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -14,6 +23,7 @@ struct RecordingsListView: View {
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
     @State private var selectedRecordingIDs: Set<UUID> = []
+    @State private var showActionsMenu = false
     @State private var showBatchAlbumPicker = false
     @State private var showBatchTagPicker = false
     @State private var showBatchExport = false
@@ -24,11 +34,18 @@ struct RecordingsListView: View {
     @State private var recordingToMove: RecordingItem?
     @State private var showMoveToAlbumSheet = false
 
-    // Animation spring configuration
-    private var revealAnimation: Animation {
+    // Measured selection bar width
+    @State private var selectionBarWidth: CGFloat = 0
+
+    // Header height for positioning overlay
+    private let listHeaderHeight: CGFloat = 44
+    private let selectionHeaderHeight: CGFloat = 44
+
+    // Animation configuration
+    private var menuAnimation: Animation {
         reduceMotion
-            ? .easeInOut(duration: 0.2)
-            : .spring(response: 0.35, dampingFraction: 0.8, blendDuration: 0)
+            ? .easeInOut(duration: 0.15)
+            : .spring(response: 0.3, dampingFraction: 0.8)
     }
 
     var body: some View {
@@ -36,15 +53,34 @@ struct RecordingsListView: View {
             if appState.activeRecordings.isEmpty {
                 emptyState
             } else {
-                VStack(spacing: 0) {
-                    listHeader
+                ZStack(alignment: .top) {
+                    // Layer 1: Main content (header + list)
+                    VStack(spacing: 0) {
+                        listHeader
 
-                    // Selection mode: header + actions panel (stacked, animated)
-                    if isSelectionMode {
-                        selectionControlsStack
+                        if isSelectionMode {
+                            selectionHeader
+                        }
+
+                        recordingsList
                     }
 
-                    recordingsList
+                    // Layer 2: Floating dropdown overlay
+                    if isSelectionMode && showActionsMenu {
+                        // Invisible tap catcher to dismiss menu
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(menuAnimation) {
+                                    showActionsMenu = false
+                                }
+                            }
+                            .zIndex(1)
+
+                        // Compact floating menu - constrained width
+                        compactFloatingMenu
+                            .zIndex(2)
+                    }
                 }
             }
         }
@@ -71,6 +107,15 @@ struct RecordingsListView: View {
                 MoveToAlbumSheet(recording: recording)
             }
         }
+        .onChange(of: isSelectionMode) { _, newValue in
+            if newValue {
+                withAnimation(menuAnimation) {
+                    showActionsMenu = true
+                }
+            } else {
+                showActionsMenu = false
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -88,6 +133,8 @@ struct RecordingsListView: View {
         }
     }
 
+    // MARK: - List Header
+
     private var listHeader: some View {
         HStack {
             Text("Recordings")
@@ -99,7 +146,7 @@ struct RecordingsListView: View {
 
             if !isSelectionMode {
                 Button {
-                    withAnimation(revealAnimation) {
+                    withAnimation(menuAnimation) {
                         isSelectionMode = true
                     }
                 } label: {
@@ -109,46 +156,42 @@ struct RecordingsListView: View {
                 }
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 
-    // MARK: - Selection Controls Stack (Header + Actions)
-
-    private var selectionControlsStack: some View {
-        VStack(spacing: 0) {
-            // Selection header row
-            selectionHeader
-
-            // Actions panel - animates down from header
-            selectionActionsPanel
-                .transition(
-                    .asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .move(edge: .top).combined(with: .opacity)
-                    )
-                )
-        }
-    }
+    // MARK: - Selection Header
 
     private var selectionHeader: some View {
         HStack {
             Button("Cancel") {
-                withAnimation(revealAnimation) {
+                withAnimation(menuAnimation) {
                     clearSelection()
                 }
             }
 
             Spacer()
 
-            Text("\(selectedRecordingIDs.count) selected")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            // Tappable selection count to toggle menu
+            Button {
+                withAnimation(menuAnimation) {
+                    showActionsMenu.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("\(selectedRecordingIDs.count) selected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Image(systemName: showActionsMenu ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+            }
 
             Spacer()
 
             Button(selectedRecordingIDs.count == appState.activeRecordings.count ? "Deselect All" : "Select All") {
-                withAnimation(revealAnimation) {
+                withAnimation(menuAnimation) {
                     if selectedRecordingIDs.count == appState.activeRecordings.count {
                         selectedRecordingIDs.removeAll()
                     } else {
@@ -157,63 +200,94 @@ struct RecordingsListView: View {
                 }
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-        .background(Color(.secondarySystemBackground))
+        .padding(.horizontal, 16)
+        .frame(height: selectionHeaderHeight)
+        .background(
+            GeometryReader { geo in
+                Color(.secondarySystemBackground)
+                    .preference(key: SelectionBarWidthKey.self, value: geo.size.width)
+            }
+        )
+        .onPreferenceChange(SelectionBarWidthKey.self) { width in
+            selectionBarWidth = width
+        }
     }
 
-    // MARK: - Selection Actions Panel (Drops down from header)
+    // MARK: - Compact Floating Actions Menu
 
-    private var selectionActionsPanel: some View {
-        HStack(spacing: 0) {
-            SelectionActionButton(
-                icon: "square.stack",
-                label: "Album",
-                color: .primary
+    private var compactFloatingMenu: some View {
+        VStack(spacing: 0) {
+            CompactMenuRow(
+                icon: "folder",
+                label: "Move to Album",
+                isDestructive: false
             ) {
                 showBatchAlbumPicker = true
+                withAnimation(menuAnimation) {
+                    showActionsMenu = false
+                }
             }
 
-            SelectionActionButton(
+            Divider()
+                .padding(.leading, 44)
+
+            CompactMenuRow(
                 icon: "tag",
-                label: "Tags",
-                color: .primary
+                label: "Manage Tags",
+                isDestructive: false
             ) {
                 showBatchTagPicker = true
+                withAnimation(menuAnimation) {
+                    showActionsMenu = false
+                }
             }
 
-            SelectionActionButton(
+            Divider()
+                .padding(.leading, 44)
+
+            CompactMenuRow(
                 icon: "square.and.arrow.up",
                 label: "Export",
-                color: .primary
+                isDestructive: false
             ) {
                 exportSelectedRecordings()
+                withAnimation(menuAnimation) {
+                    showActionsMenu = false
+                }
             }
 
-            SelectionActionButton(
+            Divider()
+                .padding(.leading, 44)
+
+            CompactMenuRow(
                 icon: "trash",
                 label: "Delete",
-                color: .red
+                isDestructive: true
             ) {
-                withAnimation(revealAnimation) {
-                    appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
+                appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
+                withAnimation(menuAnimation) {
                     clearSelection()
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground))
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
-            // Subtle top separator
-            Rectangle()
-                .fill(Color(.separator).opacity(0.3))
-                .frame(height: 0.5),
-            alignment: .top
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
         )
-        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
+        // Constrain width to match selection bar (minus padding) or max 280
+        .frame(width: min(selectionBarWidth > 0 ? selectionBarWidth - 32 : 280, 280))
+        // Position below headers
+        .padding(.top, listHeaderHeight + selectionHeaderHeight + 6)
+        .transition(.asymmetric(
+            insertion: .move(edge: .top).combined(with: .opacity),
+            removal: .move(edge: .top).combined(with: .opacity)
+        ))
     }
+
+    // MARK: - Recordings List
 
     private var recordingsList: some View {
         List {
@@ -226,6 +300,11 @@ struct RecordingsListView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if isSelectionMode {
+                        if showActionsMenu {
+                            withAnimation(menuAnimation) {
+                                showActionsMenu = false
+                            }
+                        }
                         toggleSelection(recording)
                     } else {
                         selectedRecording = recording
@@ -233,7 +312,7 @@ struct RecordingsListView: View {
                 }
                 .onLongPressGesture {
                     if !isSelectionMode {
-                        withAnimation(revealAnimation) {
+                        withAnimation(menuAnimation) {
                             isSelectionMode = true
                             selectedRecordingIDs.insert(recording.id)
                         }
@@ -285,8 +364,10 @@ struct RecordingsListView: View {
         .scrollContentBackground(.hidden)
     }
 
+    // MARK: - Actions
+
     private func toggleSelection(_ recording: RecordingItem) {
-        withAnimation(revealAnimation) {
+        withAnimation(.easeInOut(duration: 0.15)) {
             if selectedRecordingIDs.contains(recording.id) {
                 selectedRecordingIDs.remove(recording.id)
             } else {
@@ -297,6 +378,7 @@ struct RecordingsListView: View {
 
     private func clearSelection() {
         isSelectionMode = false
+        showActionsMenu = false
         selectedRecordingIDs.removeAll()
     }
 
@@ -324,8 +406,10 @@ struct RecordingsListView: View {
                 )
                 exportedURL = zipURL
                 showShareSheet = true
-                withAnimation(revealAnimation) {
-                    clearSelection()
+                await MainActor.run {
+                    withAnimation(menuAnimation) {
+                        clearSelection()
+                    }
                 }
             } catch {
                 print("Export failed: \(error)")
@@ -334,29 +418,50 @@ struct RecordingsListView: View {
     }
 }
 
-// MARK: - Selection Action Button
+// MARK: - Compact Menu Row
 
-struct SelectionActionButton: View {
+struct CompactMenuRow: View {
     let icon: String
     let label: String
-    let color: Color
+    let isDestructive: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundColor(color)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                    .frame(width: 20, alignment: .center)
+
                 Text(label)
-                    .font(.caption)
-                    .foregroundColor(color)
+                    .font(.system(size: 16))
+                    .foregroundColor(isDestructive ? .red : .primary)
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(.tertiaryLabel))
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CompactMenuButtonStyle())
+    }
+}
+
+// MARK: - Compact Menu Button Style
+
+struct CompactMenuButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? Color.primary.opacity(0.08)
+                    : Color.clear
+            )
     }
 }
 
