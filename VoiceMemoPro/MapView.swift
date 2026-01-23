@@ -8,126 +8,71 @@
 import SwiftUI
 import MapKit
 
+// MARK: - Bottom Sheet State
+
+enum BottomSheetState {
+    case collapsed
+    case expanded
+
+    var detentHeight: CGFloat {
+        switch self {
+        case .collapsed: return 180
+        case .expanded: return 500
+        }
+    }
+}
+
+// MARK: - Full-Screen Map View with Bottom Sheet
+
 struct GPSInsightsMapView: View {
     @Environment(AppState.self) var appState
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var selectedRecording: RecordingItem?
-    @State private var selectedSpot: RecordingSpot?
-    @State private var showSpotRecordings = false
+    @State private var sheetState: BottomSheetState = .collapsed
+    @State private var dragOffset: CGFloat = 0
+
+    // Computed spots data
+    private var allSpots: [RecordingSpot] {
+        SpotClustering.computeSpots(
+            recordings: appState.activeRecordings,
+            favoriteTagID: appState.favoriteTagID,
+            filterFavoritesOnly: false
+        ).sorted { $0.totalCount > $1.totalCount }
+    }
+
+    private var topRecordedSpot: RecordingSpot? {
+        allSpots.first
+    }
+
+    private var topFavoritedSpot: RecordingSpot? {
+        allSpots.filter { $0.favoriteCount > 0 }.max { $0.favoriteCount < $1.favoriteCount }
+    }
+
+    private var hasLocations: Bool {
+        !appState.recordingsWithLocation.isEmpty
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Insights Panels
-                insightsPanels
+        GeometryReader { geometry in
+            let safeArea = geometry.safeAreaInsets
+            let screenHeight = geometry.size.height
 
-                // Map View with individual pins
-                mapSection
+            ZStack(alignment: .bottom) {
+                // Full-screen map
+                mapLayer
+
+                // Bottom sheet overlay
+                bottomSheet(geometry: geometry, safeArea: safeArea, screenHeight: screenHeight)
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .padding(.bottom, 120) // Space for dock
         }
         .onAppear {
             fitMapToAllRecordings()
         }
     }
 
-    // MARK: - Insights Panels
+    // MARK: - Map Layer
 
-    @ViewBuilder
-    private var insightsPanels: some View {
-        let topSpots = appState.topSpots()
-        let favoriteSpots = appState.topFavoriteSpots()
-        let hasLocations = !appState.recordingsWithLocation.isEmpty
-
-        if !hasLocations {
-            emptyInsightsState
-        } else {
-            VStack(spacing: 12) {
-                // Most Recorded Spots
-                InsightsPanelView(
-                    title: "Most Recorded Spots",
-                    icon: "mappin.and.ellipse",
-                    spots: topSpots,
-                    emptyMessage: "No recording locations yet",
-                    countLabel: { "\($0.totalCount) recordings" },
-                    onSpotTap: { spot in
-                        zoomToSpot(spot)
-                    }
-                )
-
-                // Most Favorited Spots
-                InsightsPanelView(
-                    title: "Most Favorited Spots",
-                    icon: "heart.fill",
-                    spots: favoriteSpots,
-                    emptyMessage: "No favorite recordings with locations",
-                    countLabel: { "\($0.favoriteCount) favorites" },
-                    onSpotTap: { spot in
-                        zoomToSpot(spot)
-                    }
-                )
-            }
-        }
-    }
-
-    private var emptyInsightsState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "location.slash")
-                .font(.system(size: 32))
-                .foregroundColor(.secondary)
-            Text("No locations yet")
-                .font(.headline)
-                .foregroundColor(.primary)
-            Text("Record with location permissions enabled to see insights")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-
-    // MARK: - Map Section
-
-    private var mapSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recording Locations")
-                .font(.headline)
-                .foregroundColor(.primary)
-
-            if appState.recordingsWithLocation.isEmpty {
-                emptyMapState
-            } else {
-                mapWithIndividualPins
-            }
-        }
-    }
-
-    private var emptyMapState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "map.circle.fill")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary)
-            Text("No recording locations yet")
-                .font(.title3)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-            Text("Enable Location While Using to drop pins automatically.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 300)
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-
-    private var mapWithIndividualPins: some View {
+    private var mapLayer: some View {
         Map(position: $cameraPosition) {
             // Show a pin for EACH recording with coordinates
             ForEach(appState.recordingsWithLocation) { recording in
@@ -142,36 +87,198 @@ struct GPSInsightsMapView: View {
                 }
             }
         }
-        // Clean map style: no POIs, no business labels
         .mapStyle(.standard(
             elevation: .flat,
             pointsOfInterest: .excludingAll,
             showsTraffic: false
         ))
-        .mapControlVisibility(.hidden) // Hide compass and scale
-        .frame(height: 350)
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.systemGray4), lineWidth: 1)
-        )
+        .mapControlVisibility(.hidden)
         .sheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
         }
-        .sheet(isPresented: $showSpotRecordings) {
-            if let spot = selectedSpot {
-                SpotRecordingsSheet(spot: spot)
+    }
+
+    // MARK: - Bottom Sheet
+
+    private func bottomSheet(geometry: GeometryProxy, safeArea: EdgeInsets, screenHeight: CGFloat) -> some View {
+        let collapsedHeight: CGFloat = 180
+        let expandedHeight: CGFloat = min(500, screenHeight * 0.6)
+        let currentHeight = sheetState == .collapsed ? collapsedHeight : expandedHeight
+        let sheetHeight = currentHeight - dragOffset
+        let clampedHeight = max(collapsedHeight, min(expandedHeight, sheetHeight))
+
+        return VStack(spacing: 0) {
+            // Drag handle
+            dragHandle
+
+            // Content
+            if hasLocations {
+                sheetContent(expandedHeight: expandedHeight)
+            } else {
+                emptyStateContent
+            }
+        }
+        .frame(height: clampedHeight + safeArea.bottom)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.15), radius: 10, y: -5)
+        )
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    dragOffset = -value.translation.height
+                }
+                .onEnded { value in
+                    let velocity = value.predictedEndTranslation.height - value.translation.height
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        // Determine state based on drag direction and velocity
+                        if velocity < -100 {
+                            // Swiped up fast
+                            sheetState = .expanded
+                        } else if velocity > 100 {
+                            // Swiped down fast
+                            sheetState = .collapsed
+                        } else {
+                            // Slow drag - snap to nearest
+                            let midpoint = (collapsedHeight + expandedHeight) / 2
+                            let targetHeight = currentHeight - value.translation.height
+                            sheetState = targetHeight > midpoint ? .expanded : .collapsed
+                        }
+                        dragOffset = 0
+                    }
+                }
+        )
+    }
+
+    private var dragHandle: some View {
+        VStack(spacing: 8) {
+            Capsule()
+                .fill(Color(.systemGray3))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
+
+            // Title
+            HStack {
+                Image(systemName: "map.fill")
+                    .foregroundColor(.accentColor)
+                Text("Recording Spots")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                Spacer()
+
+                // Expand/collapse chevron
+                Image(systemName: sheetState == .expanded ? "chevron.down" : "chevron.up")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                sheetState = sheetState == .collapsed ? .expanded : .collapsed
             }
         }
     }
 
-    // MARK: - Actions
+    @ViewBuilder
+    private func sheetContent(expandedHeight: CGFloat) -> some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // Stat cards row
+                HStack(spacing: 12) {
+                    // Most Recorded Spot
+                    StatCard(
+                        title: "Most Recorded",
+                        icon: "mappin.and.ellipse",
+                        iconColor: .blue,
+                        spotName: topRecordedSpot?.displayName ?? "No spots yet",
+                        count: topRecordedSpot?.totalCount ?? 0,
+                        countLabel: "recordings"
+                    ) {
+                        if let spot = topRecordedSpot {
+                            zoomToSpot(spot)
+                        }
+                    }
+
+                    // Most Favorited Spot
+                    StatCard(
+                        title: "Most Favorited",
+                        icon: "heart.fill",
+                        iconColor: .pink,
+                        spotName: topFavoritedSpot?.displayName ?? "No favorites",
+                        count: topFavoritedSpot?.favoriteCount ?? 0,
+                        countLabel: "favorites"
+                    ) {
+                        if let spot = topFavoritedSpot {
+                            zoomToSpot(spot)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+
+                // Ranked list (only visible when expanded)
+                if sheetState == .expanded {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("All Spots")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 16)
+
+                        if allSpots.isEmpty {
+                            Text("No recording spots yet")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 20)
+                        } else {
+                            ForEach(Array(allSpots.enumerated()), id: \.element.id) { index, spot in
+                                SpotListRow(
+                                    rank: index + 1,
+                                    spot: spot,
+                                    onTap: {
+                                        zoomToSpot(spot)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            }
+            .padding(.bottom, 16)
+        }
+        .scrollDisabled(sheetState == .collapsed)
+    }
+
+    private var emptyStateContent: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "location.slash")
+                .font(.system(size: 32))
+                .foregroundColor(.secondary)
+            Text("No locations yet")
+                .font(.headline)
+                .foregroundColor(.primary)
+            Text("Record with location permissions enabled to see your spots on the map")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    // MARK: - Map Actions
 
     private func fitMapToAllRecordings() {
         let recordingsWithCoords = appState.recordingsWithLocation
         guard !recordingsWithCoords.isEmpty else { return }
 
-        // Calculate bounding box
         var minLat = Double.greatestFiniteMagnitude
         var maxLat = -Double.greatestFiniteMagnitude
         var minLon = Double.greatestFiniteMagnitude
@@ -185,9 +292,8 @@ struct GPSInsightsMapView: View {
             maxLon = max(maxLon, lon)
         }
 
-        // Add padding
-        let latPadding = max(0.01, (maxLat - minLat) * 0.2)
-        let lonPadding = max(0.01, (maxLon - minLon) * 0.2)
+        let latPadding = max(0.01, (maxLat - minLat) * 0.3)
+        let lonPadding = max(0.01, (maxLon - minLon) * 0.3)
 
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,
@@ -203,14 +309,134 @@ struct GPSInsightsMapView: View {
     }
 
     private func zoomToSpot(_ spot: RecordingSpot) {
-        withAnimation {
+        withAnimation(.easeInOut(duration: 0.5)) {
             cameraPosition = .region(MKCoordinateRegion(
                 center: spot.centerCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
             ))
         }
-        selectedSpot = spot
-        showSpotRecordings = true
+    }
+}
+
+// MARK: - Stat Card
+
+struct StatCard: View {
+    let title: String
+    let icon: String
+    let iconColor: Color
+    let spotName: String
+    let count: Int
+    let countLabel: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Header
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .foregroundColor(iconColor)
+                    Text(title)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                }
+
+                // Spot name
+                Text(spotName)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                // Count
+                if count > 0 {
+                    Text("\(count) \(countLabel)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemGray6))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(count == 0)
+    }
+}
+
+// MARK: - Spot List Row
+
+struct SpotListRow: View {
+    let rank: Int
+    let spot: RecordingSpot
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                // Rank badge
+                Text("\(rank)")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(rankColor)
+                    )
+
+                // Spot info
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(spot.displayName)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 8) {
+                        Text("\(spot.totalCount) recording\(spot.totalCount == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if spot.favoriteCount > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "heart.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.pink)
+                                Text("\(spot.favoriteCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.pink)
+                            }
+                        }
+                    }
+                }
+
+                Spacer()
+
+                // Chevron
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.clear)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var rankColor: Color {
+        switch rank {
+        case 1: return .yellow.opacity(0.9)
+        case 2: return .gray.opacity(0.7)
+        case 3: return .orange.opacity(0.7)
+        default: return Color(.systemGray3)
+        }
     }
 }
 
@@ -242,182 +468,6 @@ struct RecordingMapPin: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(.white)
         }
-    }
-}
-
-// MARK: - Insights Panel View
-
-struct InsightsPanelView: View {
-    let title: String
-    let icon: String
-    let spots: [RecordingSpot]
-    let emptyMessage: String
-    let countLabel: (RecordingSpot) -> String
-    let onSpotTap: (RecordingSpot) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Header
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .foregroundColor(.accentColor)
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            // Content
-            if spots.isEmpty {
-                Text(emptyMessage)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
-                        Button {
-                            onSpotTap(spot)
-                        } label: {
-                            HStack {
-                                Text("\(index + 1).")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 24, alignment: .leading)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(spot.displayName)
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(1)
-                                    Text(countLabel(spot))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.plain)
-
-                        if index < spots.count - 1 {
-                            Divider()
-                                .padding(.leading, 48)
-                        }
-                    }
-                }
-                .padding(.bottom, 4)
-            }
-        }
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-}
-
-// MARK: - Spot Recordings Sheet
-
-struct SpotRecordingsSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppState.self) private var appState
-
-    let spot: RecordingSpot
-    @State private var selectedRecording: RecordingItem?
-
-    private var recordings: [RecordingItem] {
-        appState.recordings(for: spot.recordingIDs)
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(recordings) { recording in
-                        Button {
-                            selectedRecording = recording
-                        } label: {
-                            SpotRecordingRow(recording: recording)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                } header: {
-                    Text("\(recordings.count) recordings at this spot")
-                }
-            }
-            .navigationTitle(spot.displayName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .sheet(item: $selectedRecording) { recording in
-                RecordingDetailView(recording: recording)
-            }
-        }
-    }
-}
-
-struct SpotRecordingRow: View {
-    @Environment(AppState.self) var appState
-    @Environment(\.colorScheme) var colorScheme
-    let recording: RecordingItem
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "waveform")
-                .font(.system(size: 20))
-                .foregroundColor(recording.iconSymbolColor(for: colorScheme))
-                .frame(width: 36, height: 36)
-                .background(recording.iconTileBackground(for: colorScheme))
-                .cornerRadius(6)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
-                )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(recording.title)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-
-                HStack(spacing: 6) {
-                    Text(recording.formattedDuration)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("•")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(recording.formattedDate)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            if appState.isFavorite(recording) {
-                Image(systemName: "heart.fill")
-                    .font(.caption)
-                    .foregroundColor(.pink)
-            }
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 4)
     }
 }
 

@@ -7,15 +7,6 @@
 
 import SwiftUI
 
-// MARK: - Anchor Preference Key for Options Button
-
-struct OptionsButtonAnchorKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = value ?? nextValue()
-    }
-}
-
 struct RecordingsListView: View {
     @Environment(AppState.self) var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -23,21 +14,15 @@ struct RecordingsListView: View {
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
     @State private var selectedRecordingIDs: Set<UUID> = []
-    @State private var showActionsMenu = false
     @State private var showBatchAlbumPicker = false
     @State private var showBatchTagPicker = false
-    @State private var showBatchExport = false
     @State private var showShareSheet = false
     @State private var exportedURL: URL?
+    @State private var showDeleteConfirmation = false
 
     // Single recording actions
     @State private var recordingToMove: RecordingItem?
     @State private var showMoveToAlbumSheet = false
-
-    // Menu dimensions
-    private let menuWidth: CGFloat = 250
-    private let menuRowHeight: CGFloat = 44
-    private var menuHeight: CGFloat { menuRowHeight * 4 + 3 } // 4 rows + 3 dividers
 
     // Animation configuration
     private var menuAnimation: Animation {
@@ -46,62 +31,24 @@ struct RecordingsListView: View {
             : .spring(response: 0.3, dampingFraction: 0.8)
     }
 
+    private var hasSelection: Bool {
+        !selectedRecordingIDs.isEmpty
+    }
+
     var body: some View {
         Group {
             if appState.activeRecordings.isEmpty {
                 emptyState
             } else {
-                GeometryReader { outerGeo in
-                    ZStack(alignment: .topTrailing) {
-                        // Layer 1: Main content (header + list)
-                        VStack(spacing: 0) {
-                            listHeader
+                VStack(spacing: 0) {
+                    listHeader
 
-                            if isSelectionMode {
-                                selectionHeader
-                            }
-
-                            recordingsList
-                        }
-
-                        // Layer 2: Floating dropdown overlay
-                        if isSelectionMode && showActionsMenu {
-                            // Invisible tap catcher to dismiss menu
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    withAnimation(menuAnimation) {
-                                        showActionsMenu = false
-                                    }
-                                }
-                                .zIndex(1)
-                        }
+                    if isSelectionMode {
+                        selectionHeader
+                        selectionActionBar
                     }
-                    .overlayPreferenceValue(OptionsButtonAnchorKey.self) { anchor in
-                        if isSelectionMode && showActionsMenu, let anchor = anchor {
-                            GeometryReader { geo in
-                                let rect = geo[anchor]
-                                let screenWidth = geo.size.width
 
-                                // Calculate X position: center menu under the Options button
-                                let idealX = rect.midX
-                                let minX = menuWidth / 2 + 16 // 16pt from left edge
-                                let maxX = screenWidth - menuWidth / 2 - 16 // 16pt from right edge
-                                let clampedX = min(max(idealX, minX), maxX)
-
-                                // Y position: directly below the button with 8pt gap
-                                let menuY = rect.maxY + menuHeight / 2 + 8
-
-                                compactFloatingMenu
-                                    .position(x: clampedX, y: menuY)
-                                    .transition(.asymmetric(
-                                        insertion: .move(edge: .top).combined(with: .opacity),
-                                        removal: .move(edge: .top).combined(with: .opacity)
-                                    ))
-                            }
-                            .zIndex(2)
-                        }
-                    }
+                    recordingsList
                 }
             }
         }
@@ -128,14 +75,16 @@ struct RecordingsListView: View {
                 MoveToAlbumSheet(recording: recording)
             }
         }
-        .onChange(of: isSelectionMode) { _, newValue in
-            if newValue {
+        .alert("Delete Recordings", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
                 withAnimation(menuAnimation) {
-                    showActionsMenu = true
+                    clearSelection()
                 }
-            } else {
-                showActionsMenu = false
             }
+        } message: {
+            Text("Are you sure you want to delete \(selectedRecordingIDs.count) recording\(selectedRecordingIDs.count == 1 ? "" : "s")? They will be moved to Recently Deleted.")
         }
     }
 
@@ -190,20 +139,16 @@ struct RecordingsListView: View {
                     clearSelection()
                 }
             }
+            .foregroundColor(.blue)
 
             Spacer()
 
-            // Options button with liquid glass style
-            SelectOptionsButton(
-                selectedCount: selectedRecordingIDs.count,
-                isExpanded: $showActionsMenu,
-                animation: menuAnimation
-            )
-            .anchorPreference(key: OptionsButtonAnchorKey.self, value: .bounds) { $0 }
+            Text("\(selectedRecordingIDs.count) selected")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
 
             Spacer()
 
-            // Select All button
             Button(selectedRecordingIDs.count == appState.activeRecordings.count ? "Deselect All" : "Select All") {
                 withAnimation(menuAnimation) {
                     if selectedRecordingIDs.count == appState.activeRecordings.count {
@@ -213,77 +158,71 @@ struct RecordingsListView: View {
                     }
                 }
             }
+            .foregroundColor(.blue)
         }
         .padding(.horizontal, 16)
-        .frame(height: 52)
+        .frame(height: 44)
         .background(Color(.secondarySystemBackground))
     }
 
-    // MARK: - Compact Floating Actions Menu
+    // MARK: - Selection Action Bar (Horizontal, Apple-like)
 
-    private var compactFloatingMenu: some View {
-        VStack(spacing: 0) {
-            CompactMenuRow(
+    private var selectionActionBar: some View {
+        HStack(spacing: 0) {
+            // Album
+            SelectionActionButton(
                 icon: "folder",
-                label: "Move to Album",
+                label: "Album",
+                isEnabled: hasSelection,
                 isDestructive: false
             ) {
                 showBatchAlbumPicker = true
-                withAnimation(menuAnimation) {
-                    showActionsMenu = false
-                }
             }
 
             Divider()
-                .padding(.leading, 44)
+                .frame(height: 40)
 
-            CompactMenuRow(
+            // Tags
+            SelectionActionButton(
                 icon: "tag",
-                label: "Manage Tags",
+                label: "Tags",
+                isEnabled: hasSelection,
                 isDestructive: false
             ) {
                 showBatchTagPicker = true
-                withAnimation(menuAnimation) {
-                    showActionsMenu = false
-                }
             }
 
             Divider()
-                .padding(.leading, 44)
+                .frame(height: 40)
 
-            CompactMenuRow(
+            // Export
+            SelectionActionButton(
                 icon: "square.and.arrow.up",
                 label: "Export",
+                isEnabled: hasSelection,
                 isDestructive: false
             ) {
                 exportSelectedRecordings()
-                withAnimation(menuAnimation) {
-                    showActionsMenu = false
-                }
             }
 
             Divider()
-                .padding(.leading, 44)
+                .frame(height: 40)
 
-            CompactMenuRow(
+            // Delete
+            SelectionActionButton(
                 icon: "trash",
                 label: "Delete",
+                isEnabled: hasSelection,
                 isDestructive: true
             ) {
-                appState.moveRecordingsToTrash(recordingIDs: selectedRecordingIDs)
-                withAnimation(menuAnimation) {
-                    clearSelection()
-                }
+                showDeleteConfirmation = true
             }
         }
-        .frame(width: menuWidth)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
+        .frame(height: 64)
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Recordings List
@@ -299,11 +238,6 @@ struct RecordingsListView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if isSelectionMode {
-                        if showActionsMenu {
-                            withAnimation(menuAnimation) {
-                                showActionsMenu = false
-                            }
-                        }
                         toggleSelection(recording)
                     } else {
                         selectedRecording = recording
@@ -377,7 +311,6 @@ struct RecordingsListView: View {
 
     private func clearSelection() {
         isSelectionMode = false
-        showActionsMenu = false
         selectedRecordingIDs.removeAll()
     }
 
@@ -417,113 +350,45 @@ struct RecordingsListView: View {
     }
 }
 
-// MARK: - Select Options Button (Liquid Glass Style)
+// MARK: - Selection Action Button
 
-struct SelectOptionsButton: View {
-    let selectedCount: Int
-    @Binding var isExpanded: Bool
-    let animation: Animation
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Button {
-            withAnimation(animation) {
-                isExpanded.toggle()
-            }
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Options")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.primary)
-
-                    Text("\(selectedCount) selected")
-                        .font(.system(size: 12))
-                        .foregroundColor(.primary.opacity(0.65))
-                }
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary.opacity(0.65))
-                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .frame(minHeight: 44)
-            .background(
-                Capsule()
-                    .fill(.ultraThinMaterial)
-                    .shadow(
-                        color: isExpanded ? .black.opacity(0.15) : .clear,
-                        radius: isExpanded ? 8 : 0,
-                        x: 0,
-                        y: isExpanded ? 4 : 0
-                    )
-            )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        colorScheme == .dark
-                            ? Color.white.opacity(0.12)
-                            : Color.black.opacity(0.08),
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(Capsule())
-        }
-        .buttonStyle(OptionsButtonStyle())
-    }
-}
-
-// MARK: - Options Button Style
-
-struct OptionsButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .opacity(configuration.isPressed ? 0.9 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-    }
-}
-
-// MARK: - Compact Menu Row
-
-struct CompactMenuRow: View {
+struct SelectionActionButton: View {
     let icon: String
     let label: String
+    let isEnabled: Bool
     let isDestructive: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            VStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isDestructive ? .red : .primary)
-                    .frame(width: 20, alignment: .center)
+                    .font(.system(size: 20))
+                    .foregroundColor(buttonColor)
 
                 Text(label)
-                    .font(.system(size: 16))
-                    .foregroundColor(isDestructive ? .red : .primary)
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Color(.tertiaryLabel))
+                    .font(.caption)
+                    .foregroundColor(buttonColor)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 44)
+            .frame(maxWidth: .infinity)
+            .frame(height: 64)
             .contentShape(Rectangle())
         }
-        .buttonStyle(CompactMenuButtonStyle())
+        .disabled(!isEnabled)
+        .buttonStyle(SelectionActionButtonStyle())
+    }
+
+    private var buttonColor: Color {
+        if !isEnabled {
+            return .secondary.opacity(0.4)
+        }
+        return isDestructive ? .red : .primary
     }
 }
 
-// MARK: - Compact Menu Button Style
+// MARK: - Selection Action Button Style
 
-struct CompactMenuButtonStyle: ButtonStyle {
+struct SelectionActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(

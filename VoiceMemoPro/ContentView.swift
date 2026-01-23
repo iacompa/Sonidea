@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -28,6 +29,46 @@ enum SearchScope: String, CaseIterable {
     }
 }
 
+// MARK: - Record Button Position Manager
+
+class RecordButtonPositionManager: ObservableObject {
+    static let shared = RecordButtonPositionManager()
+
+    private let posXKey = "recordButtonPosX"
+    private let posYKey = "recordButtonPosY"
+
+    // Normalized position (0...1)
+    @Published var normalizedX: CGFloat
+    @Published var normalizedY: CGFloat
+
+    // Default position: bottom center
+    static let defaultNormalizedX: CGFloat = 0.5
+    static let defaultNormalizedY: CGFloat = 0.92
+
+    init() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: posXKey) != nil {
+            normalizedX = CGFloat(defaults.double(forKey: posXKey))
+            normalizedY = CGFloat(defaults.double(forKey: posYKey))
+        } else {
+            normalizedX = Self.defaultNormalizedX
+            normalizedY = Self.defaultNormalizedY
+        }
+    }
+
+    func save() {
+        UserDefaults.standard.set(Double(normalizedX), forKey: posXKey)
+        UserDefaults.standard.set(Double(normalizedY), forKey: posYKey)
+    }
+
+    func reset() {
+        normalizedX = Self.defaultNormalizedX
+        normalizedY = Self.defaultNormalizedY
+        UserDefaults.standard.removeObject(forKey: posXKey)
+        UserDefaults.standard.removeObject(forKey: posYKey)
+    }
+}
+
 // MARK: - Main Content View
 struct ContentView: View {
     @Environment(AppState.self) var appState
@@ -36,44 +77,153 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showTipJar = false
 
+    // Record button position
+    @StateObject private var buttonPosition = RecordButtonPositionManager.shared
+    @State private var dragOffset: CGSize = .zero
+    @State private var isDragging = false
+
+    // Layout constants
+    private let topBarHeight: CGFloat = 64
+    private let buttonRadius: CGFloat = 40
+    private let edgePadding: CGFloat = 16
+
     var body: some View {
-        ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+        GeometryReader { geometry in
+            let safeArea = geometry.safeAreaInsets
+            let screenWidth = geometry.size.width
+            let screenHeight = geometry.size.height
 
-            VStack(spacing: 0) {
-                // Top Navigation Bar
-                topNavigationBar
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+            // Calculate button position bounds
+            let minX = edgePadding + buttonRadius
+            let maxX = screenWidth - edgePadding - buttonRadius
+            let minY = safeArea.top + topBarHeight + buttonRadius + edgePadding
+            let maxY = screenHeight - safeArea.bottom - buttonRadius - edgePadding
 
-                // Recording Status (when recording)
-                if appState.recorder.isRecording {
-                    RecordingStatusView(
-                        duration: appState.recorder.currentDuration,
-                        liveSamples: appState.recorder.liveMeterSamples
-                    )
-                    .padding(.top, 8)
-                    .padding(.horizontal, 16)
+            // Current button position from normalized coordinates
+            let buttonX = buttonPosition.normalizedX * screenWidth
+            let buttonY = buttonPosition.normalizedY * screenHeight
+
+            // Apply drag offset and clamp
+            let targetX = clamp(buttonX + dragOffset.width, min: minX, max: maxX)
+            let targetY = clamp(buttonY + dragOffset.height, min: minY, max: maxY)
+
+            ZStack {
+                // Background - only for non-map routes
+                if currentRoute != .map {
+                    Color(.systemBackground).ignoresSafeArea()
                 }
 
-                // Main Content
+                // Main Content Layer
                 Group {
                     switch currentRoute {
                     case .recordings:
-                        RecordingsListView()
+                        VStack(spacing: 0) {
+                            // Top Navigation Bar
+                            topNavigationBar
+                                .padding(.horizontal, 12)
+                                .padding(.top, 8)
+
+                            // Recording Status (when recording)
+                            if appState.recorder.isRecording {
+                                RecordingStatusView(
+                                    duration: appState.recorder.currentDuration,
+                                    liveSamples: appState.recorder.liveMeterSamples
+                                )
+                                .padding(.top, 8)
+                                .padding(.horizontal, 16)
+                            }
+
+                            // Recordings list
+                            RecordingsListView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+
                     case .map:
-                        GPSInsightsMapView()
+                        // Full-screen map with overlay top bar
+                        ZStack(alignment: .top) {
+                            // Map fills entire screen
+                            GPSInsightsMapView()
+                                .ignoresSafeArea()
+
+                            // Overlay top bar with blur background
+                            VStack(spacing: 0) {
+                                topNavigationBar
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, safeArea.top + 8)
+                                    .padding(.bottom, 8)
+                                    .background(
+                                        Rectangle()
+                                            .fill(.ultraThinMaterial)
+                                            .ignoresSafeArea(edges: .top)
+                                    )
+
+                                // Recording Status (when recording)
+                                if appState.recorder.isRecording {
+                                    RecordingStatusView(
+                                        duration: appState.recorder.currentDuration,
+                                        liveSamples: appState.recorder.liveMeterSamples
+                                    )
+                                    .padding(.top, 8)
+                                    .padding(.horizontal, 16)
+                                    .background(
+                                        Rectangle()
+                                            .fill(.ultraThinMaterial)
+                                    )
+                                }
+
+                                Spacer()
+                            }
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Floating Record Button - Free Drag (no snap)
+                VoiceMemosRecordButton {
+                    handleRecordTap()
+                }
+                .position(x: targetX, y: targetY)
+                .scaleEffect(isDragging ? 1.1 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
+                .shadow(color: isDragging ? .black.opacity(0.3) : .black.opacity(0.15), radius: isDragging ? 10 : 5, y: isDragging ? 5 : 2)
+                .zIndex(100) // Ensure button is above everything
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            isDragging = true
+                            dragOffset = value.translation
+                        }
+                        .onEnded { value in
+                            isDragging = false
+
+                            // Calculate new position
+                            let newX = buttonX + value.translation.width
+                            let newY = buttonY + value.translation.height
+
+                            // Clamp to bounds (no snapping - free position)
+                            let clampedX = clamp(newX, min: minX, max: maxX)
+                            let clampedY = clamp(newY, min: minY, max: maxY)
+
+                            // Convert back to normalized and save
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                buttonPosition.normalizedX = clampedX / screenWidth
+                                buttonPosition.normalizedY = clampedY / screenHeight
+                            }
+                            buttonPosition.save()
+
+                            // Reset drag offset
+                            dragOffset = .zero
+                        }
+                )
+                .contextMenu {
+                    Button(role: .destructive) {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                            buttonPosition.reset()
+                        }
+                    } label: {
+                        Label("Reset Button Position", systemImage: "arrow.counterclockwise")
+                    }
+                }
             }
-        }
-        .overlay(alignment: .bottom) {
-            // Floating Record Button - NO background
-            VoiceMemosRecordButton {
-                handleRecordTap()
-            }
-            .padding(.bottom, 24)
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
@@ -84,6 +234,12 @@ struct ContentView: View {
         .sheet(isPresented: $showTipJar) {
             TipJarSheetView()
         }
+    }
+
+    // MARK: - Helper Functions
+
+    private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
+        Swift.min(Swift.max(value, min), max)
     }
 
     // MARK: - Top Navigation Bar

@@ -16,7 +16,13 @@ struct ParametricEQView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private let graphHeight: CGFloat = 160
+    private let graphHeight: CGFloat = 180
+
+    // Padding inside the graph for labels
+    private let graphPaddingTop: CGFloat = 20
+    private let graphPaddingBottom: CGFloat = 24
+    private let graphPaddingLeft: CGFloat = 36
+    private let graphPaddingRight: CGFloat = 12
 
     var body: some View {
         VStack(spacing: 16) {
@@ -53,64 +59,126 @@ struct ParametricEQView: View {
 
     private var eqGraph: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
-            let height = geometry.size.height
+            let fullWidth = geometry.size.width
+            let fullHeight = geometry.size.height
+
+            // Inner graph area (excluding label padding)
+            let graphWidth = fullWidth - graphPaddingLeft - graphPaddingRight
+            let graphHeight = fullHeight - graphPaddingTop - graphPaddingBottom
 
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 12)
                     .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
 
-                // Grid
-                gridLines(width: width, height: height)
+                // Labels (outside the graph area)
+                dBLabels(fullHeight: fullHeight, graphHeight: graphHeight)
+                frequencyLabels(fullWidth: fullWidth, fullHeight: fullHeight, graphWidth: graphWidth)
 
-                // Center line (0 dB)
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: height / 2))
-                    path.addLine(to: CGPoint(x: width, y: height / 2))
-                }
-                .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
+                // Graph content area
+                ZStack {
+                    // Grid
+                    gridLines(width: graphWidth, height: graphHeight)
 
-                // Frequency response curve (approximate)
-                frequencyResponseCurve(width: width, height: height)
+                    // Center line (0 dB)
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: graphHeight / 2))
+                        path.addLine(to: CGPoint(x: graphWidth, y: graphHeight / 2))
+                    }
+                    .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
 
-                // Band points
-                ForEach(0..<4, id: \.self) { index in
-                    let band = settings.bands[index]
-                    let x = frequencyToX(band.frequency, width: width)
-                    let y = gainToY(band.gain, height: height)
+                    // Frequency response curve (approximate)
+                    frequencyResponseCurve(width: graphWidth, height: graphHeight)
 
-                    EQBandPoint(
-                        isSelected: selectedBand == index,
-                        bandIndex: index,
-                        colorScheme: colorScheme
-                    )
-                    .position(x: x, y: y)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                selectedBand = index
-                                // Update frequency (X) and gain (Y)
-                                let newFreq = xToFrequency(value.location.x, width: width)
-                                let newGain = yToGain(value.location.y, height: height)
-                                settings.bands[index].frequency = newFreq
-                                settings.bands[index].gain = newGain
-                                onSettingsChanged?()
+                    // Band points
+                    ForEach(0..<4, id: \.self) { index in
+                        let band = settings.bands[index]
+                        let x = frequencyToX(band.frequency, width: graphWidth)
+                        let y = gainToY(band.gain, height: graphHeight)
+
+                        EQBandPoint(
+                            isSelected: selectedBand == index,
+                            bandIndex: index,
+                            colorScheme: colorScheme
+                        )
+                        .position(x: x, y: y)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    selectedBand = index
+                                    // Update frequency (X) and gain (Y)
+                                    let newFreq = xToFrequency(value.location.x, width: graphWidth)
+                                    let newGain = yToGain(value.location.y, height: graphHeight)
+                                    settings.bands[index].frequency = newFreq
+                                    settings.bands[index].gain = newGain
+                                    onSettingsChanged?()
+                                }
+                        )
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                selectedBand = selectedBand == index ? nil : index
                             }
-                    )
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selectedBand = selectedBand == index ? nil : index
                         }
                     }
                 }
-
-                // Frequency labels
-                frequencyLabels(width: width, height: height)
+                .frame(width: graphWidth, height: graphHeight)
+                .offset(x: (graphPaddingLeft - graphPaddingRight) / 2, y: (graphPaddingTop - graphPaddingBottom) / 2)
             }
         }
         .frame(height: graphHeight)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - dB Labels (left side)
+
+    private func dBLabels(fullHeight: CGFloat, graphHeight: CGFloat) -> some View {
+        let centerY = fullHeight / 2
+
+        return ZStack {
+            // +12 dB
+            Text("+12")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: 18, y: graphPaddingTop)
+
+            // 0 dB
+            Text("0")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: 12, y: centerY)
+
+            // -12 dB
+            Text("-12")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: 18, y: fullHeight - graphPaddingBottom)
+        }
+    }
+
+    // MARK: - Frequency Labels (bottom)
+
+    private func frequencyLabels(fullWidth: CGFloat, fullHeight: CGFloat, graphWidth: CGFloat) -> some View {
+        let labelY = fullHeight - 8
+
+        return ZStack {
+            // 100 Hz
+            Text("100")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: graphPaddingLeft + frequencyToX(100, width: graphWidth), y: labelY)
+
+            // 1k Hz
+            Text("1k")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: graphPaddingLeft + frequencyToX(1000, width: graphWidth), y: labelY)
+
+            // 10k Hz
+            Text("10k")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .position(x: graphPaddingLeft + frequencyToX(10000, width: graphWidth), y: labelY)
+        }
     }
 
     // MARK: - Grid Lines
@@ -186,46 +254,6 @@ struct ParametricEQView: View {
         let contribution = band.gain * exp(-distance * distance * 0.5)
 
         return contribution
-    }
-
-    // MARK: - Frequency Labels
-
-    private func frequencyLabels(width: CGFloat, height: CGFloat) -> some View {
-        ZStack {
-            // 100 Hz
-            Text("100")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: frequencyToX(100, width: width), y: height - 8)
-
-            // 1k Hz
-            Text("1k")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: frequencyToX(1000, width: width), y: height - 8)
-
-            // 10k Hz
-            Text("10k")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: frequencyToX(10000, width: width), y: height - 8)
-
-            // dB labels
-            Text("+12")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: 16, y: gainToY(12, height: height))
-
-            Text("0")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: 10, y: height / 2)
-
-            Text("-12")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .position(x: 16, y: gainToY(-12, height: height))
-        }
     }
 
     // MARK: - Band Controls
