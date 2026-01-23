@@ -89,40 +89,43 @@ struct ContentView: View {
     @GestureState private var dragTranslation: CGSize = .zero
     @State private var isDragging = false
 
+    // Reset bubble state
+    @State private var showResetBubble = false
+
     // Layout constants
     private let topBarHeight: CGFloat = 56
     private let buttonSize: CGFloat = 80
-    private let edgePadding: CGFloat = 20
+    private let edgePadding: CGFloat = 16
 
     var body: some View {
         GeometryReader { geometry in
             let safeArea = geometry.safeAreaInsets
             let screenWidth = geometry.size.width
-            let screenHeight = geometry.size.height
+            let screenHeight = geometry.size.height + safeArea.top + safeArea.bottom
 
-            // Default button position: bottom center
-            let defaultX = screenWidth / 2
-            let defaultY = screenHeight - safeArea.bottom - buttonSize / 2 - 24
+            // Default button position: bottom center, just above home indicator
+            // This mimics Apple Voice Memos positioning
+            let defaultX = geometry.size.width / 2
+            let defaultY = geometry.size.height + safeArea.top - buttonSize / 2 - 16
 
             // Calculate bounds for button center
-            // minY: Only the top menu bar is forbidden (top safe area + bar height + padding)
-            // maxY: Allow button to go all the way to bottom, just keep edge on screen
-            let minX = edgePadding + buttonSize / 2
-            let maxX = screenWidth - edgePadding - buttonSize / 2
-            let minY = safeArea.top + topBarHeight + buttonSize / 2 + 16
-            let maxY = screenHeight - buttonSize / 2 - 8  // Button edge stays 8pt from screen bottom
+            // BOUNDS EXPLANATION:
+            // - minY: Top menu bar is forbidden (safe area top + bar height + button radius + padding)
+            // - maxY: Button can go all the way to bottom, just above home indicator area
+            // - minX/maxX: Keep button fully on screen with edge padding
+            let buttonRadius = buttonSize / 2
+            let minX = edgePadding + buttonRadius
+            let maxX = geometry.size.width - edgePadding - buttonRadius
+            let minY = safeArea.top + topBarHeight + buttonRadius + 8
+            let maxY = geometry.size.height + safeArea.top - safeArea.bottom - buttonRadius - 8
 
-            // Determine button position
-            // Use stored position if valid (non-zero), otherwise use default
-            // This allows smooth animation when resetting to default
-            let baseX = (buttonPosition.storedX != 0 || buttonPosition.storedY != 0)
-                ? buttonPosition.storedX
-                : defaultX
-            let baseY = (buttonPosition.storedX != 0 || buttonPosition.storedY != 0)
-                ? buttonPosition.storedY
-                : defaultY
+            // Determine current button position
+            // Use stored position if we have one (or if storedX/Y were set for animation), otherwise use default
+            let hasPosition = buttonPosition.hasStoredPosition || buttonPosition.storedX != 0 || buttonPosition.storedY != 0
+            let baseX = hasPosition ? buttonPosition.storedX : defaultX
+            let baseY = hasPosition ? buttonPosition.storedY : defaultY
 
-            // Apply drag translation and clamp
+            // Apply drag translation and clamp to bounds
             let buttonX = clamp(baseX + dragTranslation.width, min: minX, max: maxX)
             let buttonY = clamp(baseY + dragTranslation.height, min: minY, max: maxY)
 
@@ -133,8 +136,21 @@ struct ContentView: View {
                 // Layer 2: Fixed Top Bar (always on top, never moves)
                 fixedTopBar(safeArea: safeArea)
 
-                // Layer 3: Floating Record Button (only on Recordings screen)
+                // Layer 3: Floating Record Button + Reset Bubble (only on Recordings screen)
                 if currentRoute == .recordings {
+                    // Reset bubble (shown on long-press, positioned below button)
+                    if showResetBubble {
+                        resetBubbleOverlay(
+                            buttonX: buttonX,
+                            buttonY: buttonY,
+                            defaultX: defaultX,
+                            defaultY: defaultY,
+                            screenHeight: geometry.size.height + safeArea.top
+                        )
+                        .zIndex(99)
+                    }
+
+                    // The record button
                     floatingRecordButton(
                         x: buttonX,
                         y: buttonY,
@@ -157,6 +173,14 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showTipJar) {
             TipJarSheetView()
+        }
+        // Dismiss reset bubble when tapping outside
+        .onTapGesture {
+            if showResetBubble {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    showResetBubble = false
+                }
+            }
         }
     }
 
@@ -225,19 +249,38 @@ struct ContentView: View {
         minY: CGFloat, maxY: CGFloat
     ) -> some View {
         VoiceMemosRecordButton {
-            handleRecordTap()
+            // Only handle tap if not showing reset bubble
+            if !showResetBubble {
+                handleRecordTap()
+            }
         }
         .frame(width: buttonSize, height: buttonSize)
         .contentShape(Circle())
         .position(x: x, y: y)
         .shadow(color: .black.opacity(isDragging ? 0.3 : 0.2), radius: isDragging ? 12 : 8, y: isDragging ? 6 : 4)
         .scaleEffect(isDragging ? 1.05 : 1.0)
+        // Long-press gesture for reset bubble
+        .onLongPressGesture(minimumDuration: 0.5) {
+            // Show reset bubble with animation
+            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+            impactFeedback.impactOccurred()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                showResetBubble = true
+            }
+        }
+        // Drag gesture for moving the button
         .highPriorityGesture(
             DragGesture(minimumDistance: 5, coordinateSpace: .named("ContentView"))
                 .updating($dragTranslation) { value, state, _ in
                     state = value.translation
                 }
                 .onChanged { _ in
+                    // Dismiss reset bubble when starting drag
+                    if showResetBubble {
+                        withAnimation(.easeOut(duration: 0.1)) {
+                            showResetBubble = false
+                        }
+                    }
                     if !isDragging {
                         isDragging = true
                     }
@@ -245,30 +288,64 @@ struct ContentView: View {
                 .onEnded { value in
                     isDragging = false
 
-                    // Calculate final position
-                    let baseX = buttonPosition.hasStoredPosition ? buttonPosition.storedX : defaultX
-                    let baseY = buttonPosition.hasStoredPosition ? buttonPosition.storedY : defaultY
+                    // Calculate final position from current base + translation
+                    let currentBaseX: CGFloat
+                    let currentBaseY: CGFloat
+                    if buttonPosition.hasStoredPosition {
+                        currentBaseX = buttonPosition.storedX
+                        currentBaseY = buttonPosition.storedY
+                    } else if buttonPosition.storedX != 0 || buttonPosition.storedY != 0 {
+                        currentBaseX = buttonPosition.storedX
+                        currentBaseY = buttonPosition.storedY
+                    } else {
+                        currentBaseX = defaultX
+                        currentBaseY = defaultY
+                    }
 
-                    let finalX = clamp(baseX + value.translation.width, min: minX, max: maxX)
-                    let finalY = clamp(baseY + value.translation.height, min: minY, max: maxY)
+                    let finalX = clamp(currentBaseX + value.translation.width, min: minX, max: maxX)
+                    let finalY = clamp(currentBaseY + value.translation.height, min: minY, max: maxY)
 
-                    // Save with subtle spring animation
+                    // Save with spring animation
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         buttonPosition.save(x: finalX, y: finalY)
                     }
                 }
         )
-        .contextMenu {
-            Button(role: .destructive) {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                    // Pass default coordinates so storedX/Y animate to default position
-                    buttonPosition.reset(toDefaultX: defaultX, toDefaultY: defaultY)
-                }
-            } label: {
-                Label("Reset Button Position", systemImage: "arrow.counterclockwise")
+        .animation(isDragging ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: isDragging)
+    }
+
+    // MARK: - Reset Bubble Overlay
+
+    private func resetBubbleOverlay(
+        buttonX: CGFloat,
+        buttonY: CGFloat,
+        defaultX: CGFloat,
+        defaultY: CGFloat,
+        screenHeight: CGFloat
+    ) -> some View {
+        // Position bubble below button, or above if too close to bottom
+        let bubbleHeight: CGFloat = 44
+        let bubbleSpacing: CGFloat = 12
+        let buttonBottom = buttonY + buttonSize / 2
+        let spaceBelow = screenHeight - buttonBottom
+        let showAbove = spaceBelow < (bubbleHeight + bubbleSpacing + 20)
+
+        let bubbleY: CGFloat
+        if showAbove {
+            bubbleY = buttonY - buttonSize / 2 - bubbleSpacing - bubbleHeight / 2
+        } else {
+            bubbleY = buttonY + buttonSize / 2 + bubbleSpacing + bubbleHeight / 2
+        }
+
+        return ResetBubble(showAbove: showAbove) {
+            // Reset action
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                buttonPosition.reset(toDefaultX: defaultX, toDefaultY: defaultY)
+                showResetBubble = false
             }
         }
-        .animation(isDragging ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: isDragging)
+        .position(x: buttonX, y: bubbleY)
+        .transition(.opacity.combined(with: .scale(scale: 0.8)))
     }
 
     // MARK: - Helper Functions
@@ -351,6 +428,40 @@ struct ContentView: View {
         } else {
             appState.recorder.startRecording()
         }
+    }
+}
+
+// MARK: - Reset Bubble View
+
+struct ResetBubble: View {
+    let showAbove: Bool
+    let onReset: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: onReset) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Reset")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            .foregroundColor(.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.4 : 0.15), radius: 8, y: 2)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
