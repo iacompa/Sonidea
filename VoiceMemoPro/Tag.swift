@@ -24,7 +24,7 @@ struct Tag: Identifiable, Codable, Equatable, Hashable {
 
     // Default tags
     static let defaultTags: [Tag] = [
-        Tag(name: "fav", colorHex: "#FF6B6B"),
+        Tag(name: "favorite", colorHex: "#FF6B6B"),
         Tag(name: "beatbox", colorHex: "#4ECDC4"),
         Tag(name: "melody", colorHex: "#9B59B6"),
         Tag(name: "lyrics", colorHex: "#F39C12")

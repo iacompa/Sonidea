@@ -23,7 +23,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(.systemBackground).ignoresSafeArea()
 
             VStack(spacing: 0) {
                 HStack {
@@ -32,7 +32,7 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 20, weight: .medium))
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                             .frame(width: 44, height: 44)
                     }
 
@@ -43,7 +43,7 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "gearshape.fill")
                             .font(.system(size: 20, weight: .medium))
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                             .frame(width: 44, height: 44)
                     }
                 }
@@ -51,8 +51,11 @@ struct ContentView: View {
                 .padding(.top, 8)
 
                 if appState.recorder.isRecording {
-                    RecordingStatusView(duration: appState.recorder.currentDuration)
-                        .padding(.top, 8)
+                    RecordingStatusView(
+                        duration: appState.recorder.currentDuration,
+                        liveSamples: appState.recorder.liveMeterSamples
+                    )
+                    .padding(.top, 8)
                 }
 
                 Group {
@@ -91,25 +94,34 @@ struct ContentView: View {
 // MARK: - Recording Status View
 struct RecordingStatusView: View {
     let duration: TimeInterval
+    let liveSamples: [Float]
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(Color.red)
-                .frame(width: 10, height: 10)
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 10, height: 10)
 
-            Text("Recording...")
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
+                Text("Recording...")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
 
-            Text(formatDuration(duration))
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundColor(.red)
+                Text(formatDuration(duration))
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundColor(.red)
+            }
+
+            if !liveSamples.isEmpty {
+                LiveWaveformView(samples: liveSamples)
+                    .frame(height: 50)
+                    .padding(.horizontal, 8)
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 12)
         .background(Color.red.opacity(0.2))
         .cornerRadius(20)
     }
@@ -179,7 +191,7 @@ struct BottomDockView: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 24)
-                .fill(Color(.systemGray6).opacity(0.95))
+                .fill(Color(.systemGray5).opacity(0.95))
         )
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
@@ -212,7 +224,7 @@ struct DockButton: View {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
             }
-            .foregroundColor(isSelected ? .white : .gray)
+            .foregroundColor(isSelected ? .primary : .secondary)
             .frame(maxWidth: .infinity)
         }
     }
@@ -224,14 +236,14 @@ struct MapPlaceholderView: View {
         VStack(spacing: 16) {
             Image(systemName: "map.circle.fill")
                 .font(.system(size: 64))
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
             Text("Map")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
             Text("Recording locations will appear here")
                 .font(.subheadline)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
         }
     }
 }
@@ -252,15 +264,15 @@ struct SearchSheetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color(.systemBackground).ignoresSafeArea()
 
                 VStack(spacing: 16) {
                     // Search field
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                         TextField("Search recordings...", text: $searchQuery)
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                     }
                     .padding(12)
                     .background(Color(.systemGray6))
@@ -295,23 +307,23 @@ struct SearchSheetView: View {
                             VStack(spacing: 12) {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 48))
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                                 Text("Search your recordings")
                                     .font(.headline)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                                 Text("Search by title, notes, location, tags, or album")
                                     .font(.subheadline)
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                                     .multilineTextAlignment(.center)
                             }
                         } else {
                             VStack(spacing: 12) {
                                 Image(systemName: "doc.text.magnifyingglass")
                                     .font(.system(size: 48))
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                                 Text("No results found")
                                     .font(.headline)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                             }
                         }
                         Spacer()
@@ -343,7 +355,6 @@ struct SearchSheetView: View {
                 RecordingDetailView(recording: recording)
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -386,30 +397,30 @@ struct SearchResultRow: View {
         HStack(spacing: 12) {
             Image(systemName: "waveform")
                 .font(.system(size: 20))
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .frame(width: 36, height: 36)
-                .background(Color.gray.opacity(0.3))
+                .background(Color(.systemGray4))
                 .cornerRadius(6)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.white)
+                    .foregroundColor(.primary)
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
                     Text(recording.formattedDuration)
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
 
                     if let album = album {
                         Text("•")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                         Text(album.name)
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -427,7 +438,7 @@ struct SearchResultRow: View {
 
             Image(systemName: "chevron.right")
                 .font(.caption)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
         }
         .padding(.vertical, 6)
     }
@@ -436,22 +447,37 @@ struct SearchResultRow: View {
 // MARK: - Settings Sheet
 struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
 
     var body: some View {
+        @Bindable var appState = appState
+
         NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                VStack(spacing: 16) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(.gray)
-                    Text("Settings")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                    Text("Settings coming soon")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
+            List {
+                Section {
+                    Picker("Appearance", selection: $appState.appearanceMode) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Choose how the app appears. System follows your device settings.")
+                }
+
+                Section {
+                    HStack {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(.secondary)
+                        Text("VoiceMemoPro")
+                        Spacer()
+                        Text("1.0")
+                            .foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("About")
                 }
             }
             .navigationTitle("Settings")
@@ -462,7 +488,6 @@ struct SettingsSheetView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -473,7 +498,7 @@ struct TipJarSheetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color(.systemBackground).ignoresSafeArea()
                 VStack(spacing: 16) {
                     Image(systemName: "heart.fill")
                         .font(.system(size: 48))
@@ -481,10 +506,10 @@ struct TipJarSheetView: View {
                     Text("Tip Jar")
                         .font(.title2)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(.primary)
                     Text("Support the developer")
                         .font(.subheadline)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("Tip Jar")
@@ -495,7 +520,6 @@ struct TipJarSheetView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

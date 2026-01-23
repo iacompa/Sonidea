@@ -20,6 +20,10 @@ struct RecordingDetailView: View {
     @State private var showManageTags = false
     @State private var showChooseAlbum = false
 
+    @State private var waveformSamples: [Float] = []
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var isLoadingWaveform = true
+
     init(recording: RecordingItem) {
         _editedTitle = State(initialValue: recording.title)
         _editedNotes = State(initialValue: recording.notes)
@@ -30,12 +34,12 @@ struct RecordingDetailView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color(.systemBackground).ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 24) {
                         playbackSection
-                        Divider().background(Color.gray.opacity(0.3))
+                        Divider()
                         metadataSection
                     }
                     .padding()
@@ -54,6 +58,7 @@ struct RecordingDetailView: View {
             }
             .onAppear {
                 playback.load(url: currentRecording.fileURL)
+                loadWaveform()
             }
             .onDisappear {
                 playback.stop()
@@ -65,38 +70,76 @@ struct RecordingDetailView: View {
                 ChooseAlbumSheet(recording: $currentRecording)
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     // MARK: - Playback Section
 
     private var playbackSection: some View {
         VStack(spacing: 16) {
-            Image(systemName: "waveform")
-                .font(.system(size: 60))
-                .foregroundColor(.white.opacity(0.3))
-                .padding(.vertical, 20)
+            // Waveform
+            ZStack {
+                if isLoadingWaveform {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .primary))
+                        .frame(height: 100)
+                } else if waveformSamples.isEmpty {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 60))
+                        .foregroundColor(.secondary)
+                        .frame(height: 100)
+                } else {
+                    WaveformView(
+                        samples: waveformSamples,
+                        progress: playbackProgress,
+                        zoomScale: $zoomScale
+                    )
+                    .frame(height: 100)
+                }
+            }
+            .padding(.vertical, 10)
+
+            // Zoom indicator
+            if zoomScale > 1.01 {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(Int(zoomScale * 100))%")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button {
+                        withAnimation {
+                            zoomScale = 1.0
+                        }
+                    } label: {
+                        Text("Reset")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
 
             HStack {
                 Text(formatTime(playback.currentTime))
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .monospacedDigit()
                 Spacer()
                 Text(formatTime(playback.duration))
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .monospacedDigit()
             }
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Rectangle()
-                        .fill(Color.gray.opacity(0.3))
+                        .fill(Color(.systemGray4))
                         .frame(height: 4)
                         .cornerRadius(2)
                     Rectangle()
-                        .fill(Color.white)
+                        .fill(Color.accentColor)
                         .frame(width: progressWidth(in: geometry.size.width), height: 4)
                         .cornerRadius(2)
                 }
@@ -108,12 +151,12 @@ struct RecordingDetailView: View {
             } label: {
                 Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 56))
-                    .foregroundColor(.white)
+                    .foregroundColor(.accentColor)
             }
 
             Text(currentRecording.formattedDate)
                 .font(.caption)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -125,21 +168,20 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Title")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
                 TextField("Recording title", text: $editedTitle)
                     .textFieldStyle(.plain)
                     .padding(12)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    .foregroundColor(.white)
             }
 
             // Album
             VStack(alignment: .leading, spacing: 8) {
                 Text("Album")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
 
                 Button {
@@ -148,15 +190,15 @@ struct RecordingDetailView: View {
                     HStack {
                         if let album = appState.album(for: currentRecording.albumID) {
                             Text(album.name)
-                                .foregroundColor(.white)
+                                .foregroundColor(.primary)
                         } else {
                             Text("None")
-                                .foregroundColor(.gray)
+                                .foregroundColor(.secondary)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                     }
                     .padding(12)
                     .background(Color(.systemGray6))
@@ -169,7 +211,7 @@ struct RecordingDetailView: View {
                 HStack {
                     Text("Tags")
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                         .textCase(.uppercase)
                     Spacer()
                     Button("Manage") {
@@ -195,21 +237,20 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Location")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
                 TextField("Enter location", text: $editedLocationLabel)
                     .textFieldStyle(.plain)
                     .padding(12)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    .foregroundColor(.white)
             }
 
             // Notes
             VStack(alignment: .leading, spacing: 8) {
                 Text("Notes")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
                 TextEditor(text: $editedNotes)
                     .scrollContentBackground(.hidden)
@@ -217,12 +258,16 @@ struct RecordingDetailView: View {
                     .frame(minHeight: 100)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    .foregroundColor(.white)
             }
         }
     }
 
     // MARK: - Helpers
+
+    private var playbackProgress: Double {
+        guard playback.duration > 0 else { return 0 }
+        return min(1, max(0, playback.currentTime / playback.duration))
+    }
 
     private func progressWidth(in totalWidth: CGFloat) -> CGFloat {
         guard playback.duration > 0 else { return 0 }
@@ -241,6 +286,20 @@ struct RecordingDetailView: View {
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
         appState.updateRecording(updated)
+    }
+
+    private func loadWaveform() {
+        isLoadingWaveform = true
+        Task {
+            let samples = await WaveformSampler.shared.samples(
+                for: currentRecording.fileURL,
+                targetSampleCount: 150
+            )
+            await MainActor.run {
+                waveformSamples = samples
+                isLoadingWaveform = false
+            }
+        }
     }
 }
 
@@ -321,53 +380,43 @@ struct ManageTagsSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                List {
-                    Section {
-                        ForEach(appState.tags) { tag in
-                            HStack {
-                                Circle()
-                                    .fill(tag.color)
-                                    .frame(width: 24, height: 24)
-                                Text(tag.name)
-                                    .foregroundColor(.white)
-                                Spacer()
-                            }
-                            .listRowBackground(Color(.systemGray6))
-                        }
-                        .onDelete { offsets in
-                            for index in offsets {
-                                appState.deleteTag(appState.tags[index])
-                            }
-                        }
-                    } header: {
-                        Text("Existing Tags")
-                    }
-
-                    Section {
+            List {
+                Section {
+                    ForEach(appState.tags) { tag in
                         HStack {
-                            TextField("Tag name", text: $newTagName)
-                                .foregroundColor(.white)
-                            ColorPicker("", selection: $newTagColor, supportsOpacity: false)
-                                .labelsHidden()
+                            Circle()
+                                .fill(tag.color)
+                                .frame(width: 24, height: 24)
+                            Text(tag.name)
+                            Spacer()
                         }
-                        .listRowBackground(Color(.systemGray6))
-
-                        Button("Create Tag") {
-                            guard !newTagName.isEmpty else { return }
-                            appState.createTag(name: newTagName, colorHex: newTagColor.toHex())
-                            newTagName = ""
-                            newTagColor = .blue
-                        }
-                        .disabled(newTagName.isEmpty)
-                        .listRowBackground(Color(.systemGray6))
-                    } header: {
-                        Text("New Tag")
                     }
+                    .onDelete { offsets in
+                        for index in offsets {
+                            appState.deleteTag(appState.tags[index])
+                        }
+                    }
+                } header: {
+                    Text("Existing Tags")
                 }
-                .scrollContentBackground(.hidden)
+
+                Section {
+                    HStack {
+                        TextField("Tag name", text: $newTagName)
+                        ColorPicker("", selection: $newTagColor, supportsOpacity: false)
+                            .labelsHidden()
+                    }
+
+                    Button("Create Tag") {
+                        guard !newTagName.isEmpty else { return }
+                        appState.createTag(name: newTagName, colorHex: newTagColor.toHex())
+                        newTagName = ""
+                        newTagColor = .blue
+                    }
+                    .disabled(newTagName.isEmpty)
+                } header: {
+                    Text("New Tag")
+                }
             }
             .navigationTitle("Manage Tags")
             .navigationBarTitleDisplayMode(.inline)
@@ -377,7 +426,6 @@ struct ManageTagsSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -392,74 +440,62 @@ struct ChooseAlbumSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+            List {
+                Section {
+                    Button {
+                        recording = appState.setAlbum(nil, for: recording)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text("None")
+                            Spacer()
+                            if recording.albumID == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
 
-                List {
-                    Section {
+                    ForEach(appState.albums) { album in
                         Button {
-                            recording = appState.setAlbum(nil, for: recording)
+                            recording = appState.setAlbum(album, for: recording)
                             dismiss()
                         } label: {
                             HStack {
-                                Text("None")
-                                    .foregroundColor(.white)
+                                Text(album.name)
                                 Spacer()
-                                if recording.albumID == nil {
+                                if recording.albumID == album.id {
                                     Image(systemName: "checkmark")
                                         .foregroundColor(.blue)
                                 }
                             }
                         }
-                        .listRowBackground(Color(.systemGray6))
-
-                        ForEach(appState.albums) { album in
-                            Button {
-                                recording = appState.setAlbum(album, for: recording)
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    Text(album.name)
-                                        .foregroundColor(.white)
-                                    Spacer()
-                                    if recording.albumID == album.id {
-                                        Image(systemName: "checkmark")
-                                            .foregroundColor(.blue)
-                                    }
-                                }
-                            }
-                            .listRowBackground(Color(.systemGray6))
-                        }
-                        .onDelete { offsets in
-                            for index in offsets {
-                                appState.deleteAlbum(appState.albums[index])
-                            }
-                        }
-                    } header: {
-                        Text("Albums")
                     }
-
-                    Section {
-                        HStack {
-                            TextField("Album name", text: $newAlbumName)
-                                .foregroundColor(.white)
+                    .onDelete { offsets in
+                        for index in offsets {
+                            appState.deleteAlbum(appState.albums[index])
                         }
-                        .listRowBackground(Color(.systemGray6))
-
-                        Button("Create Album") {
-                            guard !newAlbumName.isEmpty else { return }
-                            let album = appState.createAlbum(name: newAlbumName)
-                            recording = appState.setAlbum(album, for: recording)
-                            newAlbumName = ""
-                            dismiss()
-                        }
-                        .disabled(newAlbumName.isEmpty)
-                        .listRowBackground(Color(.systemGray6))
-                    } header: {
-                        Text("New Album")
                     }
+                } header: {
+                    Text("Albums")
                 }
-                .scrollContentBackground(.hidden)
+
+                Section {
+                    HStack {
+                        TextField("Album name", text: $newAlbumName)
+                    }
+
+                    Button("Create Album") {
+                        guard !newAlbumName.isEmpty else { return }
+                        let album = appState.createAlbum(name: newAlbumName)
+                        recording = appState.setAlbum(album, for: recording)
+                        newAlbumName = ""
+                        dismiss()
+                    }
+                    .disabled(newAlbumName.isEmpty)
+                } header: {
+                    Text("New Album")
+                }
             }
             .navigationTitle("Choose Album")
             .navigationBarTitleDisplayMode(.inline)
@@ -469,6 +505,5 @@ struct ChooseAlbumSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }

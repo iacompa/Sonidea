@@ -28,14 +28,14 @@ struct RecordingsListView: View {
         VStack(spacing: 16) {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 64))
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
             Text("No Recordings")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
             Text("Tap the red button to start recording")
                 .font(.subheadline)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -74,30 +74,30 @@ struct RecordingRow: View {
         HStack(spacing: 12) {
             Image(systemName: "waveform")
                 .font(.system(size: 24))
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .frame(width: 44, height: 44)
-                .background(Color.gray.opacity(0.3))
+                .background(Color(.systemGray4))
                 .cornerRadius(8)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.white)
+                    .foregroundColor(.primary)
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
                     Text(recording.formattedDuration)
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
 
                     if let album = album {
                         Text("•")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                         Text(album.name)
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -111,7 +111,7 @@ struct RecordingRow: View {
                         if recordingTags.count > 2 {
                             Text("+\(recordingTags.count - 2)")
                                 .font(.caption2)
-                                .foregroundColor(.gray)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -121,7 +121,7 @@ struct RecordingRow: View {
 
             Image(systemName: "chevron.right")
                 .font(.caption)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
         }
         .padding(.vertical, 8)
     }

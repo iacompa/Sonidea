@@ -15,7 +15,7 @@ struct VoiceMemoProApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(appState.appearanceMode.preferredColorScheme)
         }
     }
 }

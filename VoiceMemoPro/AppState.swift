@@ -15,6 +15,11 @@ final class AppState {
     var recordings: [RecordingItem] = []
     var tags: [Tag] = []
     var albums: [Album] = []
+    var appearanceMode: AppearanceMode = .system {
+        didSet {
+            saveAppearanceMode()
+        }
+    }
     let recorder = RecorderManager()
 
     private(set) var nextRecordingNumber: Int = 1
@@ -23,13 +28,17 @@ final class AppState {
     private let tagsKey = "savedTags"
     private let albumsKey = "savedAlbums"
     private let nextNumberKey = "nextRecordingNumber"
+    private let appearanceModeKey = "appearanceMode"
+    private let tagMigrationKey = "didMigrateFavToFavorite"
 
     init() {
+        loadAppearanceMode()
         loadNextRecordingNumber()
         loadTags()
         loadAlbums()
         loadRecordings()
         seedDefaultTagsIfNeeded()
+        migrateFavTagToFavorite()
     }
 
     // MARK: - Recording Management
@@ -191,6 +200,32 @@ final class AppState {
         return results
     }
 
+    // MARK: - Tag Migration
+
+    private func migrateFavTagToFavorite() {
+        let didMigrate = UserDefaults.standard.bool(forKey: tagMigrationKey)
+        guard !didMigrate else { return }
+
+        // Check if "fav" tag exists
+        guard let favIndex = tags.firstIndex(where: { $0.name.lowercased() == "fav" }) else {
+            UserDefaults.standard.set(true, forKey: tagMigrationKey)
+            return
+        }
+
+        // Check if "favorite" already exists
+        let favoriteExists = tags.contains { $0.name.lowercased() == "favorite" }
+
+        if favoriteExists {
+            // Don't create duplicate, just mark migration done
+        } else {
+            // Rename "fav" to "favorite"
+            tags[favIndex].name = "favorite"
+            saveTags()
+        }
+
+        UserDefaults.standard.set(true, forKey: tagMigrationKey)
+    }
+
     // MARK: - Persistence
 
     private func saveRecordings() {
@@ -242,6 +277,18 @@ final class AppState {
     private func loadNextRecordingNumber() {
         let saved = UserDefaults.standard.integer(forKey: nextNumberKey)
         nextRecordingNumber = saved > 0 ? saved : 1
+    }
+
+    private func saveAppearanceMode() {
+        UserDefaults.standard.set(appearanceMode.rawValue, forKey: appearanceModeKey)
+    }
+
+    private func loadAppearanceMode() {
+        guard let rawValue = UserDefaults.standard.string(forKey: appearanceModeKey),
+              let mode = AppearanceMode(rawValue: rawValue) else {
+            return
+        }
+        appearanceMode = mode
     }
 
     private func seedDefaultTagsIfNeeded() {
