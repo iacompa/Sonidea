@@ -13,6 +13,19 @@ enum AppRoute: String, CaseIterable {
     case map
 }
 
+// MARK: - Search Scope Enum
+enum SearchScope: String, CaseIterable {
+    case recordings
+    case albums
+
+    var displayName: String {
+        switch self {
+        case .recordings: return "Recordings"
+        case .albums: return "Albums"
+        }
+    }
+}
+
 // MARK: - Main Content View
 struct ContentView: View {
     @Environment(AppState.self) var appState
@@ -253,12 +266,18 @@ struct SearchSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
+    @State private var searchScope: SearchScope = .recordings
     @State private var searchQuery = ""
     @State private var selectedTagIDs: Set<UUID> = []
     @State private var selectedRecording: RecordingItem?
+    @State private var selectedAlbum: Album?
 
-    private var searchResults: [RecordingItem] {
+    private var recordingResults: [RecordingItem] {
         appState.searchRecordings(query: searchQuery, filterTagIDs: selectedTagIDs)
+    }
+
+    private var albumResults: [Album] {
+        appState.searchAlbums(query: searchQuery)
     }
 
     var body: some View {
@@ -267,11 +286,20 @@ struct SearchSheetView: View {
                 Color(.systemBackground).ignoresSafeArea()
 
                 VStack(spacing: 16) {
+                    // Scope picker
+                    Picker("Search Scope", selection: $searchScope) {
+                        ForEach(SearchScope.allCases, id: \.self) { scope in
+                            Text(scope.displayName).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+
                     // Search field
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.secondary)
-                        TextField("Search recordings...", text: $searchQuery)
+                        TextField(searchScope == .recordings ? "Search recordings..." : "Search albums...", text: $searchQuery)
                             .foregroundColor(.primary)
                     }
                     .padding(12)
@@ -279,6 +307,222 @@ struct SearchSheetView: View {
                     .cornerRadius(10)
                     .padding(.horizontal)
 
+                    // Tag filter chips (only for Recordings scope)
+                    if searchScope == .recordings && !appState.tags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(appState.tags) { tag in
+                                    TagFilterChip(
+                                        tag: tag,
+                                        isSelected: selectedTagIDs.contains(tag.id)
+                                    ) {
+                                        if selectedTagIDs.contains(tag.id) {
+                                            selectedTagIDs.remove(tag.id)
+                                        } else {
+                                            selectedTagIDs.insert(tag.id)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                    }
+
+                    // Results
+                    if searchScope == .recordings {
+                        recordingsResultsView
+                    } else {
+                        albumsResultsView
+                    }
+                }
+                .padding(.top)
+            }
+            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(item: $selectedRecording) { recording in
+                RecordingDetailView(recording: recording)
+            }
+            .sheet(item: $selectedAlbum) { album in
+                AlbumDetailSheet(album: album)
+            }
+            .onChange(of: searchScope) { _, _ in
+                // Clear tag filters when switching to albums
+                if searchScope == .albums {
+                    selectedTagIDs.removeAll()
+                }
+            }
+        }
+    }
+
+    // MARK: - Recordings Results View
+
+    @ViewBuilder
+    private var recordingsResultsView: some View {
+        if recordingResults.isEmpty {
+            Spacer()
+            if searchQuery.isEmpty && selectedTagIDs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Search your recordings")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Search by title, notes, location, tags, or album")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No recordings found")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                }
+            }
+            Spacer()
+        } else {
+            List {
+                ForEach(recordingResults) { recording in
+                    SearchResultRow(recording: recording)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedRecording = recording
+                        }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    // MARK: - Albums Results View
+
+    @ViewBuilder
+    private var albumsResultsView: some View {
+        if albumResults.isEmpty {
+            Spacer()
+            if searchQuery.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "square.stack")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Search your albums")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Find albums by name")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "square.stack.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No albums found")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                }
+            }
+            Spacer()
+        } else {
+            List {
+                ForEach(albumResults) { album in
+                    AlbumSearchRow(album: album)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedAlbum = album
+                        }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+// MARK: - Album Search Row
+
+struct AlbumSearchRow: View {
+    @Environment(AppState.self) var appState
+    let album: Album
+
+    private var recordingCount: Int {
+        appState.recordingCount(in: album)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.stack.fill")
+                .font(.system(size: 20))
+                .foregroundColor(.primary)
+                .frame(width: 36, height: 36)
+                .background(Color(.systemGray4))
+                .cornerRadius(6)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(album.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                Text("\(recordingCount) recording\(recordingCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Album Detail Sheet
+
+struct AlbumDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    let album: Album
+
+    @State private var selectedTagIDs: Set<UUID> = []
+    @State private var selectedRecording: RecordingItem?
+
+    private var albumRecordings: [RecordingItem] {
+        let recordings = appState.recordings(in: album)
+
+        // Filter by tags if any selected
+        if selectedTagIDs.isEmpty {
+            return recordings
+        }
+
+        return recordings.filter { recording in
+            !selectedTagIDs.isDisjoint(with: Set(recording.tagIDs))
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(.systemBackground).ignoresSafeArea()
+
+                VStack(spacing: 16) {
                     // Tag filter chips
                     if !appState.tags.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -300,28 +544,19 @@ struct SearchSheetView: View {
                         }
                     }
 
-                    // Results
-                    if searchResults.isEmpty {
+                    // Recordings list
+                    if albumRecordings.isEmpty {
                         Spacer()
-                        if searchQuery.isEmpty && selectedTagIDs.isEmpty {
-                            VStack(spacing: 12) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 48))
-                                    .foregroundColor(.secondary)
-                                Text("Search your recordings")
+                        VStack(spacing: 12) {
+                            Image(systemName: "waveform.circle")
+                                .font(.system(size: 48))
+                                .foregroundColor(.secondary)
+                            if selectedTagIDs.isEmpty {
+                                Text("No recordings in this album")
                                     .font(.headline)
                                     .foregroundColor(.primary)
-                                Text("Search by title, notes, location, tags, or album")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                        } else {
-                            VStack(spacing: 12) {
-                                Image(systemName: "doc.text.magnifyingglass")
-                                    .font(.system(size: 48))
-                                    .foregroundColor(.secondary)
-                                Text("No results found")
+                            } else {
+                                Text("No recordings match selected tags")
                                     .font(.headline)
                                     .foregroundColor(.primary)
                             }
@@ -329,7 +564,7 @@ struct SearchSheetView: View {
                         Spacer()
                     } else {
                         List {
-                            ForEach(searchResults) { recording in
+                            ForEach(albumRecordings) { recording in
                                 SearchResultRow(recording: recording)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
@@ -344,7 +579,7 @@ struct SearchSheetView: View {
                 }
                 .padding(.top)
             }
-            .navigationTitle("Search")
+            .navigationTitle(album.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -357,6 +592,8 @@ struct SearchSheetView: View {
         }
     }
 }
+
+// MARK: - Tag Filter Chip
 
 struct TagFilterChip: View {
     let tag: Tag
@@ -380,6 +617,8 @@ struct TagFilterChip: View {
         }
     }
 }
+
+// MARK: - Search Result Row
 
 struct SearchResultRow: View {
     @Environment(AppState.self) var appState

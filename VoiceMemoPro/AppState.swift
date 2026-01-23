@@ -155,6 +155,22 @@ final class AppState {
         return updated
     }
 
+    // MARK: - Album Search Helpers
+
+    func recordings(in album: Album) -> [RecordingItem] {
+        recordings.filter { $0.albumID == album.id }
+    }
+
+    func recordingCount(in album: Album) -> Int {
+        recordings.filter { $0.albumID == album.id }.count
+    }
+
+    func searchAlbums(query: String) -> [Album] {
+        guard !query.isEmpty else { return albums }
+        let lowercasedQuery = query.lowercased()
+        return albums.filter { $0.name.lowercased().contains(lowercasedQuery) }
+    }
+
     // MARK: - Search
 
     func searchRecordings(query: String, filterTagIDs: Set<UUID> = []) -> [RecordingItem] {
