@@ -18,12 +18,17 @@ struct RecordingsListView: View {
     @State private var showShareSheet = false
     @State private var exportedURL: URL?
 
+    // Single recording actions
+    @State private var recordingToMove: RecordingItem?
+    @State private var showMoveToAlbumSheet = false
+
     var body: some View {
         Group {
             if appState.activeRecordings.isEmpty {
                 emptyState
             } else {
                 VStack(spacing: 0) {
+                    listHeader
                     if isSelectionMode {
                         selectionHeader
                     }
@@ -52,6 +57,11 @@ struct RecordingsListView: View {
                 ShareSheet(items: [url])
             }
         }
+        .sheet(isPresented: $showMoveToAlbumSheet) {
+            if let recording = recordingToMove {
+                MoveToAlbumSheet(recording: recording)
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -67,6 +77,29 @@ struct RecordingsListView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
+    }
+
+    private var listHeader: some View {
+        HStack {
+            Text("Recordings")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            if !isSelectionMode {
+                Button {
+                    isSelectionMode = true
+                } label: {
+                    Text("Select")
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 
     private var selectionHeader: some View {
@@ -118,12 +151,27 @@ struct RecordingsListView: View {
                         selectedRecordingIDs.insert(recording.id)
                     }
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         appState.moveToTrash(recording)
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
+
+                    Button {
+                        recordingToMove = recording
+                        showMoveToAlbumSheet = true
+                    } label: {
+                        Label("Album", systemImage: "square.stack")
+                    }
+                    .tint(.purple)
+
+                    Button {
+                        shareRecording(recording)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .tint(.blue)
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
                     Button {
@@ -135,13 +183,6 @@ struct RecordingsListView: View {
                         )
                     }
                     .tint(.pink)
-
-                    Button {
-                        shareRecording(recording)
-                    } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    .tint(.blue)
                 }
                 .listRowBackground(Color.clear)
             }
@@ -335,6 +376,68 @@ struct TagChipSmall: View {
     }
 }
 
+// MARK: - Move to Album Sheet (Single Recording, Searchable)
+
+struct MoveToAlbumSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    let recording: RecordingItem
+    @State private var searchQuery = ""
+
+    private var filteredAlbums: [Album] {
+        if searchQuery.isEmpty {
+            return appState.albums
+        }
+        return appState.albums.filter {
+            $0.name.lowercased().contains(searchQuery.lowercased())
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(filteredAlbums) { album in
+                    Button {
+                        _ = appState.setAlbum(album, for: recording)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.stack")
+                                .foregroundColor(.purple)
+                                .frame(width: 24)
+                            Text(album.name)
+                                .foregroundColor(.primary)
+                            if album.isSystem {
+                                Text("DEFAULT")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange.opacity(0.2))
+                                    .cornerRadius(4)
+                            }
+                            Spacer()
+                            if recording.albumID == album.id {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $searchQuery, prompt: "Search albums")
+            .navigationTitle("Move to Album")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Batch Album Picker
 
 struct BatchAlbumPickerSheet: View {
@@ -344,20 +447,34 @@ struct BatchAlbumPickerSheet: View {
     let selectedRecordingIDs: Set<UUID>
     let onComplete: () -> Void
 
+    @State private var searchQuery = ""
+
+    private var filteredAlbums: [Album] {
+        if searchQuery.isEmpty {
+            return appState.albums
+        }
+        return appState.albums.filter {
+            $0.name.lowercased().contains(searchQuery.lowercased())
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                ForEach(appState.albums) { album in
+                ForEach(filteredAlbums) { album in
                     Button {
                         appState.setAlbumForRecordings(album, recordingIDs: selectedRecordingIDs)
                         dismiss()
                         onComplete()
                     } label: {
                         HStack {
+                            Image(systemName: "square.stack")
+                                .foregroundColor(.purple)
+                                .frame(width: 24)
                             Text(album.name)
                                 .foregroundColor(.primary)
                             if album.isSystem {
-                                Text("SYSTEM")
+                                Text("DEFAULT")
                                     .font(.caption2)
                                     .foregroundColor(.orange)
                                     .padding(.horizontal, 4)
@@ -370,6 +487,7 @@ struct BatchAlbumPickerSheet: View {
                     }
                 }
             }
+            .searchable(text: $searchQuery, prompt: "Search albums")
             .navigationTitle("Move to Album")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
