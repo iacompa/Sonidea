@@ -37,33 +37,29 @@ class RecordButtonPositionManager: ObservableObject {
     private let posXKey = "recordButtonPosX"
     private let posYKey = "recordButtonPosY"
 
-    // Normalized position (0...1)
-    @Published var normalizedX: CGFloat
-    @Published var normalizedY: CGFloat
-
-    // Default position: bottom center
-    static let defaultNormalizedX: CGFloat = 0.5
-    static let defaultNormalizedY: CGFloat = 0.92
+    // Stored offset from default position
+    @Published var offsetX: CGFloat
+    @Published var offsetY: CGFloat
 
     init() {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: posXKey) != nil {
-            normalizedX = CGFloat(defaults.double(forKey: posXKey))
-            normalizedY = CGFloat(defaults.double(forKey: posYKey))
+            offsetX = CGFloat(defaults.double(forKey: posXKey))
+            offsetY = CGFloat(defaults.double(forKey: posYKey))
         } else {
-            normalizedX = Self.defaultNormalizedX
-            normalizedY = Self.defaultNormalizedY
+            offsetX = 0
+            offsetY = 0
         }
     }
 
     func save() {
-        UserDefaults.standard.set(Double(normalizedX), forKey: posXKey)
-        UserDefaults.standard.set(Double(normalizedY), forKey: posYKey)
+        UserDefaults.standard.set(Double(offsetX), forKey: posXKey)
+        UserDefaults.standard.set(Double(offsetY), forKey: posYKey)
     }
 
     func reset() {
-        normalizedX = Self.defaultNormalizedX
-        normalizedY = Self.defaultNormalizedY
+        offsetX = 0
+        offsetY = 0
         UserDefaults.standard.removeObject(forKey: posXKey)
         UserDefaults.standard.removeObject(forKey: posYKey)
     }
@@ -77,15 +73,14 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showTipJar = false
 
-    // Record button position
+    // Record button position - using offset-based approach for smooth drag
     @StateObject private var buttonPosition = RecordButtonPositionManager.shared
-    @State private var dragOffset: CGSize = .zero
-    @State private var isDragging = false
+    @GestureState private var dragTranslation: CGSize = .zero
 
     // Layout constants
-    private let topBarHeight: CGFloat = 64
+    private let topBarHeight: CGFloat = 56
     private let buttonRadius: CGFloat = 40
-    private let edgePadding: CGFloat = 16
+    private let edgePadding: CGFloat = 20
 
     var body: some View {
         GeometryReader { geometry in
@@ -93,137 +88,42 @@ struct ContentView: View {
             let screenWidth = geometry.size.width
             let screenHeight = geometry.size.height
 
-            // Calculate button position bounds
+            // Default button position: bottom center
+            let defaultX = screenWidth / 2
+            let defaultY = screenHeight - safeArea.bottom - buttonRadius - 24
+
+            // Calculate bounds
             let minX = edgePadding + buttonRadius
             let maxX = screenWidth - edgePadding - buttonRadius
-            let minY = safeArea.top + topBarHeight + buttonRadius + edgePadding
-            let maxY = screenHeight - safeArea.bottom - buttonRadius - edgePadding
+            let minY = safeArea.top + topBarHeight + buttonRadius + 16
+            let maxY = screenHeight - safeArea.bottom - buttonRadius - 16
 
-            // Current button position from normalized coordinates
-            let buttonX = buttonPosition.normalizedX * screenWidth
-            let buttonY = buttonPosition.normalizedY * screenHeight
+            // Current position = default + stored offset + active drag
+            let rawX = defaultX + buttonPosition.offsetX + dragTranslation.width
+            let rawY = defaultY + buttonPosition.offsetY + dragTranslation.height
+            let buttonX = clamp(rawX, min: minX, max: maxX)
+            let buttonY = clamp(rawY, min: minY, max: maxY)
 
-            // Apply drag offset and clamp
-            let targetX = clamp(buttonX + dragOffset.width, min: minX, max: maxX)
-            let targetY = clamp(buttonY + dragOffset.height, min: minY, max: maxY)
+            ZStack(alignment: .top) {
+                // Layer 1: Main Content (fills screen)
+                mainContentLayer(safeArea: safeArea)
 
-            ZStack {
-                // Background - only for non-map routes
-                if currentRoute != .map {
-                    Color(.systemBackground).ignoresSafeArea()
-                }
+                // Layer 2: Fixed Top Bar (always on top, never moves)
+                fixedTopBar(safeArea: safeArea)
 
-                // Main Content Layer
-                Group {
-                    switch currentRoute {
-                    case .recordings:
-                        VStack(spacing: 0) {
-                            // Top Navigation Bar
-                            topNavigationBar
-                                .padding(.horizontal, 12)
-                                .padding(.top, 8)
-
-                            // Recording Status (when recording)
-                            if appState.recorder.isRecording {
-                                RecordingStatusView(
-                                    duration: appState.recorder.currentDuration,
-                                    liveSamples: appState.recorder.liveMeterSamples
-                                )
-                                .padding(.top, 8)
-                                .padding(.horizontal, 16)
-                            }
-
-                            // Recordings list
-                            RecordingsListView()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-
-                    case .map:
-                        // Full-screen map with overlay top bar
-                        ZStack(alignment: .top) {
-                            // Map fills entire screen
-                            GPSInsightsMapView()
-                                .ignoresSafeArea()
-
-                            // Overlay top bar with blur background
-                            VStack(spacing: 0) {
-                                topNavigationBar
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, safeArea.top + 8)
-                                    .padding(.bottom, 8)
-                                    .background(
-                                        Rectangle()
-                                            .fill(.ultraThinMaterial)
-                                            .ignoresSafeArea(edges: .top)
-                                    )
-
-                                // Recording Status (when recording)
-                                if appState.recorder.isRecording {
-                                    RecordingStatusView(
-                                        duration: appState.recorder.currentDuration,
-                                        liveSamples: appState.recorder.liveMeterSamples
-                                    )
-                                    .padding(.top, 8)
-                                    .padding(.horizontal, 16)
-                                    .background(
-                                        Rectangle()
-                                            .fill(.ultraThinMaterial)
-                                    )
-                                }
-
-                                Spacer()
-                            }
-                        }
-                    }
-                }
-
-                // Floating Record Button - Free Drag (no snap)
-                VoiceMemosRecordButton {
-                    handleRecordTap()
-                }
-                .position(x: targetX, y: targetY)
-                .scaleEffect(isDragging ? 1.1 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
-                .shadow(color: isDragging ? .black.opacity(0.3) : .black.opacity(0.15), radius: isDragging ? 10 : 5, y: isDragging ? 5 : 2)
-                .zIndex(100) // Ensure button is above everything
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            isDragging = true
-                            dragOffset = value.translation
-                        }
-                        .onEnded { value in
-                            isDragging = false
-
-                            // Calculate new position
-                            let newX = buttonX + value.translation.width
-                            let newY = buttonY + value.translation.height
-
-                            // Clamp to bounds (no snapping - free position)
-                            let clampedX = clamp(newX, min: minX, max: maxX)
-                            let clampedY = clamp(newY, min: minY, max: maxY)
-
-                            // Convert back to normalized and save
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                buttonPosition.normalizedX = clampedX / screenWidth
-                                buttonPosition.normalizedY = clampedY / screenHeight
-                            }
-                            buttonPosition.save()
-
-                            // Reset drag offset
-                            dragOffset = .zero
-                        }
-                )
-                .contextMenu {
-                    Button(role: .destructive) {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                            buttonPosition.reset()
-                        }
-                    } label: {
-                        Label("Reset Button Position", systemImage: "arrow.counterclockwise")
-                    }
+                // Layer 3: Floating Record Button (only on Recordings screen)
+                if currentRoute == .recordings {
+                    floatingRecordButton(
+                        x: buttonX,
+                        y: buttonY,
+                        defaultX: defaultX,
+                        defaultY: defaultY,
+                        minX: minX, maxX: maxX,
+                        minY: minY, maxY: maxY
+                    )
                 }
             }
+            .ignoresSafeArea()
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
@@ -233,6 +133,111 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showTipJar) {
             TipJarSheetView()
+        }
+    }
+
+    // MARK: - Main Content Layer
+
+    @ViewBuilder
+    private func mainContentLayer(safeArea: EdgeInsets) -> some View {
+        switch currentRoute {
+        case .recordings:
+            Color(.systemBackground)
+                .ignoresSafeArea()
+                .overlay(
+                    VStack(spacing: 0) {
+                        // Space for fixed top bar
+                        Color.clear
+                            .frame(height: safeArea.top + topBarHeight)
+
+                        // Recording HUD (when recording)
+                        if appState.recorder.isRecording {
+                            RecordingHUDCard(
+                                duration: appState.recorder.currentDuration,
+                                liveSamples: appState.recorder.liveMeterSamples
+                            )
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
+                        // Recordings list
+                        RecordingsListView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                )
+
+        case .map:
+            // Full-screen map
+            GPSInsightsMapView()
+                .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - Fixed Top Bar
+
+    private func fixedTopBar(safeArea: EdgeInsets) -> some View {
+        VStack(spacing: 0) {
+            // Top bar with glass background
+            topNavigationBar
+                .padding(.horizontal, 12)
+                .padding(.top, safeArea.top + 8)
+                .padding(.bottom, 8)
+                .background(
+                    Rectangle()
+                        .fill(currentRoute == .map ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color(.systemBackground)))
+                        .ignoresSafeArea(edges: .top)
+                )
+
+            Spacer()
+        }
+    }
+
+    // MARK: - Floating Record Button
+
+    private func floatingRecordButton(
+        x: CGFloat, y: CGFloat,
+        defaultX: CGFloat, defaultY: CGFloat,
+        minX: CGFloat, maxX: CGFloat,
+        minY: CGFloat, maxY: CGFloat
+    ) -> some View {
+        let isDragging = dragTranslation != .zero
+
+        return VoiceMemosRecordButton {
+            handleRecordTap()
+        }
+        .position(x: x, y: y)
+        .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+        .scaleEffect(isDragging ? 1.08 : 1.0)
+        .animation(isDragging ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .updating($dragTranslation) { value, state, _ in
+                    state = value.translation
+                }
+                .onEnded { value in
+                    // Calculate new offset
+                    let newOffsetX = buttonPosition.offsetX + value.translation.width
+                    let newOffsetY = buttonPosition.offsetY + value.translation.height
+
+                    // Clamp the final position
+                    let finalX = clamp(defaultX + newOffsetX, min: minX, max: maxX)
+                    let finalY = clamp(defaultY + newOffsetY, min: minY, max: maxY)
+
+                    // Store offset from default
+                    buttonPosition.offsetX = finalX - defaultX
+                    buttonPosition.offsetY = finalY - defaultY
+                    buttonPosition.save()
+                }
+        )
+        .contextMenu {
+            Button(role: .destructive) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    buttonPosition.reset()
+                }
+            } label: {
+                Label("Reset Button Position", systemImage: "arrow.counterclockwise")
+            }
         }
     }
 
@@ -253,27 +258,31 @@ struct ContentView: View {
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape.fill")
-                        .font(.system(size: 25, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
                 }
 
                 // Map
                 Button {
-                    currentRoute = .map
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        currentRoute = .map
+                    }
                 } label: {
                     Image(systemName: "map.fill")
-                        .font(.system(size: 25, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .foregroundColor(currentRoute == .map ? .accentColor : .primary)
                         .frame(width: 44, height: 44)
                 }
 
                 // Recordings/Home
                 Button {
-                    currentRoute = .recordings
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        currentRoute = .recordings
+                    }
                 } label: {
                     Image(systemName: "waveform")
-                        .font(.system(size: 25, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .foregroundColor(currentRoute == .recordings ? .accentColor : .primary)
                         .frame(width: 44, height: 44)
                 }
@@ -288,7 +297,7 @@ struct ContentView: View {
                     showSearch = true
                 } label: {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 25, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
                 }
@@ -298,7 +307,7 @@ struct ContentView: View {
                     showTipJar = true
                 } label: {
                     Image(systemName: "heart.fill")
-                        .font(.system(size: 25, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
                 }
@@ -347,11 +356,11 @@ struct VoiceMemosRecordButton: View {
 
                 // Inner fill
                 Circle()
-                    .fill(isRecording ? Color.red : Color.red)
+                    .fill(Color.red)
                     .frame(width: 68, height: 68)
 
                 // Mic icon
-                Image(systemName: isRecording ? "mic.fill" : "mic.fill")
+                Image(systemName: "mic.fill")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundColor(.white)
             }
@@ -366,61 +375,90 @@ struct VoiceMemosRecordButton: View {
     }
 }
 
-// MARK: - Recording Status View (Pro-style big panel)
-struct RecordingStatusView: View {
+// MARK: - Premium Recording HUD Card
+
+struct RecordingHUDCard: View {
     let duration: TimeInterval
     let liveSamples: [Float]
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var isPulsing = false
 
-    var body: some View {
-        VStack(spacing: 16) {
-            // Top row: Recording indicator + time
-            HStack {
-                // Pulsing red dot
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 12, height: 12)
-                    .scaleEffect(isPulsing ? 1.2 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 0.6).repeatForever(autoreverses: true),
-                        value: isPulsing
-                    )
+    private var formattedDuration: String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        let tenths = Int((duration.truncatingRemainder(dividingBy: 1)) * 10)
+        return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+    }
 
-                Text("Recording")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
+    private var currentInputName: String {
+        AudioSessionManager.shared.currentInput?.portName ?? "Built-in Microphone"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top section: Recording indicator + Timer
+            HStack(alignment: .center) {
+                // Left: Pulsing dot + Recording label
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 12, height: 12)
+                        .scaleEffect(isPulsing ? 1.3 : 1.0)
+                        .animation(
+                            .easeInOut(duration: 0.6).repeatForever(autoreverses: true),
+                            value: isPulsing
+                        )
+                        .shadow(color: .red.opacity(0.5), radius: isPulsing ? 6 : 2)
+
+                    Text("Recording")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                }
 
                 Spacer()
 
-                // Time display
-                Text(formatDuration(duration))
-                    .font(.system(size: 28, weight: .medium, design: .monospaced))
+                // Right: Large timer
+                Text(formattedDuration)
+                    .font(.system(size: 34, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
                     .foregroundColor(.red)
+                    .contentTransition(.numericText())
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
 
-            // Middle: Live waveform spanning full width
+            // Middle: Waveform visualization
             ZStack {
                 if liveSamples.isEmpty {
-                    // Placeholder when no samples yet
+                    // Placeholder
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(colorScheme == .dark ? Color(.systemGray5) : Color(.systemGray6))
-                        .frame(height: 60)
+                        .fill(Color.primary.opacity(0.05))
+                        .frame(height: 56)
                 } else {
                     LiveWaveformView(samples: liveSamples)
-                        .frame(height: 60)
+                        .frame(height: 56)
                 }
             }
+            .padding(.horizontal, 20)
 
-            // Bottom row: Input indicator + level hint
+            // Divider
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+
+            // Bottom section: Input + Level meter
             HStack {
+                // Input name with icon
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
-                        .font(.caption)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
-                    Text(AudioSessionManager.shared.currentInput?.portName ?? "Built-in Mic")
+                    Text(currentInputName)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -428,36 +466,76 @@ struct RecordingStatusView: View {
 
                 Spacer()
 
-                // Simple level indicator
+                // Level meter
                 if let lastSample = liveSamples.last {
-                    LevelIndicator(level: lastSample)
+                    PremiumLevelMeter(level: lastSample)
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 18)
         }
-        .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
-                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.3 : 0.1), radius: 8, y: 4)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.thinMaterial)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.08), radius: 12, y: 4)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color.red.opacity(0.3), lineWidth: 2)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .onAppear {
             isPulsing = true
         }
     }
+}
 
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        let tenths = Int((duration.truncatingRemainder(dividingBy: 1)) * 10)
-        return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+// MARK: - Premium Level Meter
+
+struct PremiumLevelMeter: View {
+    let level: Float
+
+    private let barCount = 6
+    private let barWidth: CGFloat = 3
+    private let barSpacing: CGFloat = 2
+    private let maxHeight: CGFloat = 16
+
+    private func barHeight(at index: Int) -> CGFloat {
+        let baseHeight: CGFloat = 4
+        let increment = (maxHeight - baseHeight) / CGFloat(barCount - 1)
+        return baseHeight + increment * CGFloat(index)
+    }
+
+    private func isActive(at index: Int) -> Bool {
+        let threshold = Float(index) / Float(barCount)
+        return level >= threshold
+    }
+
+    private func barColor(at index: Int) -> Color {
+        guard isActive(at: index) else {
+            return Color(.systemGray4)
+        }
+        if index >= barCount - 1 {
+            return .red
+        } else if index >= barCount - 2 {
+            return .orange
+        } else {
+            return .green
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: barSpacing) {
+            ForEach(0..<barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(barColor(at: index))
+                    .frame(width: barWidth, height: barHeight(at: index))
+            }
+        }
     }
 }
 
-// MARK: - Level Indicator
+// MARK: - Legacy Level Indicator (kept for compatibility)
 struct LevelIndicator: View {
     let level: Float
 
