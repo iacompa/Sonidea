@@ -19,10 +19,16 @@ struct RecordingDetailView: View {
 
     @State private var showManageTags = false
     @State private var showChooseAlbum = false
+    @State private var showShareSheet = false
 
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
     @State private var isLoadingWaveform = true
+
+    @State private var isTranscribing = false
+    @State private var transcriptionError: String?
+    @State private var exportedWAVURL: URL?
+    @State private var isExporting = false
 
     init(recording: RecordingItem) {
         _editedTitle = State(initialValue: recording.title)
@@ -48,6 +54,19 @@ struct RecordingDetailView: View {
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        shareRecording()
+                    } label: {
+                        if isExporting {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                    }
+                    .disabled(isExporting)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         saveChanges()
@@ -68,6 +87,11 @@ struct RecordingDetailView: View {
             }
             .sheet(isPresented: $showChooseAlbum) {
                 ChooseAlbumSheet(recording: $currentRecording)
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let url = exportedWAVURL {
+                    ShareSheet(items: [url])
+                }
             }
         }
     }
@@ -246,6 +270,77 @@ struct RecordingDetailView: View {
                     .cornerRadius(8)
             }
 
+            // Transcription
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Transcription")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                    Spacer()
+                    if !currentRecording.transcript.isEmpty {
+                        Button("Clear") {
+                            currentRecording.transcript = ""
+                            appState.updateTranscript("", for: currentRecording.id)
+                        }
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    }
+                }
+
+                if isTranscribing {
+                    HStack {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                        Text("Transcribing...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                } else if let error = transcriptionError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.red)
+                        Button("Try Again") {
+                            transcribeRecording()
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                } else if currentRecording.transcript.isEmpty {
+                    Button {
+                        transcribeRecording()
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.mic")
+                            Text("Transcribe Recording")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                    }
+                } else {
+                    Text(currentRecording.transcript)
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                }
+            }
+
             // Notes
             VStack(alignment: .leading, spacing: 8) {
                 Text("Notes")
@@ -298,6 +393,36 @@ struct RecordingDetailView: View {
             await MainActor.run {
                 waveformSamples = samples
                 isLoadingWaveform = false
+            }
+        }
+    }
+
+    private func transcribeRecording() {
+        isTranscribing = true
+        transcriptionError = nil
+        Task {
+            do {
+                let transcript = try await TranscriptionManager.shared.transcribe(audioURL: currentRecording.fileURL)
+                currentRecording.transcript = transcript
+                appState.updateTranscript(transcript, for: currentRecording.id)
+                isTranscribing = false
+            } catch {
+                transcriptionError = error.localizedDescription
+                isTranscribing = false
+            }
+        }
+    }
+
+    private func shareRecording() {
+        isExporting = true
+        Task {
+            do {
+                let wavURL = try await AudioExporter.shared.exportToWAV(recording: currentRecording)
+                exportedWAVURL = wavURL
+                isExporting = false
+                showShareSheet = true
+            } catch {
+                isExporting = false
             }
         }
     }

@@ -688,6 +688,12 @@ struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
+    @State private var isExporting = false
+    @State private var exportProgress: String = ""
+    @State private var showShareSheet = false
+    @State private var exportedZIPURL: URL?
+    @State private var showAlbumPicker = false
+
     var body: some View {
         @Bindable var appState = appState
 
@@ -704,6 +710,46 @@ struct SettingsSheetView: View {
                     Text("Appearance")
                 } footer: {
                     Text("Choose how the app appears. System follows your device settings.")
+                }
+
+                Section {
+                    Button {
+                        exportAllRecordings()
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundColor(.blue)
+                            Text("Export All Recordings")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if isExporting && exportProgress == "all" {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                            }
+                        }
+                    }
+                    .disabled(isExporting || appState.recordings.isEmpty)
+
+                    Button {
+                        showAlbumPicker = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.stack")
+                                .foregroundColor(.blue)
+                            Text("Export Album...")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if isExporting && exportProgress == "album" {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                            }
+                        }
+                    }
+                    .disabled(isExporting || appState.albums.isEmpty)
+                } header: {
+                    Text("Export")
+                } footer: {
+                    Text("Export recordings as WAV files in a ZIP archive with metadata.")
                 }
 
                 Section {
@@ -724,6 +770,98 @@ struct SettingsSheetView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let url = exportedZIPURL {
+                    ShareSheet(items: [url])
+                }
+            }
+            .sheet(isPresented: $showAlbumPicker) {
+                ExportAlbumPickerSheet { album in
+                    exportAlbum(album)
+                }
+            }
+        }
+    }
+
+    private func exportAllRecordings() {
+        isExporting = true
+        exportProgress = "all"
+        Task {
+            do {
+                let zipURL = try await AudioExporter.shared.exportRecordings(
+                    appState.recordings,
+                    scope: .all,
+                    albumLookup: { appState.album(for: $0) },
+                    tagsLookup: { appState.tags(for: $0) }
+                )
+                exportedZIPURL = zipURL
+                isExporting = false
+                exportProgress = ""
+                showShareSheet = true
+            } catch {
+                isExporting = false
+                exportProgress = ""
+            }
+        }
+    }
+
+    private func exportAlbum(_ album: Album) {
+        isExporting = true
+        exportProgress = "album"
+        Task {
+            do {
+                let recordings = appState.recordings(in: album)
+                let zipURL = try await AudioExporter.shared.exportRecordings(
+                    recordings,
+                    scope: .album(album),
+                    albumLookup: { appState.album(for: $0) },
+                    tagsLookup: { appState.tags(for: $0) }
+                )
+                exportedZIPURL = zipURL
+                isExporting = false
+                exportProgress = ""
+                showShareSheet = true
+            } catch {
+                isExporting = false
+                exportProgress = ""
+            }
+        }
+    }
+}
+
+// MARK: - Export Album Picker Sheet
+struct ExportAlbumPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+
+    let onSelect: (Album) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(appState.albums) { album in
+                    Button {
+                        dismiss()
+                        onSelect(album)
+                    } label: {
+                        HStack {
+                            Text(album.name)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("\(appState.recordingCount(in: album)) recordings")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Select Album")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
                 }
             }
         }

@@ -67,6 +67,14 @@ final class AppState {
         saveRecordings()
     }
 
+    func updateTranscript(_ text: String, for recordingID: UUID) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
+            return
+        }
+        recordings[index].transcript = text
+        saveRecordings()
+    }
+
     func deleteRecording(_ recording: RecordingItem) {
         try? FileManager.default.removeItem(at: recording.fileURL)
         recordings.removeAll { $0.id == recording.id }
@@ -207,6 +215,10 @@ final class AppState {
                 // Match album name
                 if let album = album(for: recording.albumID),
                    album.name.lowercased().contains(lowercasedQuery) {
+                    return true
+                }
+                // Match transcript
+                if recording.transcript.lowercased().contains(lowercasedQuery) {
                     return true
                 }
                 return false

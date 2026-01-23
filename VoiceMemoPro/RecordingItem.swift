@@ -18,6 +18,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     var tagIDs: [UUID]
     var albumID: UUID?
     var locationLabel: String
+    var transcript: String
 
     var formattedDuration: String {
         let minutes = Int(duration) / 60
@@ -41,7 +42,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         notes: String = "",
         tagIDs: [UUID] = [],
         albumID: UUID? = nil,
-        locationLabel: String = ""
+        locationLabel: String = "",
+        transcript: String = ""
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -52,6 +54,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.tagIDs = tagIDs
         self.albumID = albumID
         self.locationLabel = locationLabel
+        self.transcript = transcript
     }
 }
 
