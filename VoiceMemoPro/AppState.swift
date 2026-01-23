@@ -703,7 +703,38 @@ final class AppState {
         if tags.isEmpty {
             tags = Tag.defaultTags
             saveTags()
+        } else {
+            // Ensure the protected favorite tag always exists
+            ensureFavoriteTagExists()
         }
+    }
+
+    private func ensureFavoriteTagExists() {
+        // Check if favorite tag exists by its stable ID
+        if !tags.contains(where: { $0.id == Tag.favoriteTagID }) {
+            // Recreate the favorite tag with default color
+            let favoriteTag = Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")
+            tags.insert(favoriteTag, at: 0)
+            saveTags()
+        }
+    }
+
+    // MARK: - Album Rename
+
+    func renameAlbum(_ album: Album, to newName: String) -> Bool {
+        // System albums cannot be renamed
+        guard album.canRename else { return false }
+
+        guard let index = albums.firstIndex(where: { $0.id == album.id }) else {
+            return false
+        }
+
+        let trimmedName = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty else { return false }
+
+        albums[index].name = trimmedName
+        saveAlbums()
+        return true
     }
 }
 

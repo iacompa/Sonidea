@@ -998,8 +998,9 @@ struct ChooseAlbumSheet: View {
                                 if album.isSystem {
                                     Text("SYSTEM")
                                         .font(.caption2)
+                                        .fontWeight(.bold)
                                         .foregroundColor(.orange)
-                                        .padding(.horizontal, 4)
+                                        .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(Color.orange.opacity(0.2))
                                         .cornerRadius(4)

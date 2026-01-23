@@ -18,6 +18,11 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
         !isSystem
     }
 
+    // System albums cannot be renamed
+    var canRename: Bool {
+        !isSystem
+    }
+
     init(id: UUID = UUID(), name: String, createdAt: Date = Date(), isSystem: Bool = false) {
         self.id = id
         self.name = name
