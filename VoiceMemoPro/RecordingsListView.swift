@@ -7,12 +7,12 @@
 
 import SwiftUI
 
-// MARK: - Selection Bar Width Preference Key
+// MARK: - Anchor Preference Key for Select All Button
 
-struct SelectionBarWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+struct SelectAllAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
@@ -34,12 +34,10 @@ struct RecordingsListView: View {
     @State private var recordingToMove: RecordingItem?
     @State private var showMoveToAlbumSheet = false
 
-    // Measured selection bar width
-    @State private var selectionBarWidth: CGFloat = 0
-
-    // Header height for positioning overlay
-    private let listHeaderHeight: CGFloat = 44
-    private let selectionHeaderHeight: CGFloat = 44
+    // Menu dimensions
+    private let menuWidth: CGFloat = 250
+    private let menuRowHeight: CGFloat = 44
+    private var menuHeight: CGFloat { menuRowHeight * 4 + 3 } // 4 rows + 3 dividers
 
     // Animation configuration
     private var menuAnimation: Animation {
@@ -53,33 +51,57 @@ struct RecordingsListView: View {
             if appState.activeRecordings.isEmpty {
                 emptyState
             } else {
-                ZStack(alignment: .top) {
-                    // Layer 1: Main content (header + list)
-                    VStack(spacing: 0) {
-                        listHeader
+                GeometryReader { outerGeo in
+                    ZStack(alignment: .topTrailing) {
+                        // Layer 1: Main content (header + list)
+                        VStack(spacing: 0) {
+                            listHeader
 
-                        if isSelectionMode {
-                            selectionHeader
+                            if isSelectionMode {
+                                selectionHeader
+                            }
+
+                            recordingsList
                         }
 
-                        recordingsList
-                    }
-
-                    // Layer 2: Floating dropdown overlay
-                    if isSelectionMode && showActionsMenu {
-                        // Invisible tap catcher to dismiss menu
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(menuAnimation) {
-                                    showActionsMenu = false
+                        // Layer 2: Floating dropdown overlay
+                        if isSelectionMode && showActionsMenu {
+                            // Invisible tap catcher to dismiss menu
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(menuAnimation) {
+                                        showActionsMenu = false
+                                    }
                                 }
-                            }
-                            .zIndex(1)
+                                .zIndex(1)
+                        }
+                    }
+                    .overlayPreferenceValue(SelectAllAnchorKey.self) { anchor in
+                        if isSelectionMode && showActionsMenu, let anchor = anchor {
+                            GeometryReader { geo in
+                                let rect = geo[anchor]
+                                let screenWidth = geo.size.width
 
-                        // Compact floating menu - constrained width
-                        compactFloatingMenu
+                                // Calculate X position: align menu's right edge with button's right edge
+                                // But clamp so menu doesn't go off-screen
+                                let idealX = rect.maxX - menuWidth / 2
+                                let minX = menuWidth / 2 + 16 // 16pt from left edge
+                                let maxX = screenWidth - menuWidth / 2 - 16 // 16pt from right edge
+                                let clampedX = min(max(idealX, minX), maxX)
+
+                                // Y position: directly below the button with 8pt gap
+                                let menuY = rect.maxY + menuHeight / 2 + 8
+
+                                compactFloatingMenu
+                                    .position(x: clampedX, y: menuY)
+                                    .transition(.asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .move(edge: .top).combined(with: .opacity)
+                                    ))
+                            }
                             .zIndex(2)
+                        }
                     }
                 }
             }
@@ -190,6 +212,7 @@ struct RecordingsListView: View {
 
             Spacer()
 
+            // Select All button with anchor preference
             Button(selectedRecordingIDs.count == appState.activeRecordings.count ? "Deselect All" : "Select All") {
                 withAnimation(menuAnimation) {
                     if selectedRecordingIDs.count == appState.activeRecordings.count {
@@ -199,18 +222,11 @@ struct RecordingsListView: View {
                     }
                 }
             }
+            .anchorPreference(key: SelectAllAnchorKey.self, value: .bounds) { $0 }
         }
         .padding(.horizontal, 16)
-        .frame(height: selectionHeaderHeight)
-        .background(
-            GeometryReader { geo in
-                Color(.secondarySystemBackground)
-                    .preference(key: SelectionBarWidthKey.self, value: geo.size.width)
-            }
-        )
-        .onPreferenceChange(SelectionBarWidthKey.self) { width in
-            selectionBarWidth = width
-        }
+        .frame(height: 44)
+        .background(Color(.secondarySystemBackground))
     }
 
     // MARK: - Compact Floating Actions Menu
@@ -270,6 +286,7 @@ struct RecordingsListView: View {
                 }
             }
         }
+        .frame(width: menuWidth)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -277,14 +294,6 @@ struct RecordingsListView: View {
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
-        // Constrain width to match selection bar (minus padding) or max 280
-        .frame(width: min(selectionBarWidth > 0 ? selectionBarWidth - 32 : 280, 280))
-        // Position below headers
-        .padding(.top, listHeaderHeight + selectionHeaderHeight + 6)
-        .transition(.asymmetric(
-            insertion: .move(edge: .top).combined(with: .opacity),
-            removal: .move(edge: .top).combined(with: .opacity)
-        ))
     }
 
     // MARK: - Recordings List
