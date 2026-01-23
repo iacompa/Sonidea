@@ -38,7 +38,7 @@ struct VoiceMemoProApp: App {
 
     private func handleDeepLink(_ url: URL) {
         // Handle voicememopro://record URL scheme
-        if url.host == "record" || url.path == "/record" {
+        if DeepLinks.isRecordURL(url) {
             AppState.setPendingStartRecording()
             appState.consumePendingStartRecording()
         }

@@ -700,11 +700,71 @@ struct SettingsSheetView: View {
     @State private var showEmptyTrashAlert = false
     @State private var showFileImporter = false
 
+    // Quick Access help sheets
+    @State private var showLockScreenHelp = false
+    @State private var showActionButtonHelp = false
+    @State private var showSiriShortcutsHelp = false
+
     var body: some View {
         @Bindable var appState = appState
 
         NavigationStack {
             List {
+                // MARK: Quick Access
+                Section {
+                    Button {
+                        showLockScreenHelp = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "lock.rectangle.on.rectangle")
+                                .foregroundColor(.blue)
+                                .frame(width: 24)
+                            Text("Lock Screen Widget")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Button {
+                        showActionButtonHelp = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "button.horizontal.top.press")
+                                .foregroundColor(.blue)
+                                .frame(width: 24)
+                            Text("Action Button")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Button {
+                        showSiriShortcutsHelp = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "mic.badge.plus")
+                                .foregroundColor(.blue)
+                                .frame(width: 24)
+                            Text("Siri & Shortcuts")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Quick Access")
+                } footer: {
+                    Text("Set up fast ways to start recording from anywhere.")
+                }
+
                 // MARK: Recording Quality
                 Section {
                     Picker("Quality", selection: $appState.appSettings.recordingQuality) {
@@ -937,6 +997,16 @@ struct SettingsSheetView: View {
                 }
             } message: {
                 Text("This will permanently delete \(appState.trashedCount) items. This cannot be undone.")
+            }
+            // Quick Access help sheets
+            .sheet(isPresented: $showLockScreenHelp) {
+                LockScreenWidgetHelpSheet()
+            }
+            .sheet(isPresented: $showActionButtonHelp) {
+                ActionButtonHelpSheet()
+            }
+            .sheet(isPresented: $showSiriShortcutsHelp) {
+                SiriShortcutsHelpSheet()
             }
         }
     }
