@@ -30,6 +30,7 @@ final class AppState {
     }
 
     let recorder = RecorderManager()
+    let locationManager = LocationManager()
 
     private(set) var nextRecordingNumber: Int = 1
 
@@ -144,6 +145,16 @@ final class AppState {
         saveRecordings()
     }
 
+    func updateRecordingLocation(recordingID: UUID, latitude: Double, longitude: Double, label: String) {
+        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
+            return
+        }
+        recordings[index].latitude = latitude
+        recordings[index].longitude = longitude
+        recordings[index].locationLabel = label
+        saveRecordings()
+    }
+
     func recording(for id: UUID) -> RecordingItem? {
         recordings.first { $0.id == id }
     }
@@ -249,6 +260,14 @@ final class AppState {
         guard let index = tags.firstIndex(where: { $0.id == tag.id }) else {
             return false
         }
+
+        // Protected tags cannot be renamed, only recolored
+        if tag.isProtected {
+            tags[index].colorHex = colorHex
+            saveTags()
+            return true
+        }
+
         // Check for duplicate name (excluding current tag)
         if tagExists(name: name, excludingID: tag.id) {
             return false
@@ -329,15 +348,12 @@ final class AppState {
     }
 
     func isFavorite(_ recording: RecordingItem) -> Bool {
-        guard let favoriteTag = tags.first(where: { $0.name.lowercased() == "favorite" }) else {
-            return false
-        }
-        return recording.tagIDs.contains(favoriteTag.id)
+        recording.tagIDs.contains(Tag.favoriteTagID)
     }
 
-    /// Get the favorite tag ID if it exists
-    var favoriteTagID: UUID? {
-        tags.first(where: { $0.name.lowercased() == "favorite" })?.id
+    /// Get the favorite tag ID (always exists as it's protected)
+    var favoriteTagID: UUID {
+        Tag.favoriteTagID
     }
 
     // MARK: - Album Helpers

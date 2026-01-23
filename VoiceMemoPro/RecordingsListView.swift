@@ -285,6 +285,7 @@ struct RecordingsListView: View {
 
 struct RecordingRow: View {
     @Environment(AppState.self) var appState
+    @Environment(\.colorScheme) var colorScheme
     let recording: RecordingItem
     var isSelectionMode: Bool = false
     var isSelected: Bool = false
@@ -306,10 +307,14 @@ struct RecordingRow: View {
 
             Image(systemName: "waveform")
                 .font(.system(size: 24))
-                .foregroundColor(.primary)
+                .foregroundColor(recording.iconSymbolColor(for: colorScheme))
                 .frame(width: 44, height: 44)
-                .background(recording.iconColor)
+                .background(recording.iconTileBackground(for: colorScheme))
                 .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
+                )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)

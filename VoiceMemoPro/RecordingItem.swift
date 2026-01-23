@@ -42,12 +42,71 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         trashedAt != nil
     }
 
-    // Icon color with fallback to default
+    // Icon color with fallback to default (legacy property)
     var iconColor: Color {
         if let hex = iconColorHex, let color = Color(hex: hex) {
             return color
         }
         return Color(hex: Self.defaultIconColorHex) ?? Color(.systemGray4)
+    }
+
+    // MARK: - Adaptive Icon Colors
+
+    /// Returns the background color for the icon tile, adapting to color scheme
+    func iconTileBackground(for colorScheme: ColorScheme) -> Color {
+        if let hex = iconColorHex, let baseColor = Color(hex: hex) {
+            // User has chosen a custom color
+            if colorScheme == .light {
+                // Light mode: show a lighter, tinted version
+                return baseColor.opacity(0.2)
+            } else {
+                // Dark mode: show a richer version
+                return baseColor.opacity(0.35)
+            }
+        } else {
+            // Default case - no custom color
+            if colorScheme == .light {
+                return Color(.systemGray5)
+            } else {
+                return Color(.systemGray4)
+            }
+        }
+    }
+
+    /// Returns the border color for the icon tile
+    func iconTileBorder(for colorScheme: ColorScheme) -> Color {
+        if let hex = iconColorHex, let baseColor = Color(hex: hex) {
+            // User has chosen a custom color
+            if colorScheme == .light {
+                return baseColor.opacity(0.4)
+            } else {
+                return baseColor.opacity(0.5)
+            }
+        } else {
+            // Default case
+            if colorScheme == .light {
+                return Color(.systemGray4)
+            } else {
+                return Color.clear
+            }
+        }
+    }
+
+    /// Returns the symbol color for the waveform icon
+    func iconSymbolColor(for colorScheme: ColorScheme) -> Color {
+        if let hex = iconColorHex, Color(hex: hex) != nil {
+            // User has chosen a custom color - use the base color for the symbol
+            if colorScheme == .light {
+                // Light mode with tinted bg: use the actual color for contrast
+                return Color(hex: hex) ?? .primary
+            } else {
+                // Dark mode: use white for better visibility on darker bg
+                return .white
+            }
+        } else {
+            // Default case - use primary color
+            return .primary
+        }
     }
 
     // Check if recording has valid coordinates

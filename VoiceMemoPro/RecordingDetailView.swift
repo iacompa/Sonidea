@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import MapKit
 
 struct RecordingDetailView: View {
     @Environment(\.dismiss) private var dismiss
@@ -32,6 +33,13 @@ struct RecordingDetailView: View {
     @State private var isExporting = false
 
     @State private var editedIconColor: Color
+
+    // Location search state
+    @State private var locationSearchQuery = ""
+    @State private var isSearchingLocation = false
+    @State private var locationSearchResults: [MKLocalSearchCompletion] = []
+    @State private var reverseGeocodedName: String?
+    @State private var isLoadingReverseGeocode = false
 
     init(recording: RecordingItem) {
         _editedTitle = State(initialValue: recording.title)
@@ -82,6 +90,7 @@ struct RecordingDetailView: View {
             }
             .onAppear {
                 setupPlayback()
+                loadReverseGeocodedName()
             }
             .onDisappear {
                 savePlaybackPosition()
@@ -313,18 +322,8 @@ struct RecordingDetailView: View {
                 }
             }
 
-            // Location
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Location")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                TextField("Enter location", text: $editedLocationLabel)
-                    .textFieldStyle(.plain)
-                    .padding(12)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-            }
+            // Location Section
+            locationSection
 
             // Icon Color
             VStack(alignment: .leading, spacing: 8) {
@@ -430,6 +429,309 @@ struct RecordingDetailView: View {
                     .cornerRadius(8)
             }
         }
+    }
+
+    // MARK: - Location Section
+
+    @ViewBuilder
+    private var locationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Location")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+
+            if currentRecording.hasCoordinates {
+                // Has GPS coordinates - show pinned location
+                pinnedLocationView
+            } else {
+                // No coordinates - show address search
+                addressSearchView
+            }
+        }
+    }
+
+    private var pinnedLocationView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Pinned location indicator
+            HStack(spacing: 8) {
+                Image(systemName: "mappin.circle.fill")
+                    .foregroundColor(.red)
+                    .font(.system(size: 20))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pinned Location")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+
+                    if isLoadingReverseGeocode {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Loading...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else if let name = reverseGeocodedName, !name.isEmpty {
+                        Text(name)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    } else if !editedLocationLabel.isEmpty {
+                        Text(editedLocationLabel)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    } else if let lat = currentRecording.latitude, let lon = currentRecording.longitude {
+                        Text(String(format: "%.4f, %.4f", lat, lon))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                // Clear location button
+                Button {
+                    clearLocation()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 20))
+                }
+            }
+            .padding(12)
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
+
+            // Editable label
+            TextField("Location label (optional)", text: $editedLocationLabel)
+                .textFieldStyle(.plain)
+                .padding(12)
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+        }
+    }
+
+    private var addressSearchView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Search field
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search for a place or address", text: $locationSearchQuery)
+                    .textFieldStyle(.plain)
+                    .onChange(of: locationSearchQuery) { _, newValue in
+                        appState.locationManager.searchQuery = newValue
+                    }
+
+                if !locationSearchQuery.isEmpty {
+                    Button {
+                        locationSearchQuery = ""
+                        appState.locationManager.clearSearch()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
+
+            // Search results
+            if !appState.locationManager.searchResults.isEmpty && !locationSearchQuery.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(appState.locationManager.searchResults.prefix(5), id: \.self) { result in
+                        Button {
+                            selectSearchResult(result)
+                        } label: {
+                            HStack {
+                                Image(systemName: "mappin")
+                                    .foregroundColor(.red)
+                                    .frame(width: 24)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(result.title)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    if !result.subtitle.isEmpty {
+                                        Text(result.subtitle)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                        }
+                        .buttonStyle(.plain)
+
+                        if result != appState.locationManager.searchResults.prefix(5).last {
+                            Divider()
+                                .padding(.leading, 48)
+                        }
+                    }
+                }
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+            }
+
+            // Manual save button (geocode typed address)
+            if !locationSearchQuery.isEmpty && appState.locationManager.searchResults.isEmpty {
+                Button {
+                    geocodeManualAddress()
+                } label: {
+                    HStack {
+                        if isSearchingLocation {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "location.fill")
+                        }
+                        Text("Save as Location")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.blue)
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                }
+                .disabled(isSearchingLocation)
+            }
+
+            // Request location permission hint
+            if appState.locationManager.authorizationStatus == .notDetermined {
+                Button {
+                    appState.locationManager.requestPermission()
+                } label: {
+                    HStack {
+                        Image(systemName: "location")
+                        Text("Enable GPS for automatic location")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    // MARK: - Location Actions
+
+    private func loadReverseGeocodedName() {
+        guard currentRecording.hasCoordinates,
+              let lat = currentRecording.latitude,
+              let lon = currentRecording.longitude else {
+            return
+        }
+
+        isLoadingReverseGeocode = true
+        let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+
+        Task {
+            let name = await appState.locationManager.reverseGeocode(coordinate)
+            await MainActor.run {
+                reverseGeocodedName = name
+                isLoadingReverseGeocode = false
+            }
+        }
+    }
+
+    private func selectSearchResult(_ result: MKLocalSearchCompletion) {
+        isSearchingLocation = true
+
+        Task {
+            if let geocoded = await appState.locationManager.geocodeCompletion(result) {
+                await MainActor.run {
+                    // Update recording with coordinates
+                    appState.updateRecordingLocation(
+                        recordingID: currentRecording.id,
+                        latitude: geocoded.coordinate.latitude,
+                        longitude: geocoded.coordinate.longitude,
+                        label: geocoded.label
+                    )
+
+                    // Update local state
+                    currentRecording.latitude = geocoded.coordinate.latitude
+                    currentRecording.longitude = geocoded.coordinate.longitude
+                    currentRecording.locationLabel = geocoded.label
+                    editedLocationLabel = geocoded.label
+                    reverseGeocodedName = geocoded.label
+
+                    // Clear search
+                    locationSearchQuery = ""
+                    appState.locationManager.clearSearch()
+                    isSearchingLocation = false
+                }
+            } else {
+                await MainActor.run {
+                    isSearchingLocation = false
+                }
+            }
+        }
+    }
+
+    private func geocodeManualAddress() {
+        guard !locationSearchQuery.isEmpty else { return }
+        isSearchingLocation = true
+
+        Task {
+            if let geocoded = await appState.locationManager.geocodeAddress(locationSearchQuery) {
+                await MainActor.run {
+                    // Update recording with coordinates
+                    appState.updateRecordingLocation(
+                        recordingID: currentRecording.id,
+                        latitude: geocoded.coordinate.latitude,
+                        longitude: geocoded.coordinate.longitude,
+                        label: geocoded.label
+                    )
+
+                    // Update local state
+                    currentRecording.latitude = geocoded.coordinate.latitude
+                    currentRecording.longitude = geocoded.coordinate.longitude
+                    currentRecording.locationLabel = geocoded.label
+                    editedLocationLabel = geocoded.label
+                    reverseGeocodedName = geocoded.label
+
+                    // Clear search
+                    locationSearchQuery = ""
+                    appState.locationManager.clearSearch()
+                    isSearchingLocation = false
+                }
+            } else {
+                await MainActor.run {
+                    isSearchingLocation = false
+                }
+            }
+        }
+    }
+
+    private func clearLocation() {
+        // Clear coordinates from recording
+        appState.updateRecordingLocation(
+            recordingID: currentRecording.id,
+            latitude: 0,
+            longitude: 0,
+            label: ""
+        )
+
+        // Update local state
+        currentRecording.latitude = nil
+        currentRecording.longitude = nil
+        currentRecording.locationLabel = ""
+        editedLocationLabel = ""
+        reverseGeocodedName = nil
     }
 
     // MARK: - Helpers

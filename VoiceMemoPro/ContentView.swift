@@ -645,6 +645,7 @@ struct TagFilterChip: View {
 
 struct SearchResultRow: View {
     @Environment(AppState.self) var appState
+    @Environment(\.colorScheme) var colorScheme
     let recording: RecordingItem
 
     private var recordingTags: [Tag] {
@@ -659,10 +660,14 @@ struct SearchResultRow: View {
         HStack(spacing: 12) {
             Image(systemName: "waveform")
                 .font(.system(size: 20))
-                .foregroundColor(.primary)
+                .foregroundColor(recording.iconSymbolColor(for: colorScheme))
                 .frame(width: 36, height: 36)
-                .background(recording.iconColor)
+                .background(recording.iconTileBackground(for: colorScheme))
                 .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
+                )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.title)

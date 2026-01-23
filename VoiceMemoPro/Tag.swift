@@ -16,9 +16,14 @@ struct Tag: Identifiable, Codable, Equatable, Hashable {
         Color(hex: colorHex) ?? .blue
     }
 
-    // Protected tags cannot be deleted (but can be renamed/recolored)
+    // MARK: - Protected Tag System
+
+    /// The stable UUID for the "favorite" tag - this never changes
+    static let favoriteTagID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+    /// Protected tags cannot be deleted or renamed
     var isProtected: Bool {
-        name.lowercased() == "favorite"
+        id == Tag.favoriteTagID
     }
 
     init(id: UUID = UUID(), name: String, colorHex: String) {
@@ -27,9 +32,9 @@ struct Tag: Identifiable, Codable, Equatable, Hashable {
         self.colorHex = colorHex
     }
 
-    // Default tags
+    // Default tags - favorite uses the stable ID
     static let defaultTags: [Tag] = [
-        Tag(name: "favorite", colorHex: "#FF6B6B"),
+        Tag(id: favoriteTagID, name: "favorite", colorHex: "#FF6B6B"),
         Tag(name: "beatbox", colorHex: "#4ECDC4"),
         Tag(name: "melody", colorHex: "#9B59B6"),
         Tag(name: "lyrics", colorHex: "#F39C12")

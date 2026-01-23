@@ -324,12 +324,27 @@ struct TagEditSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Tag name", text: $tagName)
-                        .onChange(of: tagName) { _, _ in
-                            showDuplicateError = false
+                    if tag.isProtected {
+                        // Protected tags cannot be renamed
+                        HStack {
+                            Text("Name")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(tag.name)
+                                .foregroundColor(.primary)
                         }
+                    } else {
+                        TextField("Tag name", text: $tagName)
+                            .onChange(of: tagName) { _, _ in
+                                showDuplicateError = false
+                            }
+                    }
 
                     ColorPicker("Color", selection: $tagColor, supportsOpacity: false)
+                } footer: {
+                    if tag.isProtected {
+                        Text("The \"favorite\" tag cannot be renamed or deleted.")
+                    }
                 }
 
                 if showDuplicateError {
@@ -373,7 +388,7 @@ struct TagEditSheet: View {
                     Button("Save") {
                         saveTag()
                     }
-                    .disabled(tagName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!tag.isProtected && tagName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .alert("Cannot Delete", isPresented: $showDeleteProtectedAlert) {
