@@ -145,6 +145,13 @@ struct ProjectDetailView: View {
                     palette: palette
                 )
 
+                StatBadge(
+                    icon: "internaldrive",
+                    value: appState.projectTotalSizeFormatted(currentProject),
+                    label: "Storage",
+                    palette: palette
+                )
+
                 if stats.hasBestTake {
                     StatBadge(
                         icon: "star.fill",
@@ -395,7 +402,7 @@ private struct VersionRow: View {
                         }
                     }
 
-                    Text("\(recording.formattedDuration) \u{2022} \(recording.formattedDate)")
+                    Text("\(recording.formattedDuration) \u{2022} \(recording.fileSizeFormatted) \u{2022} \(recording.formattedDate)")
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                 }

@@ -10,19 +10,45 @@ import CoreLocation
 import Foundation
 import Observation
 
+// MARK: - Recording State
+
+enum RecordingState: Equatable {
+    case idle
+    case recording
+    case paused
+
+    var isActive: Bool {
+        self != .idle
+    }
+}
+
 @MainActor
 @Observable
 final class RecorderManager: NSObject {
-    var isRecording = false
+    // MARK: - Observable State
+
+    var recordingState: RecordingState = .idle
     var currentDuration: TimeInterval = 0
     var liveMeterSamples: [Float] = []
     var qualityPreset: RecordingQualityPreset = .better
 
+    /// Duration accumulated before current recording segment (for pause/resume)
+    private var accumulatedDuration: TimeInterval = 0
+    /// Start time of current recording segment
+    private var segmentStartTime: Date?
+
+    // Convenience computed properties
+    var isRecording: Bool { recordingState == .recording }
+    var isPaused: Bool { recordingState == .paused }
+    var isActive: Bool { recordingState.isActive }
+
     private var audioRecorder: AVAudioRecorder?
-    private var recordingStartTime: Date?
     private var timer: Timer?
     private var currentFileURL: URL?
     private var wasRecordingBeforeInterruption = false
+
+    // Crash recovery: key for UserDefaults
+    private let inProgressRecordingKey = "inProgressRecordingPath"
 
     private let maxLiveSamples = 60
 
@@ -64,7 +90,7 @@ final class RecorderManager: NSObject {
     private func setupInterruptionHandling() {
         AudioSessionManager.shared.onInterruptionBegan = { [weak self] in
             Task { @MainActor in
-                guard let self = self, self.isRecording else { return }
+                guard let self = self, self.recordingState == .recording else { return }
                 self.wasRecordingBeforeInterruption = true
                 self.pauseRecording()
             }
@@ -92,10 +118,10 @@ final class RecorderManager: NSObject {
         // Safely finalize any in-progress recording to prevent data loss
         AudioSessionManager.shared.onMediaServicesReset = { [weak self] in
             Task { @MainActor in
-                guard let self = self, self.isRecording else { return }
+                guard let self = self, self.recordingState.isActive else { return }
                 // Stop recording immediately - audio system is being rebuilt
                 // This saves whatever was recorded up to this point
-                self.stopRecording()
+                _ = self.stopRecording()
             }
         }
     }
@@ -103,6 +129,8 @@ final class RecorderManager: NSObject {
     // MARK: - Recording Control
 
     func startRecording() {
+        guard recordingState == .idle else { return }
+
         do {
             try AudioSessionManager.shared.configureForRecording()
         } catch {
@@ -122,25 +150,35 @@ final class RecorderManager: NSObject {
             audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.record()
-            isRecording = true
-            recordingStartTime = Date()
+            recordingState = .recording
+            segmentStartTime = Date()
+            accumulatedDuration = 0
             currentDuration = 0
             liveMeterSamples = []
             startTimer()
+
+            // Track in-progress recording for crash recovery
+            markRecordingInProgress(fileURL)
         } catch {
             print("Failed to start recording: \(error)")
         }
     }
 
+    /// Stop recording and return raw data for saving
     func stopRecording() -> RawRecordingData? {
-        guard isRecording, let recorder = audioRecorder, let fileURL = currentFileURL else {
+        guard recordingState.isActive, let recorder = audioRecorder, let fileURL = currentFileURL else {
             return nil
+        }
+
+        // Update duration one final time if recording (not paused)
+        if recordingState == .recording, let startTime = segmentStartTime {
+            accumulatedDuration += Date().timeIntervalSince(startTime)
         }
 
         recorder.stop()
         stopTimer()
 
-        let duration = currentDuration
+        let duration = accumulatedDuration
         let createdAt = Date()
 
         // Capture location data
@@ -148,15 +186,8 @@ final class RecorderManager: NSObject {
         let longitude = currentLocation?.coordinate.longitude
         let locationLabel = currentLocationLabel
 
-        isRecording = false
-        currentDuration = 0
-        recordingStartTime = nil
-        audioRecorder = nil
-        currentFileURL = nil
-        liveMeterSamples = []
-        wasRecordingBeforeInterruption = false
-        currentLocation = nil
-        currentLocationLabel = ""
+        resetState()
+        clearInProgressRecording()
 
         return RawRecordingData(
             fileURL: fileURL,
@@ -168,14 +199,104 @@ final class RecorderManager: NSObject {
         )
     }
 
+    /// Pause recording safely - flushes audio buffer to prevent data loss
     func pauseRecording() {
-        audioRecorder?.pause()
+        guard recordingState == .recording, let recorder = audioRecorder else { return }
+
+        // Accumulate duration from this segment
+        if let startTime = segmentStartTime {
+            accumulatedDuration += Date().timeIntervalSince(startTime)
+        }
+        segmentStartTime = nil
+
+        // Pause the recorder - this flushes the audio buffer to disk
+        recorder.pause()
         stopTimer()
+        recordingState = .paused
     }
 
+    /// Resume recording after pause
     func resumeRecording() {
-        audioRecorder?.record()
+        guard recordingState == .paused, let recorder = audioRecorder else { return }
+
+        recorder.record()
+        segmentStartTime = Date()
+        recordingState = .recording
         startTimer()
+    }
+
+    /// Discard the current recording without saving
+    func discardRecording() {
+        guard recordingState.isActive, let fileURL = currentFileURL else { return }
+
+        audioRecorder?.stop()
+        stopTimer()
+
+        // Delete the audio file
+        try? FileManager.default.removeItem(at: fileURL)
+
+        resetState()
+        clearInProgressRecording()
+    }
+
+    /// Reset all recording state
+    private func resetState() {
+        recordingState = .idle
+        currentDuration = 0
+        accumulatedDuration = 0
+        segmentStartTime = nil
+        audioRecorder = nil
+        currentFileURL = nil
+        liveMeterSamples = []
+        wasRecordingBeforeInterruption = false
+        currentLocation = nil
+        currentLocationLabel = ""
+    }
+
+    // MARK: - Crash Recovery
+
+    private func markRecordingInProgress(_ fileURL: URL) {
+        UserDefaults.standard.set(fileURL.path, forKey: inProgressRecordingKey)
+    }
+
+    private func clearInProgressRecording() {
+        UserDefaults.standard.removeObject(forKey: inProgressRecordingKey)
+    }
+
+    /// Check for and recover any in-progress recording from a crash
+    /// Returns the file URL if a recoverable recording exists
+    func checkForRecoverableRecording() -> URL? {
+        guard let path = UserDefaults.standard.string(forKey: inProgressRecordingKey) else {
+            return nil
+        }
+
+        let fileURL = URL(fileURLWithPath: path)
+
+        // Verify the file exists and has content
+        guard FileManager.default.fileExists(atPath: path) else {
+            clearInProgressRecording()
+            return nil
+        }
+
+        // Check file has meaningful content (> 1KB)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int,
+           size > 1024 {
+            return fileURL
+        }
+
+        // File too small, likely corrupted
+        try? FileManager.default.removeItem(at: fileURL)
+        clearInProgressRecording()
+        return nil
+    }
+
+    /// Clear the recoverable recording marker without recovering
+    func dismissRecoverableRecording() {
+        if let path = UserDefaults.standard.string(forKey: inProgressRecordingKey) {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        clearInProgressRecording()
     }
 
     // MARK: - Quality Settings
@@ -203,8 +324,12 @@ final class RecorderManager: NSObject {
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self = self, let startTime = self.recordingStartTime else { return }
-                self.currentDuration = Date().timeIntervalSince(startTime)
+                guard let self = self, self.recordingState == .recording else { return }
+
+                // Calculate total duration: accumulated + current segment
+                if let startTime = self.segmentStartTime {
+                    self.currentDuration = self.accumulatedDuration + Date().timeIntervalSince(startTime)
+                }
                 self.updateMeterSamples()
             }
         }
@@ -216,7 +341,7 @@ final class RecorderManager: NSObject {
     }
 
     private func updateMeterSamples() {
-        guard let recorder = audioRecorder, isRecording else { return }
+        guard let recorder = audioRecorder, recordingState == .recording else { return }
 
         recorder.updateMeters()
 
@@ -281,7 +406,7 @@ extension RecorderManager: CLLocationManagerDelegate {
         Task { @MainActor in
             let status = manager.authorizationStatus
             if status == .authorizedWhenInUse || status == .authorizedAlways {
-                if self.isRecording {
+                if self.recordingState.isActive {
                     manager.requestLocation()
                 }
             }

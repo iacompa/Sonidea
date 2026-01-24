@@ -153,6 +153,18 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
+    // MARK: - File Size
+
+    /// File size in bytes (nil if file doesn't exist)
+    var fileSizeBytes: Int64? {
+        StorageFormatter.fileSize(at: fileURL)
+    }
+
+    /// Human-readable file size (e.g., "9.8 MB")
+    var fileSizeFormatted: String {
+        StorageFormatter.formattedFileSize(at: fileURL)
+    }
+
     var formattedDate: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium

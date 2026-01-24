@@ -601,6 +601,55 @@ final class AppState {
         return albums.filter { $0.name.lowercased().contains(lowercasedQuery) }
     }
 
+    // MARK: - Storage Size Helpers
+
+    /// Cache for recording file sizes [RecordingID: Bytes]
+    private var recordingSizeCache: [UUID: Int64] = [:]
+
+    /// Get file size for a recording (cached)
+    func recordingFileSize(_ recording: RecordingItem) -> Int64 {
+        if let cached = recordingSizeCache[recording.id] {
+            return cached
+        }
+        let size = recording.fileSizeBytes ?? 0
+        recordingSizeCache[recording.id] = size
+        return size
+    }
+
+    /// Get total size of all recordings in an album (bytes)
+    func albumTotalBytes(_ album: Album) -> Int64 {
+        recordings(in: album).reduce(0) { sum, recording in
+            sum + recordingFileSize(recording)
+        }
+    }
+
+    /// Get formatted total size of an album (e.g., "124 MB")
+    func albumTotalSizeFormatted(_ album: Album) -> String {
+        StorageFormatter.format(albumTotalBytes(album))
+    }
+
+    /// Get total size of all recordings in a project (bytes)
+    func projectTotalBytes(_ project: Project) -> Int64 {
+        recordings(in: project).reduce(0) { sum, recording in
+            sum + recordingFileSize(recording)
+        }
+    }
+
+    /// Get formatted total size of a project (e.g., "45.2 MB")
+    func projectTotalSizeFormatted(_ project: Project) -> String {
+        StorageFormatter.format(projectTotalBytes(project))
+    }
+
+    /// Invalidate size cache for a specific recording (call when recording is deleted/moved)
+    func invalidateSizeCache(for recordingID: UUID) {
+        recordingSizeCache.removeValue(forKey: recordingID)
+    }
+
+    /// Clear all size caches (call after major sync operations)
+    func clearSizeCache() {
+        recordingSizeCache.removeAll()
+    }
+
     // MARK: - Search
 
     func searchRecordings(query: String, filterTagIDs: Set<UUID> = []) -> [RecordingItem] {

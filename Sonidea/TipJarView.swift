@@ -202,7 +202,7 @@ struct TipJarView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 PerkRow(icon: "hand.raised.fill", color: .blue, text: "Vote for next feature")
-                PerkRow(icon: "person.2.fill", color: .purple, text: "Name on Supporters wall (optional)")
+                PerkRow(icon: "person.2.fill", color: .purple, text: "Name on Supporters wall (coming soon)")
             }
             .padding()
             .background(palette.cardBackground)
@@ -214,7 +214,7 @@ struct TipJarView: View {
 
     private var roadmapSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What I'm building next")
+            Text("What we're adding next")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)

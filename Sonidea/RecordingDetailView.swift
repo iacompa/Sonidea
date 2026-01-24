@@ -481,6 +481,9 @@ struct RecordingDetailView: View {
             // Location Section
             locationSection
 
+            // Storage Section
+            storageSection
+
             // Icon Color
             VStack(alignment: .leading, spacing: 8) {
                 Text("Icon Color")
@@ -1035,6 +1038,33 @@ struct RecordingDetailView: View {
         reverseGeocodedName = nil
     }
 
+    // MARK: - Storage Section
+
+    private var storageSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Storage")
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+                .textCase(.uppercase)
+
+            VStack(spacing: 0) {
+                // File Size row
+                HStack {
+                    Text("File Size")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                    Spacer()
+                    Text(currentRecording.fileSizeFormatted)
+                        .font(.subheadline)
+                        .foregroundColor(palette.textPrimary)
+                }
+                .padding(12)
+            }
+            .background(palette.inputBackground)
+            .cornerRadius(8)
+        }
+    }
+
     // MARK: - Helpers
 
     private var playbackProgress: Double {
@@ -1312,16 +1342,23 @@ struct ChooseAlbumSheet: View {
                             dismiss()
                         } label: {
                             HStack {
-                                Text(album.name)
-                                if album.isSystem {
-                                    Text("SYSTEM")
-                                        .font(.caption2)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.orange)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.orange.opacity(0.2))
-                                        .cornerRadius(4)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(album.name)
+                                        if album.isSystem {
+                                            Text("SYSTEM")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.orange)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.orange.opacity(0.2))
+                                                .cornerRadius(4)
+                                        }
+                                    }
+                                    Text("\(appState.recordingCount(in: album)) recordings \u{2022} \(appState.albumTotalSizeFormatted(album))")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
                                 Spacer()
                                 if recording.albumID == album.id {
@@ -1424,7 +1461,7 @@ struct ChooseProjectSheet: View {
                                     }
 
                                     let versionCount = appState.recordingCount(in: project)
-                                    Text("\(versionCount) version\(versionCount == 1 ? "" : "s")")
+                                    Text("\(versionCount) version\(versionCount == 1 ? "" : "s") \u{2022} \(appState.projectTotalSizeFormatted(project))")
                                         .font(.caption)
                                         .foregroundColor(palette.textSecondary)
                                 }

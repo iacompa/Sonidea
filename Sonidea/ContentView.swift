@@ -35,12 +35,14 @@ enum SearchScope: String, CaseIterable {
 struct ContentView: View {
     @Environment(AppState.self) var appState
     @Environment(\.themePalette) var palette
+    @Environment(\.scenePhase) private var scenePhase
     @State private var currentRoute: AppRoute = .recordings
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTipJar = false
     @State private var showAskPromptFromMain = false
     @State private var showThankYouToast = false
+    @State private var showRecoveryAlert = false
 
     // Drag state for record button
     @State private var dragStartPosition: CGPoint = .zero
@@ -181,8 +183,8 @@ struct ContentView: View {
                 appState.supportManager.shouldShowAskPromptSheet = false
             }
         }
-        .onChange(of: appState.recorder.isRecording) { _, isRecording in
-            appState.onRecordingStateChanged(isRecording: isRecording)
+        .onChange(of: appState.recorder.recordingState) { _, newState in
+            appState.onRecordingStateChanged(isRecording: newState.isActive)
         }
         .onChange(of: appState.supportManager.shouldShowThankYouToast) { _, shouldShow in
             if shouldShow {
@@ -200,6 +202,39 @@ struct ContentView: View {
         }
         .onAppear {
             appState.onAppBecameActive()
+            // Check for recoverable recording from a crash
+            if appState.recorder.checkForRecoverableRecording() != nil {
+                showRecoveryAlert = true
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Auto-pause when going to background to preserve audio
+            if newPhase == .background && appState.recorder.recordingState == .recording {
+                appState.recorder.pauseRecording()
+            }
+        }
+        .alert("Recover Recording?", isPresented: $showRecoveryAlert) {
+            Button("Recover") {
+                if let fileURL = appState.recorder.checkForRecoverableRecording() {
+                    // Create a recording from the recovered file
+                    let duration = getAudioDuration(url: fileURL) ?? 0
+                    let rawData = RawRecordingData(
+                        fileURL: fileURL,
+                        createdAt: Date(),
+                        duration: duration,
+                        latitude: nil,
+                        longitude: nil,
+                        locationLabel: ""
+                    )
+                    appState.addRecording(from: rawData)
+                    appState.recorder.dismissRecoverableRecording()
+                }
+            }
+            Button("Discard", role: .destructive) {
+                appState.recorder.dismissRecoverableRecording()
+            }
+        } message: {
+            Text("A recording was interrupted. Would you like to recover it?")
         }
         .overlay(alignment: .top) {
             if showThankYouToast {
@@ -208,6 +243,12 @@ struct ContentView: View {
                     .padding(.top, 60)
             }
         }
+    }
+
+    // Helper to get audio duration for recovered recordings
+    private func getAudioDuration(url: URL) -> TimeInterval? {
+        let asset = AVURLAsset(url: url)
+        return asset.duration.seconds.isNaN ? nil : asset.duration.seconds
     }
 
     // MARK: - Floating Record Button Overlay
@@ -236,6 +277,11 @@ struct ContentView: View {
             // Reset pill (anchored below button)
             if showResetPill {
                 resetPillView(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
+            }
+
+            // Save/Discard pill (shown when recording is paused)
+            if appState.recorder.isPaused && !showResetPill {
+                saveDiscardPillView(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
             }
 
             // The floating record button
@@ -359,6 +405,46 @@ struct ContentView: View {
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
+    // MARK: - Save Pill View
+
+    private func saveDiscardPillView(buttonPosition: CGPoint, containerSize: CGSize, safeArea: EdgeInsets) -> some View {
+        let pillHeight: CGFloat = 44
+        let spacing: CGFloat = 16
+        let buttonBottom = buttonPosition.y + buttonDiameter / 2
+        let spaceBelow = containerSize.height - safeArea.bottom - buttonBottom
+
+        // Show above if not enough space below
+        let showAbove = spaceBelow < (pillHeight + spacing + 20)
+        let pillY = showAbove
+            ? buttonPosition.y - buttonDiameter / 2 - spacing - pillHeight / 2
+            : buttonPosition.y + buttonDiameter / 2 + spacing + pillHeight / 2
+
+        return Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            saveRecording()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .bold))
+                Text("Save")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(palette.accent)
+                    .shadow(color: palette.accent.opacity(0.3), radius: 4, y: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .position(x: buttonPosition.x, y: pillY)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: appState.recorder.isPaused)
+    }
+
     // MARK: - Main Content Layer
 
     @ViewBuilder
@@ -371,10 +457,11 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         Color.clear.frame(height: topBarHeight + 16)
 
-                        if appState.recorder.isRecording {
+                        if appState.recorder.isActive {
                             RecordingHUDCard(
                                 duration: appState.recorder.currentDuration,
-                                liveSamples: appState.recorder.liveMeterSamples
+                                liveSamples: appState.recorder.liveMeterSamples,
+                                isPaused: appState.recorder.isPaused
                             )
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
@@ -494,14 +581,26 @@ struct ContentView: View {
     // MARK: - Record Button Handler
 
     private func handleRecordTap() {
-        if appState.recorder.isRecording {
-            if let rawData = appState.recorder.stopRecording() {
-                appState.addRecording(from: rawData)
-                appState.onRecordingSaved()
-                currentRoute = .recordings
-            }
-        } else {
+        switch appState.recorder.recordingState {
+        case .idle:
+            // Start new recording
             appState.recorder.startRecording()
+        case .recording:
+            // Pause the recording
+            appState.recorder.pauseRecording()
+        case .paused:
+            // Resume the recording
+            appState.recorder.resumeRecording()
+        }
+    }
+
+    // MARK: - Save Recording
+
+    private func saveRecording() {
+        if let rawData = appState.recorder.stopRecording() {
+            appState.addRecording(from: rawData)
+            appState.onRecordingSaved()
+            currentRoute = .recordings
         }
     }
 }
@@ -510,17 +609,35 @@ struct ContentView: View {
 
 struct VoiceMemosRecordButton: View {
     @Environment(AppState.self) var appState
+    @Environment(\.themePalette) private var palette
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     @State private var isPulsing = false
     @State private var goldRingRotation: Double = 0
 
+    private var recordingState: RecordingState {
+        appState.recorder.recordingState
+    }
+
+    private var isActive: Bool {
+        recordingState.isActive
+    }
+
     private var isRecording: Bool {
-        appState.recorder.isRecording
+        recordingState == .recording
+    }
+
+    private var isPaused: Bool {
+        recordingState == .paused
     }
 
     private var isSupporter: Bool {
         appState.supportManager.hasTippedBefore
+    }
+
+    // Theme-aware record button color
+    private var recordColor: Color {
+        palette.recordButton
     }
 
     // Gold gradient for supporter ring
@@ -545,7 +662,7 @@ struct VoiceMemosRecordButton: View {
                 Circle()
                     .stroke(goldGradient, lineWidth: 3)
                     .frame(width: 92, height: 92)
-                    .opacity(isRecording ? 0.3 : 0.9)
+                    .opacity(isActive ? 0.3 : 0.9)
                     .onAppear {
                         // Only animate if Reduce Motion is off
                         if !reduceMotion {
@@ -556,9 +673,9 @@ struct VoiceMemosRecordButton: View {
                     }
             }
 
-            // Main recording ring
+            // Main recording ring - pulsing when recording, solid when paused
             Circle()
-                .stroke(isRecording ? Color.red : Color.red.opacity(0.3), lineWidth: 4)
+                .stroke(isActive ? recordColor : recordColor.opacity(0.3), lineWidth: 4)
                 .frame(width: 80, height: 80)
                 .scaleEffect(isRecording && isPulsing ? 1.08 : 1.0)
                 .animation(
@@ -566,24 +683,51 @@ struct VoiceMemosRecordButton: View {
                     value: isPulsing
                 )
 
-            // Red fill circle
+            // Fill circle - solid when idle/recording, with pause indicator when paused
             Circle()
-                .fill(Color.red)
+                .fill(recordColor)
                 .frame(width: 68, height: 68)
 
-            // Mic icon
-            Image(systemName: "mic.fill")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(.white)
+            // Icon: mic when idle, pause when recording, play when paused
+            Group {
+                if isPaused {
+                    // Play icon to resume
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundColor(.white)
+                        .offset(x: 2) // Visually center the play icon
+                } else if isRecording {
+                    // Pause icon while recording
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundColor(.white)
+                } else {
+                    // Mic icon when idle
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
         }
         .contentShape(Circle())
-        .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
         .onChange(of: isRecording) { _, newValue in
             isPulsing = newValue
         }
         .onAppear {
             isPulsing = isRecording
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch recordingState {
+        case .idle:
+            return "Start recording"
+        case .recording:
+            return "Pause recording"
+        case .paused:
+            return "Resume recording"
         }
     }
 }
@@ -618,6 +762,7 @@ struct ThankYouToast: View {
 struct RecordingHUDCard: View {
     let duration: TimeInterval
     let liveSamples: [Float]
+    var isPaused: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
@@ -638,14 +783,22 @@ struct RecordingHUDCard: View {
         VStack(spacing: 0) {
             HStack(alignment: .center) {
                 HStack(spacing: 10) {
-                    Circle()
-                        .fill(palette.recordButton)
-                        .frame(width: 12, height: 12)
-                        .scaleEffect(isPulsing ? 1.3 : 1.0)
-                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
-                        .shadow(color: palette.recordButton.opacity(0.5), radius: isPulsing ? 6 : 2)
+                    if isPaused {
+                        // Pause icon when paused
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(palette.liveRecordingAccent)
+                    } else {
+                        // Pulsing circle when recording
+                        Circle()
+                            .fill(palette.recordButton)
+                            .frame(width: 12, height: 12)
+                            .scaleEffect(isPulsing ? 1.3 : 1.0)
+                            .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
+                            .shadow(color: palette.recordButton.opacity(0.5), radius: isPulsing ? 6 : 2)
+                    }
 
-                    Text("Recording")
+                    Text(isPaused ? "Paused" : "Recording")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundColor(palette.textPrimary)
@@ -711,7 +864,10 @@ struct RecordingHUDCard: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
         )
-        .onAppear { isPulsing = true }
+        .onAppear { isPulsing = !isPaused }
+        .onChange(of: isPaused) { _, paused in
+            isPulsing = !paused
+        }
     }
 }
 
@@ -1679,13 +1835,8 @@ struct SettingsSheetView: View {
                     Text("iCloud")
                         .foregroundColor(palette.textSecondary)
                 } footer: {
-                    if let error = appState.syncManager.syncError {
-                        Text(error)
-                            .foregroundColor(.red)
-                    } else {
-                        Text("Sync recordings, tags, albums, and projects across all your devices.")
-                            .foregroundColor(palette.textSecondary)
-                    }
+                    Text("Sync recordings, tags, albums, and projects across all your devices.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -2196,9 +2347,14 @@ struct ExportAlbumPickerSheet: View {
                             Text(album.name)
                                 .foregroundColor(.primary)
                             Spacer()
-                            Text("\(appState.recordingCount(in: album)) recordings")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("\(appState.recordingCount(in: album)) recordings")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(appState.albumTotalSizeFormatted(album))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
