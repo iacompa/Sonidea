@@ -2,7 +2,8 @@
 //  TipJarView.swift
 //  Sonidea
 //
-//  Full tip jar UI with tiers, story, roadmap, and supporter perks.
+//  Tip jar UI with 4 core tiers + "Other amount..." for custom tips.
+//  Uses 106 consumable IAP products ($1-$100 + 6 approved larger amounts).
 //
 
 import SwiftUI
@@ -32,11 +33,11 @@ struct TipJarView: View {
                     // Story/Mission Card
                     storyCard
 
-                    // Tip Tiers
+                    // Tip Tiers (4 core tiers only)
                     tiersSection
 
-                    // Custom Amount
-                    customAmountButton
+                    // Other Amount row (styled like tier cards)
+                    otherAmountButton
 
                     // Supporter Perks
                     perksSection
@@ -132,7 +133,7 @@ struct TipJarView: View {
         .cornerRadius(12)
     }
 
-    // MARK: - Tip Tiers
+    // MARK: - Tip Tiers (4 core tiers only)
 
     private var tiersSection: some View {
         VStack(spacing: 12) {
@@ -154,16 +155,16 @@ struct TipJarView: View {
         }
     }
 
-    // MARK: - Custom Amount Button (styled like tier cards)
+    // MARK: - Other Amount Button (styled like tier cards)
 
-    private var customAmountButton: some View {
+    private var otherAmountButton: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             showCustomAmountSheet = true
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Other amount")
+                    Text("Other amount…")
                         .font(.headline)
                         .foregroundColor(palette.textPrimary)
                     Text("Choose any tip amount you'd like.")
@@ -309,7 +310,6 @@ struct TipJarView: View {
     }
 
     private func requestReview() {
-        // Try to get the active window scene for the review request
         if let windowScene = UIApplication.shared.connectedScenes
             .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
             SKStoreReviewController.requestReview(in: windowScene)
@@ -350,7 +350,6 @@ struct TipTierButton: View {
 
                 Spacer()
 
-                // Show actual price if available, fallback to display amount
                 Text(appState.supportManager.priceForProduct(tier.productID) ?? tier.amount)
                     .font(.headline)
                     .fontWeight(.semibold)
@@ -390,7 +389,7 @@ struct PerkRow: View {
     }
 }
 
-// MARK: - Custom Amount Sheet (Any Amount with Slider Quick-Pick)
+// MARK: - Custom Amount Sheet
 
 struct CustomAmountSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -398,138 +397,108 @@ struct CustomAmountSheet: View {
     @Environment(\.themePalette) private var palette
     @FocusState private var isTextFieldFocused: Bool
 
-    // The actual typed amount (can be any value >= 1)
-    @State private var typedAmount: Int = 10
-    @State private var textInput: String = "10"
+    // Text input state
+    @State private var amountText: String = ""
 
-    // Slider value (1-100 range, quick pick only)
-    @State private var sliderValue: Double = 10
+    // Dropdown state
+    @State private var approvedExpanded: Bool = false
 
-    // Whether to show the slider (hide for amounts > 100)
-    private var showSlider: Bool {
-        typedAmount <= 100
+    // Derived amount value (nil if invalid/empty)
+    private var amountValue: Int? {
+        guard !amountText.isEmpty else { return nil }
+        return Int(amountText)
     }
 
-    // For amounts 1-100, we support exact dollars. Above 100, we snap to nearest tier.
-    private var actualChargeAmount: Int {
-        TipTier.nearestSupportedAmount(to: typedAmount)
+    // Validation
+    private var isValidCustom: Bool {
+        guard let value = amountValue else { return false }
+        return TipTier.isValidCustomAmount(value)
     }
 
-    // Only show rounding notice for amounts > 100 that need snapping
-    private var needsRoundingNotice: Bool {
-        typedAmount > 100 && typedAmount != actualChargeAmount
+    private var isApprovedLarge: Bool {
+        guard let value = amountValue else { return false }
+        return TipTier.isApprovedLargerAmount(value)
     }
 
-    private var displayPrice: String {
-        appState.supportManager.priceForAmount(actualChargeAmount) ?? "$\(actualChargeAmount)"
+    private var canTip: Bool {
+        isValidCustom || isApprovedLarge
     }
 
-    private var isValidAmount: Bool {
-        typedAmount >= 1
+    // Show "for larger tips" message when typed value > 100 and not an approved amount
+    private var showLargerTipsMessage: Bool {
+        guard let value = amountValue else { return false }
+        return value > 100 && !isApprovedLarge
+    }
+
+    // Display amount (0 if empty/invalid)
+    private var displayAmount: Int {
+        amountValue ?? 0
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    // Large amount display (shows what user typed - exact for $1-$100)
-                    VStack(spacing: 6) {
-                        Text("$\(typedAmount)")
-                            .font(.system(size: 56, weight: .bold, design: .rounded))
-                            .foregroundColor(palette.textPrimary)
-                            .contentTransition(.numericText())
-                            .animation(.spring(response: 0.3), value: typedAmount)
+                VStack(spacing: 24) {
+                    // Large amount display
+                    Text("$\(displayAmount)")
+                        .font(.system(size: 56, weight: .bold, design: .rounded))
+                        .foregroundColor(canTip ? palette.textPrimary : palette.textSecondary)
+                        .contentTransition(.numericText())
+                        .animation(.spring(response: 0.3), value: displayAmount)
+                        .padding(.top, 24)
 
-                        if needsRoundingNotice && isValidAmount {
-                            Text("Will charge $\(actualChargeAmount) (nearest available)")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                                .transition(.opacity)
-                        }
-                    }
-                    .padding(.top, 8)
-                    .animation(.easeInOut(duration: 0.2), value: needsRoundingNotice)
-
-                    // Manual entry field (primary input)
-                    HStack {
-                        Text("$")
-                            .font(.title2)
-                            .foregroundColor(palette.textSecondary)
-
-                        TextField("Amount", text: $textInput)
-                            .font(.title2)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(palette.textPrimary)
-                            .frame(width: 100)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 14)
-                            .background(palette.inputBackground)
-                            .cornerRadius(10)
-                            .focused($isTextFieldFocused)
-                            .onChange(of: textInput) { _, newValue in
-                                handleTextInput(newValue)
-                            }
-                            .accessibilityLabel("Enter tip amount")
-                    }
-
-                    // Quick pick chips
-                    quickPickChips
-                        .padding(.horizontal)
-
-                    // Slider (only shown for amounts <= 100)
-                    if showSlider {
-                        VStack(spacing: 8) {
-                            Text("Quick pick")
-                                .font(.caption)
+                    // Text input field
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text("$")
+                                .font(.title2)
+                                .fontWeight(.medium)
                                 .foregroundColor(palette.textSecondary)
 
-                            Slider(value: $sliderValue, in: 1...100, step: 1) {
-                                Text("Amount")
-                            } minimumValueLabel: {
-                                Text("$1")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            } maximumValueLabel: {
-                                Text("$100")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
-                            .tint(palette.accent)
-                            .onChange(of: sliderValue) { _, newValue in
-                                let intValue = Int(newValue)
-                                typedAmount = intValue
-                                textInput = "\(intValue)"
-                            }
-                            .accessibilityLabel("Tip amount slider")
-                            .accessibilityValue("$\(Int(sliderValue))")
-                        }
-                        .padding(.horizontal)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-
-                    // Info note for amounts over $100
-                    if !showSlider {
-                        HStack(spacing: 8) {
-                            Image(systemName: "info.circle")
-                                .font(.caption)
-                                .foregroundColor(palette.accent)
-                            Text("Amounts over $100 will be rounded to the nearest available tier.")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                            TextField("Enter amount", text: $amountText)
+                                .font(.title2)
+                                .keyboardType(.numberPad)
                                 .multilineTextAlignment(.leading)
+                                .foregroundColor(palette.textPrimary)
+                                .focused($isTextFieldFocused)
+                                .onChange(of: amountText) { _, newValue in
+                                    // Strip non-digits
+                                    let filtered = newValue.filter { $0.isNumber }
+                                    if filtered != newValue {
+                                        amountText = filtered
+                                    }
+                                }
+                                .accessibilityLabel("Enter tip amount")
                         }
-                        .padding()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                         .background(palette.inputBackground)
-                        .cornerRadius(10)
-                        .padding(.horizontal)
+                        .cornerRadius(12)
+
+                        Text("Enter dollar amount (USD) $1–$100")
+                            .font(.caption)
+                            .foregroundColor(palette.textTertiary)
+                    }
+                    .padding(.horizontal)
+
+                    // "For larger tips" message
+                    if showLargerTipsMessage {
+                        Text("For larger tips, choose an approved amount below.")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                            .transition(.opacity)
                     }
 
-                    Spacer(minLength: 20)
+                    // Approved larger amounts dropdown
+                    approvedAmountsSection
+                        .padding(.horizontal)
 
-                    // Buttons
+                    Spacer(minLength: 40)
+
+                    // CTA Button
                     VStack(spacing: 12) {
-                        // Tip button (styled like tier buttons)
                         Button {
                             purchaseAmount()
                         } label: {
@@ -538,20 +507,19 @@ struct CustomAmountSheet: View {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
-                                    Text("Tip \(displayPrice)")
+                                    Text("Tip $\(displayAmount)")
                                         .font(.headline)
                                 }
                             }
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .frame(height: 50)
-                            .background(isValidAmount ? palette.accent : Color.gray)
+                            .background(canTip ? palette.accent : Color.gray)
                             .cornerRadius(12)
                         }
-                        .disabled(!isValidAmount || appState.supportManager.isPurchasing)
-                        .accessibilityLabel("Tip \(displayPrice)")
+                        .disabled(!canTip || appState.supportManager.isPurchasing)
+                        .accessibilityLabel("Tip $\(displayAmount)")
 
-                        // Cancel button
                         Button("Cancel") {
                             dismiss()
                         }
@@ -562,77 +530,109 @@ struct CustomAmountSheet: View {
                     .padding(.horizontal)
                     .padding(.bottom)
                 }
-                .padding(.top)
             }
             .background(palette.background)
             .navigationTitle("Other Amount")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .keyboard) {
                     Button("Done") {
                         isTextFieldFocused = false
                     }
                 }
             }
+            .animation(.easeInOut(duration: 0.2), value: showLargerTipsMessage)
+            .animation(.easeInOut(duration: 0.25), value: approvedExpanded)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
 
-    // MARK: - Quick Pick Chips
+    // MARK: - Approved Larger Amounts Section
 
-    private var quickPickChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(TipTier.quickPickAmounts, id: \.self) { amount in
-                    QuickPickChip(
-                        amount: amount,
-                        isSelected: typedAmount == amount
-                    ) {
-                        selectQuickPick(amount)
+    private var approvedAmountsSection: some View {
+        VStack(spacing: 0) {
+            // Disclosure button
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                approvedExpanded.toggle()
+            } label: {
+                HStack {
+                    Text("Approved larger amounts")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textPrimary)
+
+                    Spacer()
+
+                    Image(systemName: approvedExpanded ? "chevron.up" : "chevron.down")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                }
+                .padding()
+                .background(palette.cardBackground)
+                .cornerRadius(approvedExpanded ? 12 : 12)
+            }
+            .buttonStyle(.plain)
+
+            // Expanded content
+            if approvedExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Info line
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.caption)
+                            .foregroundColor(palette.textTertiary)
+                        Text("These are the approved amounts we can accept for larger tips.")
+                            .font(.caption)
+                            .foregroundColor(palette.textTertiary)
+                    }
+                    .padding(.horizontal, 4)
+
+                    // Amount pills
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ], spacing: 10) {
+                        ForEach(TipTier.approvedLargerAmounts, id: \.self) { amount in
+                            ApprovedAmountPill(
+                                amount: amount,
+                                isSelected: amountValue == amount
+                            ) {
+                                selectApprovedAmount(amount)
+                            }
+                        }
                     }
                 }
+                .padding()
+                .background(palette.inputBackground)
+                .cornerRadius(12)
+                .padding(.top, -8)
             }
-            .padding(.horizontal, 4)
         }
     }
 
     // MARK: - Actions
 
-    private func handleTextInput(_ newValue: String) {
-        // Sanitize input: only digits
-        let filtered = newValue.filter { $0.isNumber }
-        if filtered != newValue {
-            textInput = filtered
-        }
-
-        // Parse value (no upper limit)
-        if let value = Int(filtered), value >= 1 {
-            typedAmount = value
-            // Update slider if within range
-            if value <= 100 {
-                sliderValue = Double(value)
-            }
-        } else if filtered.isEmpty {
-            typedAmount = 0 // Invalid state, button will be disabled
-        }
-    }
-
-    private func selectQuickPick(_ amount: Int) {
+    private func selectApprovedAmount(_ amount: Int) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        typedAmount = amount
-        textInput = "\(amount)"
-        if amount <= 100 {
-            sliderValue = Double(amount)
-        }
+        amountText = "\(amount)"
         isTextFieldFocused = false
     }
 
     private func purchaseAmount() {
+        guard canTip, let amount = amountValue else { return }
+
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         isTextFieldFocused = false
 
-        let productID = TipTier.productID(for: actualChargeAmount)
+        guard let productID = TipTier.productID(for: amount) else { return }
 
         Task {
             await appState.supportManager.purchase(productID: productID)
@@ -643,9 +643,9 @@ struct CustomAmountSheet: View {
     }
 }
 
-// MARK: - Quick Pick Chip
+// MARK: - Approved Amount Pill
 
-struct QuickPickChip: View {
+struct ApprovedAmountPill: View {
     @Environment(\.themePalette) private var palette
     let amount: Int
     let isSelected: Bool
@@ -657,12 +657,12 @@ struct QuickPickChip: View {
                 .font(.subheadline)
                 .fontWeight(.medium)
                 .foregroundColor(isSelected ? .white : palette.accent)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(isSelected ? palette.accent : palette.inputBackground)
-                .cornerRadius(20)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(isSelected ? palette.accent : palette.cardBackground)
+                .cornerRadius(10)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
+                    RoundedRectangle(cornerRadius: 10)
                         .stroke(isSelected ? Color.clear : palette.accent.opacity(0.3), lineWidth: 1)
                 )
         }

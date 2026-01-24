@@ -19,58 +19,52 @@ struct TipTier: Identifiable {
     let amount: String
     let impact: String
 
+    // Main tier rows displayed in the Tip Jar (4 core tiers only)
     static let allTiers: [TipTier] = [
-        TipTier(id: "coffee", productID: "com.iacompa.sonidea.tip.coffee", title: "Coffee", amount: "$2", impact: "Keeps the project moving."),
-        TipTier(id: "feature", productID: "com.iacompa.sonidea.tip.feature", title: "Fuel a Feature", amount: "$5", impact: "Helps ship the next update."),
-        TipTier(id: "studio", productID: "com.iacompa.sonidea.tip.studio", title: "Studio Support", amount: "$10", impact: "Supports reliability + polish."),
-        TipTier(id: "patron", productID: "com.iacompa.sonidea.tip.patron", title: "Patron", amount: "$25", impact: "Backs major improvements.")
+        TipTier(id: "coffee", productID: "com.iacompa.sonidea.tip.002", title: "Coffee", amount: "$2", impact: "Keeps the project moving."),
+        TipTier(id: "feature", productID: "com.iacompa.sonidea.tip.005", title: "Fuel a Feature", amount: "$5", impact: "Helps ship the next update."),
+        TipTier(id: "studio", productID: "com.iacompa.sonidea.tip.010", title: "Studio Support", amount: "$10", impact: "Supports reliability + polish."),
+        TipTier(id: "patron", productID: "com.iacompa.sonidea.tip.025", title: "Patron", amount: "$25", impact: "Backs major improvements.")
     ]
 
-    // All supported custom amounts (must have IAP products for each)
-    // Full range: every dollar from $1-$100, then increments above
+    // All 106 supported amounts: $1-$100 (100 products) + 6 approved larger amounts
     static let supportedAmounts: [Int] = {
         var amounts = Array(1...100)  // $1 to $100, every dollar
-        amounts.append(contentsOf: [125, 150, 175, 200, 250, 300, 400, 500])  // Larger amounts
+        amounts.append(contentsOf: approvedLargerAmounts)
         return amounts
     }()
 
-    // Quick pick amounts for UI chips
-    static let quickPickAmounts: [Int] = [1, 3, 5, 10, 25, 50, 100]
+    // Custom amount range (typed in TextField)
+    static let customAmountRange: ClosedRange<Int> = 1...100
 
-    // Product ID mapping for custom amounts
-    static func productID(for amount: Int) -> String {
-        // Named tiers (for backward compatibility)
-        switch amount {
-        case 2: return "com.iacompa.sonidea.tip.coffee"
-        case 5: return "com.iacompa.sonidea.tip.feature"
-        case 10: return "com.iacompa.sonidea.tip.studio"
-        case 25: return "com.iacompa.sonidea.tip.patron"
-        default:
-            // All other amounts use the uniform custom format
-            if supportedAmounts.contains(amount) {
-                return "com.iacompa.sonidea.tip.custom\(amount)"
-            }
-            // For amounts not in the list, find nearest and return its product ID
-            let nearest = nearestSupportedAmount(to: amount)
-            return productID(for: nearest)
-        }
+    // Approved larger amounts (selectable via dropdown only)
+    static let approvedLargerAmounts: [Int] = [125, 150, 200, 250, 300, 500]
+
+    // Check if an amount is a valid custom amount ($1-$100)
+    static func isValidCustomAmount(_ amount: Int) -> Bool {
+        customAmountRange.contains(amount)
     }
 
-    // Find nearest supported amount (no upper limit - caps at max supported)
-    static func nearestSupportedAmount(to value: Int) -> Int {
-        guard value >= 1 else { return 1 }
-        // For values within 1-100, return exact (no rounding needed)
-        if value <= 100 {
-            return value
-        }
-        // For values above 100, find the closest supported amount
-        let largeAmounts = supportedAmounts.filter { $0 > 100 }
-        return largeAmounts.min(by: { abs($0 - value) < abs($1 - value) }) ?? supportedAmounts.last!
+    // Check if an amount is an approved larger amount
+    static func isApprovedLargerAmount(_ amount: Int) -> Bool {
+        approvedLargerAmounts.contains(amount)
     }
 
-    // All product IDs for loading
+    // Check if an amount is supported (can be purchased)
+    static func isSupported(_ amount: Int) -> Bool {
+        supportedAmounts.contains(amount)
+    }
+
+    // Product ID for a given amount (3-digit zero-padded format)
+    // Returns nil if amount is not supported
+    static func productID(for amount: Int) -> String? {
+        guard isSupported(amount) else { return nil }
+        return String(format: "com.iacompa.sonidea.tip.%03d", amount)
+    }
+
+    // All product IDs for loading (106 total)
     static var allProductIDs: Set<String> {
-        Set(supportedAmounts.map { productID(for: $0) })
+        Set(supportedAmounts.compactMap { productID(for: $0) })
     }
 }
 
@@ -296,7 +290,7 @@ final class SupportManager {
 
     func purchase(productID: String) async {
         guard let product = products.first(where: { $0.id == productID }) else {
-            purchaseError = "Product not available"
+            purchaseError = "Tip options are still loading. Try again in a moment."
             return
         }
 
@@ -352,10 +346,9 @@ final class SupportManager {
         products.first { $0.id == productID }?.displayPrice
     }
 
-    // Get price for a specific dollar amount
+    // Get price for a specific dollar amount (exact match only)
     func priceForAmount(_ amount: Int) -> String? {
-        let nearestAmount = TipTier.nearestSupportedAmount(to: amount)
-        let productID = TipTier.productID(for: nearestAmount)
+        guard let productID = TipTier.productID(for: amount) else { return nil }
         return priceForProduct(productID)
     }
 
