@@ -895,6 +895,7 @@ struct RecordingDetailView: View {
                 currentRecording.transcript = transcript
                 appState.updateTranscript(transcript, for: currentRecording.id)
                 isTranscribing = false
+                appState.onTranscriptionSuccess()
             } catch {
                 transcriptionError = error.localizedDescription
                 isTranscribing = false

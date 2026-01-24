@@ -40,6 +40,7 @@ final class AppState {
 
     let recorder = RecorderManager()
     let locationManager = LocationManager()
+    let supportManager = SupportManager()
 
     private(set) var nextRecordingNumber: Int = 1
 
@@ -175,6 +176,33 @@ final class AppState {
         )
         recordButtonPosition = clamped
         persistRecordButtonPosition()
+    }
+
+    // MARK: - Support Manager Hooks
+
+    /// Call when app becomes active/foreground
+    func onAppBecameActive() {
+        supportManager.registerActiveDayIfNeeded()
+    }
+
+    /// Call when recording is saved
+    func onRecordingSaved() {
+        supportManager.onRecordingSaved(totalRecordings: activeRecordings.count)
+    }
+
+    /// Call when export succeeds
+    func onExportSuccess() {
+        supportManager.onExportSuccess(totalRecordings: activeRecordings.count)
+    }
+
+    /// Call when transcription succeeds
+    func onTranscriptionSuccess() {
+        supportManager.onTranscriptionSuccess(totalRecordings: activeRecordings.count)
+    }
+
+    /// Call when recording state changes
+    func onRecordingStateChanged(isRecording: Bool) {
+        supportManager.setRecordingState(isRecording)
     }
 
     // MARK: - Filtered Recording Lists

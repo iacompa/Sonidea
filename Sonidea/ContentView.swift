@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTipJar = false
+    @State private var showAskPromptFromMain = false
 
     // Drag state for record button
     @State private var dragStartPosition: CGPoint = .zero
@@ -149,7 +150,26 @@ struct ContentView: View {
             SettingsSheetView()
         }
         .sheet(isPresented: $showTipJar) {
-            TipJarSheetView()
+            TipJarView()
+        }
+        .sheet(isPresented: $showAskPromptFromMain) {
+            AskPromptSheet {
+                showTipJar = true
+            }
+            .presentationDetents([.height(300)])
+            .presentationDragIndicator(.hidden)
+        }
+        .onChange(of: appState.supportManager.shouldShowAskPromptSheet) { _, shouldShow in
+            if shouldShow {
+                showAskPromptFromMain = true
+                appState.supportManager.shouldShowAskPromptSheet = false
+            }
+        }
+        .onChange(of: appState.recorder.isRecording) { _, isRecording in
+            appState.onRecordingStateChanged(isRecording: isRecording)
+        }
+        .onAppear {
+            appState.onAppBecameActive()
         }
     }
 
@@ -409,6 +429,7 @@ struct ContentView: View {
         if appState.recorder.isRecording {
             if let rawData = appState.recorder.stopRecording() {
                 appState.addRecording(from: rawData)
+                appState.onRecordingSaved()
                 currentRoute = .recordings
             }
         } else {
@@ -1382,6 +1403,7 @@ struct SettingsSheetView: View {
                 isExporting = false
                 exportProgress = ""
                 showShareSheet = true
+                appState.onExportSuccess()
             } catch {
                 isExporting = false
                 exportProgress = ""
@@ -1405,6 +1427,7 @@ struct SettingsSheetView: View {
                 isExporting = false
                 exportProgress = ""
                 showShareSheet = true
+                appState.onExportSuccess()
             } catch {
                 isExporting = false
                 exportProgress = ""
@@ -1667,37 +1690,6 @@ struct ExportAlbumPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Tip Jar Sheet
-struct TipJarSheetView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(.systemBackground).ignoresSafeArea()
-                VStack(spacing: 16) {
-                    Image(systemName: "heart.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(.pink)
-                    Text("Tip Jar")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Text("Support the developer")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .navigationTitle("Tip Jar")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
                 }
             }
         }
