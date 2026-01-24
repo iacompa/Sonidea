@@ -307,11 +307,6 @@ struct ContentView: View {
                 resetPillView(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
             }
 
-            // Save/Discard pill (shown when recording is paused)
-            if appState.recorder.isPaused && !showResetPill {
-                saveDiscardPillView(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
-            }
-
             // Move hint overlay (shown once per install, subtle nudge animation)
             if showMoveHint && !appState.recorder.isActive {
                 moveHintOverlay(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
@@ -452,46 +447,6 @@ struct ContentView: View {
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    // MARK: - Save Pill View
-
-    private func saveDiscardPillView(buttonPosition: CGPoint, containerSize: CGSize, safeArea: EdgeInsets) -> some View {
-        let pillHeight: CGFloat = 44
-        let spacing: CGFloat = 16
-        let buttonBottom = buttonPosition.y + buttonDiameter / 2
-        let spaceBelow = containerSize.height - safeArea.bottom - buttonBottom
-
-        // Show above if not enough space below
-        let showAbove = spaceBelow < (pillHeight + spacing + 20)
-        let pillY = showAbove
-            ? buttonPosition.y - buttonDiameter / 2 - spacing - pillHeight / 2
-            : buttonPosition.y + buttonDiameter / 2 + spacing + pillHeight / 2
-
-        return Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            saveRecording()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 14, weight: .bold))
-                Text("Save")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(
-                Capsule()
-                    .fill(palette.accent)
-                    .shadow(color: palette.accent.opacity(0.3), radius: 4, y: 2)
-            )
-        }
-        .buttonStyle(.plain)
-        .position(x: buttonPosition.x, y: pillY)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: appState.recorder.isPaused)
-    }
-
     // MARK: - Move Hint Overlay
 
     private func moveHintOverlay(buttonPosition: CGPoint, containerSize: CGSize, safeArea: EdgeInsets) -> some View {
@@ -623,7 +578,16 @@ struct ContentView: View {
                             RecordingHUDCard(
                                 duration: appState.recorder.currentDuration,
                                 liveSamples: appState.recorder.liveMeterSamples,
-                                isPaused: appState.recorder.isPaused
+                                isPaused: appState.recorder.isPaused,
+                                onPause: {
+                                    appState.recorder.pauseRecording()
+                                },
+                                onResume: {
+                                    appState.recorder.resumeRecording()
+                                },
+                                onSave: {
+                                    saveRecording()
+                                }
                             )
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
@@ -748,8 +712,8 @@ struct ContentView: View {
             // Start new recording
             appState.recorder.startRecording()
         case .recording:
-            // Pause the recording
-            appState.recorder.pauseRecording()
+            // Stop and save immediately (Apple-like behavior)
+            saveRecording()
         case .paused:
             // Resume the recording
             appState.recorder.resumeRecording()
@@ -925,6 +889,9 @@ struct RecordingHUDCard: View {
     let duration: TimeInterval
     let liveSamples: [Float]
     var isPaused: Bool = false
+    var onPause: (() -> Void)? = nil
+    var onResume: (() -> Void)? = nil
+    var onSave: (() -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
@@ -943,6 +910,7 @@ struct RecordingHUDCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header: Recording/Paused status + Timer
             HStack(alignment: .center) {
                 HStack(spacing: 10) {
                     if isPaused {
@@ -978,14 +946,16 @@ struct RecordingHUDCard: View {
             .padding(.top, 20)
             .padding(.bottom, 16)
 
+            // Waveform
             ZStack {
                 if liveSamples.isEmpty {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(palette.textPrimary.opacity(0.05))
                         .frame(height: 56)
                 } else {
-                    LiveWaveformView(samples: liveSamples, accentColor: palette.liveRecordingAccent)
+                    LiveWaveformView(samples: liveSamples, accentColor: isPaused ? palette.textSecondary : palette.liveRecordingAccent)
                         .frame(height: 56)
+                        .opacity(isPaused ? 0.5 : 1.0)
                 }
             }
             .padding(.horizontal, 20)
@@ -996,6 +966,7 @@ struct RecordingHUDCard: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
 
+            // Bottom row: Mic info + Controls
             HStack {
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
@@ -1009,8 +980,12 @@ struct RecordingHUDCard: View {
 
                 Spacer()
 
-                if let lastSample = liveSamples.last {
-                    PremiumLevelMeter(level: lastSample)
+                if isPaused {
+                    // Paused state: Save + Resume buttons
+                    pausedControlButtons
+                } else {
+                    // Recording state: Pause button + Level meter
+                    recordingControlButtons
                 }
             }
             .padding(.horizontal, 20)
@@ -1030,6 +1005,128 @@ struct RecordingHUDCard: View {
         .onChange(of: isPaused) { _, paused in
             isPulsing = !paused
         }
+    }
+
+    // MARK: - Recording Control Buttons
+
+    private var recordingControlButtons: some View {
+        HStack(spacing: 10) {
+            // Pause button
+            RecordingControlChip(
+                icon: "pause.fill",
+                label: "Pause",
+                style: .secondary,
+                action: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onPause?()
+                }
+            )
+
+            if let lastSample = liveSamples.last {
+                PremiumLevelMeter(level: lastSample)
+            }
+        }
+    }
+
+    // MARK: - Paused Control Buttons
+
+    private var pausedControlButtons: some View {
+        HStack(spacing: 8) {
+            // Save button (primary action)
+            RecordingControlChip(
+                icon: "checkmark",
+                label: "Save",
+                style: .primary,
+                action: {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    onSave?()
+                }
+            )
+
+            // Resume button (secondary action)
+            RecordingControlChip(
+                icon: "play.fill",
+                label: "Resume",
+                style: .secondary,
+                action: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onResume?()
+                }
+            )
+        }
+    }
+}
+
+// MARK: - Recording Control Chip (Apple-like compact button)
+
+private struct RecordingControlChip: View {
+    let icon: String
+    let label: String
+    let style: ChipStyle
+    let action: () -> Void
+
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
+    enum ChipStyle {
+        case primary    // Accent-colored, for main actions like Save
+        case secondary  // Neutral/subtle, for Pause/Resume
+    }
+
+    private var foregroundColor: Color {
+        switch style {
+        case .primary:
+            return .white
+        case .secondary:
+            return palette.textPrimary
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch style {
+        case .primary:
+            return palette.accent
+        case .secondary:
+            return colorScheme == .dark
+                ? Color.white.opacity(0.12)
+                : Color.black.opacity(0.06)
+        }
+    }
+
+    private var borderColor: Color {
+        switch style {
+        case .primary:
+            return Color.clear
+        case .secondary:
+            return palette.separator.opacity(0.3)
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(label)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundColor(foregroundColor)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(
+                Capsule()
+                    .fill(backgroundColor)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(borderColor, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2571,6 +2668,8 @@ struct SettingsSheetView: View {
                                         .foregroundStyle(palette.accent)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(palette.cardBackground)
