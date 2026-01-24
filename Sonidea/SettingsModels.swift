@@ -211,5 +211,10 @@ struct AppSettings: Codable {
     var silenceSkipSettings: SilenceSkipSettings = .default
     var iCloudSyncEnabled: Bool = false
 
+    // Move hint tracking
+    var hasShownMoveHint: Bool = false
+    var hasEverMovedRecordButton: Bool = false
+    var lastMoveHintShownAt: Date? = nil
+
     static let `default` = AppSettings()
 }

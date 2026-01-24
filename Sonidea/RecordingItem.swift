@@ -69,6 +69,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     /// SHA-256 hash of the location payload JSON
     var locationProofHash: String?
 
+    /// Location proof status stored as raw string (independent from date proof)
+    var locationProofStatusRaw: String?
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
@@ -110,6 +113,17 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         }
         set {
             locationModeRaw = newValue.rawValue
+        }
+    }
+
+    /// Location proof status enum (computed from raw string, independent from date proof)
+    var locationProofStatus: LocationProofStatus {
+        get {
+            guard let raw = locationProofStatusRaw else { return .none }
+            return LocationProofStatus(rawValue: raw) ?? .none
+        }
+        set {
+            locationProofStatusRaw = newValue.rawValue
         }
     }
 
@@ -263,7 +277,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         proofCloudCreatedAt: Date? = nil,
         proofCloudRecordName: String? = nil,
         locationModeRaw: String? = nil,
-        locationProofHash: String? = nil
+        locationProofHash: String? = nil,
+        locationProofStatusRaw: String? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -290,6 +305,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.proofCloudRecordName = proofCloudRecordName
         self.locationModeRaw = locationModeRaw
         self.locationProofHash = locationProofHash
+        self.locationProofStatusRaw = locationProofStatusRaw
     }
 
     // MARK: - Codable with Migration Support
@@ -300,7 +316,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         case lastPlaybackPosition, iconColorHex, eqSettings
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
-        case locationModeRaw, locationProofHash
+        case locationModeRaw, locationProofHash, locationProofStatusRaw
     }
 
     init(from decoder: Decoder) throws {
@@ -335,6 +351,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         proofCloudRecordName = try container.decodeIfPresent(String.self, forKey: .proofCloudRecordName)
         locationModeRaw = try container.decodeIfPresent(String.self, forKey: .locationModeRaw)
         locationProofHash = try container.decodeIfPresent(String.self, forKey: .locationProofHash)
+        locationProofStatusRaw = try container.decodeIfPresent(String.self, forKey: .locationProofStatusRaw)
     }
 }
 

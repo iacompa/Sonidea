@@ -133,6 +133,12 @@ final class ProofManager {
                     updatedRecording.proofCloudRecordName = recordName
                     updatedRecording.locationModeRaw = locationMode.rawValue
                     updatedRecording.locationProofHash = locationProofHash
+                    // Set location proof status independently (verified if we have location data)
+                    if locationProofHash != nil {
+                        updatedRecording.locationProofStatusRaw = LocationProofStatus.verified.rawValue
+                    } else {
+                        updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
+                    }
 
                 } catch {
                     // CloudKit error - add to pending queue
@@ -148,6 +154,12 @@ final class ProofManager {
                     updatedRecording.proofSHA256 = sha256
                     updatedRecording.locationModeRaw = locationMode.rawValue
                     updatedRecording.locationProofHash = locationProofHash
+                    // Set location proof status to pending if we have location data
+                    if locationProofHash != nil {
+                        updatedRecording.locationProofStatusRaw = LocationProofStatus.pending.rawValue
+                    } else {
+                        updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
+                    }
                 }
             } else {
                 // Offline - add to pending queue
@@ -162,6 +174,12 @@ final class ProofManager {
                 updatedRecording.proofSHA256 = sha256
                 updatedRecording.locationModeRaw = locationMode.rawValue
                 updatedRecording.locationProofHash = locationProofHash
+                // Set location proof status to pending if we have location data
+                if locationProofHash != nil {
+                    updatedRecording.locationProofStatusRaw = LocationProofStatus.pending.rawValue
+                } else {
+                    updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
+                }
             }
 
         } catch {

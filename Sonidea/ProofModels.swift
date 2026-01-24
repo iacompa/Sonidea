@@ -48,6 +48,31 @@ enum ProofStatus: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Location Proof Status
+
+/// Independent verification status for location data
+enum LocationProofStatus: String, Codable, CaseIterable {
+    case none       // No location captured at record time
+    case pending    // Location captured, awaiting CloudKit upload
+    case verified   // Location verified via CloudKit (original, unedited)
+    case edited     // Location was manually changed by user after recording
+    case error      // CloudKit error occurred
+
+    var displayName: String {
+        switch self {
+        case .none: return "Not verified"
+        case .pending: return "Pending"
+        case .verified: return "Verified"
+        case .edited: return "Edited"
+        case .error: return "Not verified"
+        }
+    }
+
+    var isVerified: Bool {
+        self == .verified
+    }
+}
+
 // MARK: - Location Mode
 
 enum LocationMode: String, Codable, CaseIterable {

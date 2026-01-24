@@ -35,23 +35,12 @@ enum SearchScope: String, CaseIterable {
 // MARK: - Search Mode Enum
 enum SearchMode: String, CaseIterable {
     case `default`
-    case map
     case calendar
     case timeline
-
-    var displayName: String {
-        switch self {
-        case .default: return "Default"
-        case .map: return "Map"
-        case .calendar: return "Calendar"
-        case .timeline: return "Timeline"
-        }
-    }
 
     var iconName: String {
         switch self {
         case .default: return "magnifyingglass"
-        case .map: return "map"
         case .calendar: return "calendar"
         case .timeline: return "clock"
         }
@@ -67,8 +56,6 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTipJar = false
-    @State private var showJournal = false
-    @State private var showCalendar = false
     @State private var showAskPromptFromMain = false
     @State private var showThankYouToast = false
     @State private var showRecoveryAlert = false
@@ -79,6 +66,10 @@ struct ContentView: View {
 
     // Long-press reset pill
     @State private var showResetPill = false
+
+    // Move hint animation state
+    @State private var showMoveHint = false
+    @State private var hintNudgeOffset: CGFloat = 0
 
     // Layout constants
     private let topBarHeight: CGFloat = 72
@@ -196,18 +187,6 @@ struct ContentView: View {
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .sheet(isPresented: $showJournal) {
-            JournalView()
-                .environment(appState)
-                .environment(\.themePalette, palette)
-                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
-        }
-        .sheet(isPresented: $showCalendar) {
-            CalendarView()
-                .environment(appState)
-                .environment(\.themePalette, palette)
-                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
-        }
         .sheet(isPresented: $showAskPromptFromMain) {
             AskPromptSheet {
                 showTipJar = true
@@ -251,6 +230,8 @@ struct ContentView: View {
             appState.recorder.onStopAndSaveRequested = { [self] in
                 saveRecording()
             }
+            // Check if we should show the move hint
+            checkAndShowMoveHint()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -331,12 +312,18 @@ struct ContentView: View {
                 saveDiscardPillView(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
             }
 
+            // Move hint overlay (shown once per install, subtle nudge animation)
+            if showMoveHint && !appState.recorder.isActive {
+                moveHintOverlay(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
+            }
+
             // The floating record button
             VoiceMemosRecordButton()
                 .frame(width: buttonDiameter, height: buttonDiameter)
                 .contentShape(Circle().inset(by: -20)) // Larger hit area
                 .shadow(color: .black.opacity(isDragging ? 0.3 : 0.2), radius: isDragging ? 12 : 8, y: isDragging ? 6 : 4)
                 .scaleEffect(isDragging ? 1.05 : 1.0)
+                .offset(x: hintNudgeOffset) // Nudge animation offset
                 .position(buttonPosition)
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
@@ -355,6 +342,15 @@ struct ContentView: View {
                                     // Hide reset pill when dragging
                                     if showResetPill {
                                         showResetPill = false
+                                    }
+                                    // Dismiss move hint and mark as moved
+                                    if showMoveHint {
+                                        dismissMoveHint()
+                                    }
+                                    if !appState.appSettings.hasEverMovedRecordButton {
+                                        var settings = appState.appSettings
+                                        settings.hasEverMovedRecordButton = true
+                                        appState.appSettings = settings
                                     }
                                 }
 
@@ -384,6 +380,10 @@ struct ContentView: View {
                                 isDragging = false
                             } else {
                                 // Was a tap (no significant movement)
+                                // Dismiss move hint on tap
+                                if showMoveHint {
+                                    dismissMoveHint()
+                                }
                                 if !showResetPill {
                                     handleRecordTap()
                                 }
@@ -490,6 +490,121 @@ struct ContentView: View {
         .position(x: buttonPosition.x, y: pillY)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: appState.recorder.isPaused)
+    }
+
+    // MARK: - Move Hint Overlay
+
+    private func moveHintOverlay(buttonPosition: CGPoint, containerSize: CGSize, safeArea: EdgeInsets) -> some View {
+        let hintHeight: CGFloat = 28
+        let spacing: CGFloat = 14
+        let buttonTop = buttonPosition.y - buttonDiameter / 2
+
+        // Always show above the button
+        let hintY = buttonTop - spacing - hintHeight / 2
+
+        return Text("Drag to move anywhere")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+            )
+            .position(x: buttonPosition.x + hintNudgeOffset, y: hintY)
+            .transition(.opacity)
+    }
+
+    // MARK: - Move Hint Logic
+
+    private func checkAndShowMoveHint() {
+        // Don't show if currently recording
+        guard !appState.recorder.isActive else { return }
+
+        let settings = appState.appSettings
+
+        // First-time hint: show if never shown before
+        if !settings.hasShownMoveHint {
+            // Delay slightly to let the UI settle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                showMoveHintAnimation()
+            }
+            return
+        }
+
+        // Re-hint logic: show again if user never moved the button, has 10+ recordings, and 14+ days since last hint
+        if !settings.hasEverMovedRecordButton,
+           appState.recordings.count >= 10,
+           let lastShown = settings.lastMoveHintShownAt,
+           Date().timeIntervalSince(lastShown) >= 14 * 24 * 60 * 60 { // 14 days
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                showMoveHintAnimation()
+            }
+        }
+    }
+
+    private func showMoveHintAnimation() {
+        // Mark as shown
+        var settings = appState.appSettings
+        settings.hasShownMoveHint = true
+        settings.lastMoveHintShownAt = Date()
+        appState.appSettings = settings
+
+        // Show the hint
+        withAnimation(.easeOut(duration: 0.25)) {
+            showMoveHint = true
+        }
+
+        // Perform the nudge animation (3 oscillations over ~1.1 seconds)
+        let nudgeDistance: CGFloat = 10
+        let singleOscillationDuration: Double = 0.18
+
+        // Oscillation sequence: right -> left -> right -> left -> right -> center
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = nudgeDistance
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = -nudgeDistance
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 2) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = nudgeDistance * 0.6
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 3) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = -nudgeDistance * 0.6
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 4) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = nudgeDistance * 0.3
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 5) {
+            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                hintNudgeOffset = 0
+            }
+        }
+
+        // Auto-dismiss after 2.5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if showMoveHint {
+                dismissMoveHint()
+            }
+        }
+    }
+
+    private func dismissMoveHint() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            showMoveHint = false
+            hintNudgeOffset = 0
+        }
     }
 
     // MARK: - Main Content Layer
@@ -606,22 +721,6 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 8) {
-                Button { showJournal = true } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(iconColor)
-                        .frame(width: 44, height: 44)
-                }
-
-                Button { showCalendar = true } label: {
-                    Image(systemName: "calendar")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(iconColor)
-                        .frame(width: 44, height: 44)
-                }
-
                 Button { showSearch = true } label: {
                     Image(systemName: "magnifyingglass")
                         .symbolRenderingMode(.monochrome)
@@ -1081,8 +1180,6 @@ struct SearchSheetView: View {
                 switch searchMode {
                 case .default:
                     defaultSearchContent
-                case .map:
-                    mapSearchContent
                 case .calendar:
                     calendarSearchContent
                 case .timeline:
@@ -1091,40 +1188,50 @@ struct SearchSheetView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 12) {
-                        // Mode menu on the left
-                        Menu {
-                            ForEach(SearchMode.allCases, id: \.self) { mode in
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        searchMode = mode
-                                    }
-                                } label: {
-                                    Label(mode.displayName, systemImage: mode.iconName)
-                                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HStack(spacing: 4) {
+                        // Calendar mode button
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                searchMode = searchMode == .calendar ? .default : .calendar
                             }
                         } label: {
-                            HStack(spacing: 4) {
-                                Text(searchMode.displayName)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Image(systemName: "chevron.down")
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                            }
-                            .foregroundStyle(palette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(palette.accent.opacity(0.12))
-                            .clipShape(Capsule())
+                            Image(systemName: "calendar")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(searchMode == .calendar ? palette.accent : palette.textSecondary)
+                                .frame(width: 36, height: 36)
+                                .background(searchMode == .calendar ? palette.accent.opacity(0.15) : Color.clear)
+                                .clipShape(Circle())
                         }
 
-                        // Title centered
+                        // Timeline mode button
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                searchMode = searchMode == .timeline ? .default : .timeline
+                            }
+                        } label: {
+                            Image(systemName: "clock")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(searchMode == .timeline ? palette.accent : palette.textSecondary)
+                                .frame(width: 36, height: 36)
+                                .background(searchMode == .timeline ? palette.accent.opacity(0.15) : Color.clear)
+                                .clipShape(Circle())
+                        }
+                    }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    // Title - tapping it returns to default search
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            searchMode = .default
+                        }
+                    } label: {
                         Text("Search")
                             .font(.headline)
-                            .foregroundStyle(palette.textPrimary)
+                            .foregroundStyle(searchMode == .default ? palette.accent : palette.textPrimary)
                     }
+                    .buttonStyle(.plain)
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -1214,12 +1321,6 @@ struct SearchSheetView: View {
             }
         }
         .padding(.top)
-    }
-
-    // MARK: - Map Search Content
-
-    private var mapSearchContent: some View {
-        SearchMapView(selectedRecording: $selectedRecording)
     }
 
     // MARK: - Calendar Search Content
@@ -1355,97 +1456,6 @@ struct SearchSheetView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-        }
-    }
-}
-
-// MARK: - Search Map View (Embedded)
-
-struct SearchMapView: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.themePalette) private var palette
-    @Binding var selectedRecording: RecordingItem?
-
-    @State private var cameraPosition: MapCameraPosition = .automatic
-
-    private var recordingsWithLocation: [RecordingItem] {
-        appState.activeRecordings.filter { $0.hasCoordinates }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if recordingsWithLocation.isEmpty {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "map")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("No locations recorded")
-                        .font(.headline)
-                        .foregroundStyle(palette.textPrimary)
-                    Text("Recordings with location data will appear on the map")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                Spacer()
-            } else {
-                Map(position: $cameraPosition) {
-                    ForEach(recordingsWithLocation) { recording in
-                        if let lat = recording.latitude, let lon = recording.longitude {
-                            Annotation(recording.title, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                                Button {
-                                    selectedRecording = recording
-                                } label: {
-                                    Image(systemName: "waveform.circle.fill")
-                                        .font(.title)
-                                        .foregroundStyle(palette.accent)
-                                        .background(Circle().fill(.white).frame(width: 28, height: 28))
-                                }
-                            }
-                        }
-                    }
-                }
-                .mapStyle(.standard)
-                .onAppear {
-                    fitToRecordings()
-                }
-            }
-        }
-    }
-
-    private func fitToRecordings() {
-        guard !recordingsWithLocation.isEmpty else { return }
-
-        let coordinates = recordingsWithLocation.compactMap { recording -> CLLocationCoordinate2D? in
-            guard let lat = recording.latitude, let lon = recording.longitude else { return nil }
-            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        }
-
-        guard !coordinates.isEmpty else { return }
-
-        if coordinates.count == 1 {
-            cameraPosition = .region(MKCoordinateRegion(
-                center: coordinates[0],
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            ))
-        } else {
-            let minLat = coordinates.map(\.latitude).min() ?? 0
-            let maxLat = coordinates.map(\.latitude).max() ?? 0
-            let minLon = coordinates.map(\.longitude).min() ?? 0
-            let maxLon = coordinates.map(\.longitude).max() ?? 0
-
-            let center = CLLocationCoordinate2D(
-                latitude: (minLat + maxLat) / 2,
-                longitude: (minLon + maxLon) / 2
-            )
-            let span = MKCoordinateSpan(
-                latitudeDelta: (maxLat - minLat) * 1.3 + 0.01,
-                longitudeDelta: (maxLon - minLon) * 1.3 + 0.01
-            )
-
-            cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
         }
     }
 }

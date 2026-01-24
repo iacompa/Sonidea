@@ -8,6 +8,32 @@
 import SwiftUI
 import MapKit
 
+// MARK: - Original State Snapshot (for Done/Save logic)
+
+private struct RecordingSnapshot: Equatable {
+    let title: String
+    let notes: String
+    let albumID: UUID?
+    let projectId: UUID?
+    let tagIDs: [UUID]
+    let locationLabel: String
+    let latitude: Double?
+    let longitude: Double?
+    let iconColorHex: String?
+
+    init(from recording: RecordingItem) {
+        self.title = recording.title
+        self.notes = recording.notes
+        self.albumID = recording.albumID
+        self.projectId = recording.projectId
+        self.tagIDs = recording.tagIDs
+        self.locationLabel = recording.locationLabel
+        self.latitude = recording.latitude
+        self.longitude = recording.longitude
+        self.iconColorHex = recording.iconColorHex
+    }
+}
+
 struct RecordingDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
@@ -55,8 +81,21 @@ struct RecordingDetailView: View {
     @State private var reverseGeocodedName: String?
     @State private var isLoadingReverseGeocode = false
 
-    // Proof state
-    @State private var showProofInfo = false
+    // Location editing state
+    @State private var showLocationEditor = false
+
+    // Verification info sheet state
+    @State private var showVerificationInfo = false
+
+    // Icon color picker state
+    @State private var showIconColorPicker = false
+
+    // Verification timeout state
+    @State private var verificationTimedOut = false
+    @State private var verificationTimeoutTask: Task<Void, Never>?
+
+    // Original state snapshot for Done/Save logic
+    private let originalSnapshot: RecordingSnapshot
 
     // Navigation context flag - when true, tapping project just dismisses back to parent
     private let isOpenedFromProject: Bool
@@ -71,6 +110,29 @@ struct RecordingDetailView: View {
         // Store original hex to avoid overwriting with lossy Color -> hex conversion
         self.originalIconColorHex = recording.iconColorHex
         self.isOpenedFromProject = isOpenedFromProject
+        // Store original snapshot for Done/Save comparison
+        self.originalSnapshot = RecordingSnapshot(from: recording)
+    }
+
+    // MARK: - Computed Properties for Done/Save Logic
+
+    private var currentSnapshot: RecordingSnapshot {
+        var snapshotRecording = currentRecording
+        snapshotRecording.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
+        snapshotRecording.notes = editedNotes
+        snapshotRecording.locationLabel = editedLocationLabel
+        if iconColorWasModified {
+            snapshotRecording.iconColorHex = editedIconColor.toHex()
+        }
+        return RecordingSnapshot(from: snapshotRecording)
+    }
+
+    private var hasEdits: Bool {
+        currentSnapshot != originalSnapshot
+    }
+
+    private var actionButtonTitle: String {
+        hasEdits ? "Save" : "Done"
     }
 
     var body: some View {
@@ -93,21 +155,41 @@ struct RecordingDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        shareRecording()
-                    } label: {
-                        if isExporting {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        } else {
-                            Image(systemName: "square.and.arrow.up")
+                    HStack(spacing: 12) {
+                        // Share button
+                        Button {
+                            shareRecording()
+                        } label: {
+                            if isExporting {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                            } else {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 17))
+                                    .foregroundColor(palette.textPrimary)
+                            }
+                        }
+                        .disabled(isExporting)
+
+                        // Icon color indicator
+                        Button {
+                            showIconColorPicker = true
+                        } label: {
+                            Circle()
+                                .fill(editedIconColor)
+                                .frame(width: 20, height: 20)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(palette.textPrimary.opacity(0.2), lineWidth: 1.5)
+                                )
                         }
                     }
-                    .disabled(isExporting)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        saveChanges()
+                    Button(actionButtonTitle) {
+                        if hasEdits {
+                            saveChanges()
+                        }
                         savePlaybackPosition()
                         playback.stop()
                         dismiss()
@@ -117,10 +199,13 @@ struct RecordingDetailView: View {
             .onAppear {
                 setupPlayback()
                 loadReverseGeocodedName()
+                createProofSilently()
+                startVerificationTimeout()
             }
             .onDisappear {
                 savePlaybackPosition()
                 playback.stop()
+                verificationTimeoutTask?.cancel()
             }
             .sheet(isPresented: $showManageTags) {
                 ManageTagsSheet()
@@ -146,6 +231,35 @@ struct RecordingDetailView: View {
             .sheet(isPresented: $showCreateProject) {
                 CreateProjectSheet(recording: currentRecording)
             }
+            .sheet(isPresented: $showVerificationInfo) {
+                VerificationInfoSheet(
+                    recording: currentRecording,
+                    timedOut: verificationTimedOut
+                )
+                .presentationDetents([.height(220)])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showIconColorPicker) {
+                IconColorPickerSheet(selectedColor: $editedIconColor, onColorChanged: {
+                    iconColorWasModified = true
+                })
+                .presentationDetents([.height(320)])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showLocationEditor) {
+                LocationEditorSheet(
+                    recording: $currentRecording,
+                    editedLocationLabel: $editedLocationLabel,
+                    reverseGeocodedName: $reverseGeocodedName,
+                    onLocationChanged: {
+                        // Mark location as edited - this ONLY affects location verification, NOT date
+                        currentRecording.locationProofStatusRaw = LocationProofStatus.edited.rawValue
+                        appState.updateRecording(currentRecording)
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
             .fullScreenCover(isPresented: $showRecordNewVersion) {
                 RecordNewVersionSheet(
                     sourceRecording: currentRecording,
@@ -165,6 +279,25 @@ struct RecordingDetailView: View {
                     versionSavedToast
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .animation(.spring(response: 0.3), value: showVersionSavedToast)
+                }
+            }
+        }
+    }
+
+    // MARK: - Verification Timeout
+
+    private func startVerificationTimeout() {
+        // Only start timeout if status is pending
+        guard currentRecording.proofStatus == .pending else { return }
+
+        verificationTimeoutTask = Task {
+            try? await Task.sleep(nanoseconds: 12_000_000_000) // 12 seconds
+            if !Task.isCancelled {
+                await MainActor.run {
+                    // If still pending after timeout, mark as timed out
+                    if currentRecording.proofStatus == .pending {
+                        verificationTimedOut = true
+                    }
                 }
             }
         }
@@ -481,37 +614,8 @@ struct RecordingDetailView: View {
                 }
             }
 
-            // Location Section
+            // Location Section (simplified)
             locationSection
-
-            // Storage Section
-            storageSection
-
-            // Proof Section
-            proofSection
-
-            // Icon Color
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Icon Color")
-                    .font(.caption)
-                    .foregroundColor(palette.textSecondary)
-                    .textCase(.uppercase)
-                HStack {
-                    Text("Choose a color for this recording's icon")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                    Spacer()
-                    ColorPicker("", selection: $editedIconColor, supportsOpacity: false)
-                        .labelsHidden()
-                        .onChange(of: editedIconColor) { _, _ in
-                            // Mark icon color as explicitly modified by user
-                            iconColorWasModified = true
-                        }
-                }
-                .padding(12)
-                .background(palette.inputBackground)
-                .cornerRadius(8)
-            }
 
             // Transcription
             VStack(alignment: .leading, spacing: 8) {
@@ -598,6 +702,65 @@ struct RecordingDetailView: View {
                     .background(palette.inputBackground)
                     .cornerRadius(8)
             }
+
+            // Footer: File size + Verification status
+            footerSection
+        }
+    }
+
+    // MARK: - Footer Section (File size + Verification)
+
+    private var footerSection: some View {
+        VStack(spacing: 12) {
+            // File size (subtle, at bottom)
+            HStack {
+                Spacer()
+                Text(currentRecording.fileSizeFormatted)
+                    .font(.caption)
+                    .foregroundColor(palette.textTertiary)
+            }
+
+            // Verification status row
+            HStack {
+                Spacer()
+
+                Text(verificationStatusText)
+                    .font(.caption)
+                    .foregroundColor(verificationStatusColor)
+
+                Button {
+                    showVerificationInfo = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 16))
+                        .foregroundColor(palette.textTertiary)
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    // MARK: - Verification Status (Date-only, independent from location)
+
+    private var verificationStatusText: String {
+        if verificationTimedOut && currentRecording.proofStatus == .pending {
+            return "Not verified"
+        }
+        switch currentRecording.proofStatus {
+        case .proven: return "Verified"
+        case .pending: return "Pending"
+        case .none, .error, .mismatch: return "Not verified"
+        }
+    }
+
+    private var verificationStatusColor: Color {
+        if verificationTimedOut && currentRecording.proofStatus == .pending {
+            return palette.textTertiary
+        }
+        switch currentRecording.proofStatus {
+        case .proven: return .green
+        case .pending: return .orange
+        case .none, .error, .mismatch: return palette.textTertiary
         }
     }
 
@@ -617,7 +780,9 @@ struct RecordingDetailView: View {
                     Button {
                         if isOpenedFromProject {
                             // Already came from project - just go back (dismiss)
-                            saveChanges()
+                            if hasEdits {
+                                saveChanges()
+                            }
                             dismiss()
                         } else {
                             // Open project sheet
@@ -737,7 +902,7 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: - Location Section
+    // MARK: - Location Section (Simplified)
 
     @ViewBuilder
     private var locationSection: some View {
@@ -747,193 +912,61 @@ struct RecordingDetailView: View {
                 .foregroundColor(palette.textSecondary)
                 .textCase(.uppercase)
 
-            if currentRecording.hasCoordinates {
-                // Has GPS coordinates - show pinned location
-                pinnedLocationView
-            } else {
-                // No coordinates - show address search
-                addressSearchView
-            }
-        }
-    }
-
-    private var pinnedLocationView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Pinned location indicator
-            HStack(spacing: 8) {
-                Image(systemName: "mappin.circle.fill")
-                    .foregroundColor(.red)
-                    .font(.system(size: 20))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pinned Location")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(palette.textPrimary)
-
-                    if isLoadingReverseGeocode {
-                        HStack(spacing: 4) {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Loading...")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    } else if let name = reverseGeocodedName, !name.isEmpty {
-                        Text(name)
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                            .lineLimit(2)
-                    } else if !editedLocationLabel.isEmpty {
-                        Text(editedLocationLabel)
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                            .lineLimit(2)
-                    } else if let lat = currentRecording.latitude, let lon = currentRecording.longitude {
-                        Text(String(format: "%.4f, %.4f", lat, lon))
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                }
-
-                Spacer()
-
-                // Clear location button
-                Button {
-                    clearLocation()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(palette.textSecondary)
+            Button {
+                showLocationEditor = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(currentRecording.hasCoordinates ? .red : palette.textTertiary)
                         .font(.system(size: 20))
-                }
-            }
-            .padding(12)
-            .background(palette.inputBackground)
-            .cornerRadius(8)
 
-            // Editable label
-            TextField("Location label (optional)", text: $editedLocationLabel)
-                .textFieldStyle(.plain)
-                .foregroundColor(palette.textPrimary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if currentRecording.hasCoordinates {
+                            Text("Pinned Location")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textPrimary)
+
+                            if isLoadingReverseGeocode {
+                                HStack(spacing: 4) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("Loading...")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            } else if let name = reverseGeocodedName, !name.isEmpty {
+                                Text(name)
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
+                            } else if !editedLocationLabel.isEmpty {
+                                Text(editedLocationLabel)
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
+                            }
+                        } else {
+                            Text("No location")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textSecondary)
+
+                            Text("Tap to add")
+                                .font(.caption)
+                                .foregroundColor(palette.textTertiary)
+                        }
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
                 .padding(12)
                 .background(palette.inputBackground)
                 .cornerRadius(8)
-        }
-    }
-
-    private var addressSearchView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Search field
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(palette.textSecondary)
-                TextField("Search for a place or address", text: $locationSearchQuery)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(palette.textPrimary)
-                    .onChange(of: locationSearchQuery) { _, newValue in
-                        appState.locationManager.searchQuery = newValue
-                    }
-
-                if !locationSearchQuery.isEmpty {
-                    Button {
-                        locationSearchQuery = ""
-                        appState.locationManager.clearSearch()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(palette.textSecondary)
-                    }
-                }
             }
-            .padding(12)
-            .background(palette.inputBackground)
-            .cornerRadius(8)
-
-            // Search results
-            if !appState.locationManager.searchResults.isEmpty && !locationSearchQuery.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(appState.locationManager.searchResults.prefix(5), id: \.self) { result in
-                        Button {
-                            selectSearchResult(result)
-                        } label: {
-                            HStack {
-                                Image(systemName: "mappin")
-                                    .foregroundColor(.red)
-                                    .frame(width: 24)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(result.title)
-                                        .font(.subheadline)
-                                        .foregroundColor(palette.textPrimary)
-                                        .lineLimit(1)
-                                    if !result.subtitle.isEmpty {
-                                        Text(result.subtitle)
-                                            .font(.caption)
-                                            .foregroundColor(palette.textSecondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 12)
-                        }
-                        .buttonStyle(.plain)
-
-                        if result != appState.locationManager.searchResults.prefix(5).last {
-                            Rectangle()
-                                .fill(palette.separator)
-                                .frame(height: 1)
-                                .padding(.leading, 48)
-                        }
-                    }
-                }
-                .background(palette.inputBackground)
-                .cornerRadius(8)
-            }
-
-            // Manual save button (geocode typed address)
-            if !locationSearchQuery.isEmpty && appState.locationManager.searchResults.isEmpty {
-                Button {
-                    geocodeManualAddress()
-                } label: {
-                    HStack {
-                        if isSearchingLocation {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "location.fill")
-                        }
-                        Text("Save as Location")
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(palette.accent)
-                    .padding(12)
-                    .frame(maxWidth: .infinity)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
-                }
-                .disabled(isSearchingLocation)
-            }
-
-            // Request location permission hint
-            if appState.locationManager.authorizationStatus == .notDetermined {
-                Button {
-                    appState.locationManager.requestPermission()
-                } label: {
-                    HStack {
-                        Image(systemName: "location")
-                        Text("Enable GPS for automatic location")
-                    }
-                    .font(.caption)
-                    .foregroundColor(palette.accent)
-                }
-                .padding(.top, 4)
-            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -958,159 +991,7 @@ struct RecordingDetailView: View {
         }
     }
 
-    private func selectSearchResult(_ result: MKLocalSearchCompletion) {
-        isSearchingLocation = true
-
-        Task {
-            if let geocoded = await appState.locationManager.geocodeCompletion(result) {
-                await MainActor.run {
-                    // Update recording with coordinates
-                    appState.updateRecordingLocation(
-                        recordingID: currentRecording.id,
-                        latitude: geocoded.coordinate.latitude,
-                        longitude: geocoded.coordinate.longitude,
-                        label: geocoded.label
-                    )
-
-                    // Update local state
-                    currentRecording.latitude = geocoded.coordinate.latitude
-                    currentRecording.longitude = geocoded.coordinate.longitude
-                    currentRecording.locationLabel = geocoded.label
-                    editedLocationLabel = geocoded.label
-                    reverseGeocodedName = geocoded.label
-
-                    // Clear search
-                    locationSearchQuery = ""
-                    appState.locationManager.clearSearch()
-                    isSearchingLocation = false
-                }
-            } else {
-                await MainActor.run {
-                    isSearchingLocation = false
-                }
-            }
-        }
-    }
-
-    private func geocodeManualAddress() {
-        guard !locationSearchQuery.isEmpty else { return }
-        isSearchingLocation = true
-
-        Task {
-            if let geocoded = await appState.locationManager.geocodeAddress(locationSearchQuery) {
-                await MainActor.run {
-                    // Update recording with coordinates
-                    appState.updateRecordingLocation(
-                        recordingID: currentRecording.id,
-                        latitude: geocoded.coordinate.latitude,
-                        longitude: geocoded.coordinate.longitude,
-                        label: geocoded.label
-                    )
-
-                    // Update local state
-                    currentRecording.latitude = geocoded.coordinate.latitude
-                    currentRecording.longitude = geocoded.coordinate.longitude
-                    currentRecording.locationLabel = geocoded.label
-                    editedLocationLabel = geocoded.label
-                    reverseGeocodedName = geocoded.label
-
-                    // Clear search
-                    locationSearchQuery = ""
-                    appState.locationManager.clearSearch()
-                    isSearchingLocation = false
-                }
-            } else {
-                await MainActor.run {
-                    isSearchingLocation = false
-                }
-            }
-        }
-    }
-
-    private func clearLocation() {
-        // Clear coordinates from recording
-        appState.updateRecordingLocation(
-            recordingID: currentRecording.id,
-            latitude: 0,
-            longitude: 0,
-            label: ""
-        )
-
-        // Update local state
-        currentRecording.latitude = nil
-        currentRecording.longitude = nil
-        currentRecording.locationLabel = ""
-        editedLocationLabel = ""
-        reverseGeocodedName = nil
-    }
-
-    // MARK: - Storage Section
-
-    private var storageSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Storage")
-                .font(.caption)
-                .foregroundColor(palette.textSecondary)
-                .textCase(.uppercase)
-
-            VStack(spacing: 0) {
-                // File Size row
-                HStack {
-                    Text("File Size")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                    Spacer()
-                    Text(currentRecording.fileSizeFormatted)
-                        .font(.subheadline)
-                        .foregroundColor(palette.textPrimary)
-                }
-                .padding(12)
-            }
-            .background(palette.inputBackground)
-            .cornerRadius(8)
-        }
-    }
-
-    // MARK: - Proof Section (Minimal)
-
-    @ViewBuilder
-    private var proofSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Proof")
-                .font(.caption)
-                .foregroundColor(palette.textSecondary)
-                .textCase(.uppercase)
-
-            Button {
-                showProofInfo = true
-            } label: {
-                HStack {
-                    Text("Verification")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textPrimary)
-
-                    Spacer()
-
-                    Image(systemName: "info.circle")
-                        .font(.body)
-                        .foregroundColor(palette.accent)
-                }
-                .padding(12)
-                .background(palette.inputBackground)
-                .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-        }
-        .sheet(isPresented: $showProofInfo) {
-            ProofInfoSheet(recording: currentRecording)
-                .presentationDetents([.height(280)])
-                .presentationDragIndicator(.visible)
-        }
-        .onAppear {
-            // Silently create proof if not yet created
-            createProofSilently()
-        }
-    }
+    // MARK: - Proof Silent Creation
 
     private func createProofSilently() {
         // Only create if not already proven or pending
@@ -1270,45 +1151,43 @@ struct RecordingDetailView: View {
     }
 }
 
-// MARK: - Proof Info Sheet
+// MARK: - Verification Info Sheet
 
-struct ProofInfoSheet: View {
+struct VerificationInfoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
 
     let recording: RecordingItem
+    let timedOut: Bool
 
-    private var verificationStatus: String {
+    // Date verification is independent - based only on proofStatus (CloudKit + SHA-256)
+    private var dateVerificationStatus: (text: String, verified: Bool) {
+        if timedOut && recording.proofStatus == .pending {
+            return ("Not verified", false)
+        }
         switch recording.proofStatus {
         case .proven:
-            if let date = recording.proofCloudCreatedAt {
-                return date.formatted(date: .long, time: .shortened)
-            }
-            return "Verified"
+            return ("Verified", true)
         case .pending:
-            return "Verifying..."
+            return ("Pending", false)
         case .none, .error, .mismatch:
-            return "Not verified yet"
+            return ("Not verified", false)
         }
     }
 
-    private var locationStatus: (text: String, verified: Bool) {
-        // Check if location permission is denied
-        if recording.locationMode == .off {
-            return ("Off", false)
-        }
-
-        // Check if we have location proof
-        if recording.locationProofHash != nil {
+    // Location verification is independent - based on locationProofStatus
+    private var locationVerificationStatus: (text: String, verified: Bool) {
+        // Use the independent location proof status
+        switch recording.locationProofStatus {
+        case .verified:
             return ("Verified", true)
+        case .edited:
+            return ("Edited", false)
+        case .pending:
+            return ("Pending", false)
+        case .none, .error:
+            return ("Not verified", false)
         }
-
-        // Permission granted but no location stored
-        if recording.hasCoordinates {
-            return ("Recorded", true)
-        }
-
-        return ("Not available", false)
     }
 
     var body: some View {
@@ -1316,36 +1195,43 @@ struct ProofInfoSheet: View {
             ZStack {
                 palette.background.ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    VStack(spacing: 16) {
-                        // Verified on row
+                VStack(spacing: 20) {
+                    VStack(spacing: 12) {
+                        // Date verification row
                         HStack {
-                            Text("Verified on")
+                            Text("Date")
                                 .font(.subheadline)
                                 .foregroundColor(palette.textSecondary)
                             Spacer()
-                            Text(verificationStatus)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(recording.proofStatus == .proven ? palette.textPrimary : palette.textSecondary)
+                            HStack(spacing: 6) {
+                                Text(dateVerificationStatus.text)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(dateVerificationStatus.verified ? palette.textPrimary : palette.textSecondary)
+                                if dateVerificationStatus.verified {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                }
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .background(palette.inputBackground)
                         .cornerRadius(10)
 
-                        // Location row
+                        // Location verification row
                         HStack {
                             Text("Location")
                                 .font(.subheadline)
                                 .foregroundColor(palette.textSecondary)
                             Spacer()
                             HStack(spacing: 6) {
-                                Text(locationStatus.text)
+                                Text(locationVerificationStatus.text)
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                    .foregroundColor(locationStatus.verified ? palette.textPrimary : palette.textSecondary)
-                                if locationStatus.verified {
+                                    .foregroundColor(locationVerificationStatus.verified ? palette.textPrimary : palette.textSecondary)
+                                if locationVerificationStatus.verified {
                                     Image(systemName: "checkmark.circle.fill")
                                         .font(.caption)
                                         .foregroundColor(.green)
@@ -1360,7 +1246,7 @@ struct ProofInfoSheet: View {
                     .padding(.horizontal)
 
                     // Footnote
-                    Text("Verification is created when the recording is saved.")
+                    Text("Verified using iCloud server timestamp + file fingerprint.")
                         .font(.caption)
                         .foregroundColor(palette.textTertiary)
                         .multilineTextAlignment(.center)
@@ -1370,7 +1256,388 @@ struct ProofInfoSheet: View {
                 }
                 .padding(.top, 24)
             }
-            .navigationTitle("Proof")
+            .navigationTitle("Verification")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Location Editor Sheet
+
+struct LocationEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    @Binding var recording: RecordingItem
+    @Binding var editedLocationLabel: String
+    @Binding var reverseGeocodedName: String?
+    let onLocationChanged: () -> Void
+
+    @State private var locationSearchQuery = ""
+    @State private var isSearchingLocation = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                VStack(spacing: 16) {
+                    if recording.hasCoordinates {
+                        // Current location display
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Current Location")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                                .textCase(.uppercase)
+
+                            HStack(spacing: 10) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.system(size: 24))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if let name = reverseGeocodedName, !name.isEmpty {
+                                        Text(name)
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textPrimary)
+                                    } else if !editedLocationLabel.isEmpty {
+                                        Text(editedLocationLabel)
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textPrimary)
+                                    } else if let lat = recording.latitude, let lon = recording.longitude {
+                                        Text(String(format: "%.4f, %.4f", lat, lon))
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textPrimary)
+                                    }
+                                }
+
+                                Spacer()
+
+                                Button {
+                                    clearLocation()
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(palette.textSecondary)
+                                        .font(.system(size: 22))
+                                }
+                            }
+                            .padding(12)
+                            .background(palette.inputBackground)
+                            .cornerRadius(10)
+                        }
+                        .padding(.horizontal)
+
+                        // Label field
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Label (optional)")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                                .textCase(.uppercase)
+
+                            TextField("e.g. Home, Office", text: $editedLocationLabel)
+                                .textFieldStyle(.plain)
+                                .foregroundColor(palette.textPrimary)
+                                .padding(12)
+                                .background(palette.inputBackground)
+                                .cornerRadius(10)
+                        }
+                        .padding(.horizontal)
+
+                        Divider()
+                            .padding(.vertical, 8)
+                    }
+
+                    // Search section
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(recording.hasCoordinates ? "Change Location" : "Add Location")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                            .textCase(.uppercase)
+
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(palette.textSecondary)
+                            TextField("Search for a place or address", text: $locationSearchQuery)
+                                .textFieldStyle(.plain)
+                                .foregroundColor(palette.textPrimary)
+                                .onChange(of: locationSearchQuery) { _, newValue in
+                                    appState.locationManager.searchQuery = newValue
+                                }
+
+                            if !locationSearchQuery.isEmpty {
+                                Button {
+                                    locationSearchQuery = ""
+                                    appState.locationManager.clearSearch()
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(palette.inputBackground)
+                        .cornerRadius(10)
+
+                        // Search results
+                        if !appState.locationManager.searchResults.isEmpty && !locationSearchQuery.isEmpty {
+                            VStack(spacing: 0) {
+                                ForEach(appState.locationManager.searchResults.prefix(5), id: \.self) { result in
+                                    Button {
+                                        selectSearchResult(result)
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: "mappin")
+                                                .foregroundColor(.red)
+                                                .frame(width: 24)
+
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(result.title)
+                                                    .font(.subheadline)
+                                                    .foregroundColor(palette.textPrimary)
+                                                    .lineLimit(1)
+                                                if !result.subtitle.isEmpty {
+                                                    Text(result.subtitle)
+                                                        .font(.caption)
+                                                        .foregroundColor(palette.textSecondary)
+                                                        .lineLimit(1)
+                                                }
+                                            }
+
+                                            Spacer()
+                                        }
+                                        .padding(.vertical, 10)
+                                        .padding(.horizontal, 12)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    if result != appState.locationManager.searchResults.prefix(5).last {
+                                        Divider()
+                                            .padding(.leading, 48)
+                                    }
+                                }
+                            }
+                            .background(palette.inputBackground)
+                            .cornerRadius(10)
+                        }
+
+                        // Geocode button
+                        if !locationSearchQuery.isEmpty && appState.locationManager.searchResults.isEmpty {
+                            Button {
+                                geocodeManualAddress()
+                            } label: {
+                                HStack {
+                                    if isSearchingLocation {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "location.fill")
+                                    }
+                                    Text("Save as Location")
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(palette.accent)
+                                .padding(12)
+                                .frame(maxWidth: .infinity)
+                                .background(palette.inputBackground)
+                                .cornerRadius(10)
+                            }
+                            .disabled(isSearchingLocation)
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    Spacer()
+                }
+                .padding(.top, 24)
+            }
+            .navigationTitle("Location")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
+                }
+            }
+        }
+    }
+
+    private func selectSearchResult(_ result: MKLocalSearchCompletion) {
+        isSearchingLocation = true
+
+        Task {
+            if let geocoded = await appState.locationManager.geocodeCompletion(result) {
+                await MainActor.run {
+                    // Update recording with coordinates
+                    appState.updateRecordingLocation(
+                        recordingID: recording.id,
+                        latitude: geocoded.coordinate.latitude,
+                        longitude: geocoded.coordinate.longitude,
+                        label: geocoded.label
+                    )
+
+                    // Update local state
+                    recording.latitude = geocoded.coordinate.latitude
+                    recording.longitude = geocoded.coordinate.longitude
+                    recording.locationLabel = geocoded.label
+                    editedLocationLabel = geocoded.label
+                    reverseGeocodedName = geocoded.label
+
+                    // Mark location as edited (this only affects location proof, not date proof)
+                    onLocationChanged()
+
+                    // Clear search
+                    locationSearchQuery = ""
+                    appState.locationManager.clearSearch()
+                    isSearchingLocation = false
+                }
+            } else {
+                await MainActor.run {
+                    isSearchingLocation = false
+                }
+            }
+        }
+    }
+
+    private func geocodeManualAddress() {
+        guard !locationSearchQuery.isEmpty else { return }
+        isSearchingLocation = true
+
+        Task {
+            if let geocoded = await appState.locationManager.geocodeAddress(locationSearchQuery) {
+                await MainActor.run {
+                    // Update recording with coordinates
+                    appState.updateRecordingLocation(
+                        recordingID: recording.id,
+                        latitude: geocoded.coordinate.latitude,
+                        longitude: geocoded.coordinate.longitude,
+                        label: geocoded.label
+                    )
+
+                    // Update local state
+                    recording.latitude = geocoded.coordinate.latitude
+                    recording.longitude = geocoded.coordinate.longitude
+                    recording.locationLabel = geocoded.label
+                    editedLocationLabel = geocoded.label
+                    reverseGeocodedName = geocoded.label
+
+                    // Mark location as edited (this only affects location proof, not date proof)
+                    onLocationChanged()
+
+                    // Clear search
+                    locationSearchQuery = ""
+                    appState.locationManager.clearSearch()
+                    isSearchingLocation = false
+                }
+            } else {
+                await MainActor.run {
+                    isSearchingLocation = false
+                }
+            }
+        }
+    }
+
+    private func clearLocation() {
+        // Clear coordinates from recording
+        appState.updateRecordingLocation(
+            recordingID: recording.id,
+            latitude: 0,
+            longitude: 0,
+            label: ""
+        )
+
+        // Update local state
+        recording.latitude = nil
+        recording.longitude = nil
+        recording.locationLabel = ""
+        editedLocationLabel = ""
+        reverseGeocodedName = nil
+
+        // Mark location as edited (location removed)
+        onLocationChanged()
+    }
+}
+
+// MARK: - Icon Color Picker Sheet
+
+struct IconColorPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    @Binding var selectedColor: Color
+    let onColorChanged: () -> Void
+
+    private let presetColors: [Color] = [
+        .red, .orange, .yellow, .green, .mint, .teal,
+        .cyan, .blue, .indigo, .purple, .pink, .brown
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                VStack(spacing: 24) {
+                    // Current color preview
+                    HStack {
+                        Text("Selected Color")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        Circle()
+                            .fill(selectedColor)
+                            .frame(width: 32, height: 32)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(palette.textPrimary.opacity(0.15), lineWidth: 1)
+                            )
+                    }
+                    .padding(.horizontal)
+
+                    // Preset colors grid
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6), spacing: 12) {
+                        ForEach(presetColors, id: \.self) { color in
+                            Button {
+                                selectedColor = color
+                                onColorChanged()
+                            } label: {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 44, height: 44)
+                                    .overlay(
+                                        Circle()
+                                            .strokeBorder(selectedColor == color ? palette.textPrimary : Color.clear, lineWidth: 2)
+                                    )
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    // Custom color picker
+                    HStack {
+                        Text("Custom Color")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        ColorPicker("", selection: $selectedColor, supportsOpacity: false)
+                            .labelsHidden()
+                            .onChange(of: selectedColor) { _, _ in
+                                onColorChanged()
+                            }
+                    }
+                    .padding(.horizontal)
+
+                    Spacer()
+                }
+                .padding(.top, 24)
+            }
+            .navigationTitle("Icon Color")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
