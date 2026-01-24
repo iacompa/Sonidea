@@ -477,21 +477,6 @@ struct RecordingRow: View {
                         .foregroundColor(palette.textPrimary)
                         .lineLimit(1)
 
-                    // Proof badge
-                    if recording.proofStatus == .proven {
-                        Image(systemName: "checkmark.shield.fill")
-                            .font(.caption2)
-                            .foregroundColor(.green)
-                    } else if recording.proofStatus == .pending {
-                        Image(systemName: "shield.lefthalf.filled")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    } else if recording.proofStatus == .mismatch {
-                        Image(systemName: "exclamationmark.shield.fill")
-                            .font(.caption2)
-                            .foregroundColor(.red)
-                    }
-
                     // Version badge for project recordings
                     if recording.belongsToProject {
                         Text(recording.versionLabel)

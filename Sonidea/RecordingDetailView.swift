@@ -8,6 +8,14 @@
 import SwiftUI
 import MapKit
 
+// MARK: - Inline Recorder State
+
+private enum InlineRecorderState: Equatable {
+    case idle       // Not recording - shows "Record New Version" button
+    case recording  // Actively recording
+    case paused     // Recording paused
+}
+
 // MARK: - Original State Snapshot (for Done/Save logic)
 
 private struct RecordingSnapshot: Equatable {
@@ -52,9 +60,12 @@ struct RecordingDetailView: View {
     @State private var showProjectSheet = false
     @State private var showChooseProject = false
     @State private var showCreateProject = false
-    @State private var showRecordNewVersion = false
     @State private var showVersionSavedToast = false
     @State private var savedVersionLabel: String = ""
+
+    // Inline version recorder state
+    @State private var isInlineRecorderExpanded = false
+    @State private var inlineRecorderState: InlineRecorderState = .idle
 
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
@@ -259,20 +270,6 @@ struct RecordingDetailView: View {
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-            }
-            .fullScreenCover(isPresented: $showRecordNewVersion) {
-                RecordNewVersionSheet(
-                    sourceRecording: currentRecording,
-                    onVersionSaved: { versionLabel in
-                        savedVersionLabel = versionLabel
-                        refreshRecording()
-                        // Show toast briefly
-                        showVersionSavedToast = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            showVersionSavedToast = false
-                        }
-                    }
-                )
             }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {
@@ -481,8 +478,8 @@ struct RecordingDetailView: View {
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
 
-            // Record New Version button
-            recordNewVersionButton
+            // Inline Version Recorder
+            inlineVersionRecorder
 
             // Collapsible EQ Panel
             if showEQPanel {
@@ -491,13 +488,25 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: - Record New Version Button
+    // MARK: - Inline Version Recorder
 
-    private var recordNewVersionButton: some View {
+    private var inlineVersionRecorder: some View {
+        VStack(spacing: 0) {
+            if inlineRecorderState == .idle {
+                // Idle state: Compact "Record New Version" button
+                inlineRecorderIdleButton
+            } else {
+                // Recording/Paused state: Expanded card
+                inlineRecorderExpandedCard
+            }
+        }
+        .padding(.top, 8)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: inlineRecorderState)
+    }
+
+    private var inlineRecorderIdleButton: some View {
         Button {
-            // Pause playback before recording
-            playback.stop()
-            showRecordNewVersion = true
+            startInlineRecording()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "mic.circle.fill")
@@ -513,7 +522,199 @@ struct RecordingDetailView: View {
             .background(palette.accent.opacity(0.12))
             .cornerRadius(12)
         }
-        .padding(.top, 8)
+    }
+
+    private var inlineRecorderExpandedCard: some View {
+        VStack(spacing: 16) {
+            // Header: Version badge + Timer
+            HStack {
+                // Version badge
+                let nextVersion = computeNextVersionLabel()
+                Text(nextVersion)
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(palette.accent)
+
+                Spacer()
+
+                // Duration timer
+                Text(formatInlineRecorderDuration(appState.recorder.currentDuration))
+                    .font(.system(size: 28, weight: .light, design: .monospaced))
+                    .foregroundColor(palette.textPrimary)
+            }
+
+            // Compact waveform
+            LiveWaveformView(
+                samples: appState.recorder.liveMeterSamples,
+                accentColor: inlineRecorderState == .paused ? palette.textSecondary : palette.accent
+            )
+            .frame(height: 50)
+            .opacity(inlineRecorderState == .paused ? 0.5 : 1.0)
+
+            // Control buttons
+            HStack(spacing: 16) {
+                // Cancel button
+                Button {
+                    cancelInlineRecording()
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textSecondary)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(palette.inputBackground)
+                        .cornerRadius(20)
+                }
+
+                Spacer()
+
+                // Pause/Resume button
+                Button {
+                    toggleInlineRecordingPause()
+                } label: {
+                    Image(systemName: inlineRecorderState == .paused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(palette.textSecondary)
+                        .clipShape(Circle())
+                }
+
+                // Stop & Save button
+                Button {
+                    stopAndSaveInlineRecording()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12))
+                        Text("Save")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(palette.accent)
+                    .cornerRadius(20)
+                }
+            }
+        }
+        .padding(16)
+        .background(palette.inputBackground)
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(palette.accent.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Inline Recorder Actions
+
+    private func startInlineRecording() {
+        // Stop playback before recording
+        playback.stop()
+        // Start recording
+        appState.recorder.startRecording()
+        // Update state
+        withAnimation {
+            inlineRecorderState = .recording
+        }
+    }
+
+    private func toggleInlineRecordingPause() {
+        if inlineRecorderState == .recording {
+            appState.recorder.pauseRecording()
+            withAnimation {
+                inlineRecorderState = .paused
+            }
+        } else if inlineRecorderState == .paused {
+            appState.recorder.resumeRecording()
+            withAnimation {
+                inlineRecorderState = .recording
+            }
+        }
+    }
+
+    private func cancelInlineRecording() {
+        // Stop and discard the recording
+        _ = appState.recorder.stopRecording()
+        withAnimation {
+            inlineRecorderState = .idle
+        }
+    }
+
+    private func stopAndSaveInlineRecording() {
+        guard let rawData = appState.recorder.stopRecording() else {
+            withAnimation {
+                inlineRecorderState = .idle
+            }
+            return
+        }
+
+        // Determine the target project
+        var targetProject: Project
+
+        if let projectId = currentRecording.projectId,
+           let existingProject = appState.project(for: projectId) {
+            // Already in a project - use it
+            targetProject = existingProject
+        } else {
+            // No project - create one with the source recording as V1
+            targetProject = appState.createProject(from: currentRecording, title: nil)
+        }
+
+        // Add the new recording using the standard method
+        appState.addRecording(from: rawData)
+
+        // The newly added recording is at index 0
+        guard let newRecording = appState.recordings.first else {
+            withAnimation {
+                inlineRecorderState = .idle
+            }
+            return
+        }
+
+        // Link to project as new version
+        appState.addVersion(recording: newRecording, to: targetProject)
+
+        // Get the version label for the toast
+        let versionLabel = "V\(appState.nextVersionIndex(for: targetProject) - 1)"
+
+        // Haptic feedback
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+
+        // Reset state and show toast
+        withAnimation {
+            inlineRecorderState = .idle
+        }
+
+        savedVersionLabel = versionLabel
+        refreshRecording()
+
+        // Show toast briefly
+        showVersionSavedToast = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showVersionSavedToast = false
+        }
+    }
+
+    private func computeNextVersionLabel() -> String {
+        if let projectId = currentRecording.projectId,
+           let project = appState.project(for: projectId) {
+            let nextIndex = appState.nextVersionIndex(for: project)
+            return "V\(nextIndex)"
+        } else {
+            // No project yet - this will become V2 (current becomes V1)
+            return "V2"
+        }
+    }
+
+    private func formatInlineRecorderDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        let centiseconds = Int((duration.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
 
     // MARK: - EQ Panel
@@ -2059,196 +2260,3 @@ struct CreateProjectSheet: View {
     }
 }
 
-// MARK: - Record New Version Sheet
-
-struct RecordNewVersionSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppState.self) private var appState
-    @Environment(\.themePalette) private var palette
-
-    let sourceRecording: RecordingItem
-    let onVersionSaved: (String) -> Void
-
-    @State private var isRecording = false
-    @State private var recordingDuration: TimeInterval = 0
-    @State private var liveSamples: [Float] = []
-
-    var body: some View {
-        ZStack {
-            palette.background.ignoresSafeArea()
-
-            VStack(spacing: 32) {
-                // Header
-                HStack {
-                    Button("Cancel") {
-                        if appState.recorder.isRecording {
-                            _ = appState.recorder.stopRecording()
-                        }
-                        dismiss()
-                    }
-                    .foregroundColor(palette.textPrimary)
-
-                    Spacer()
-
-                    VStack(spacing: 2) {
-                        Text("New Version")
-                            .font(.headline)
-                            .foregroundColor(palette.textPrimary)
-
-                        if let project = appState.project(for: sourceRecording.projectId) {
-                            Text(project.title)
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        } else {
-                            Text(sourceRecording.title)
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-
-                    Spacer()
-
-                    // Placeholder for symmetry
-                    Text("Cancel")
-                        .foregroundColor(.clear)
-                }
-                .padding(.horizontal)
-                .padding(.top)
-
-                Spacer()
-
-                // Recording info
-                VStack(spacing: 16) {
-                    // Version badge
-                    let nextVersion = computeNextVersionLabel()
-                    Text(nextVersion)
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .foregroundColor(palette.accent)
-
-                    // Duration
-                    Text(formatDuration(appState.recorder.currentDuration))
-                        .font(.system(size: 56, weight: .light, design: .monospaced))
-                        .foregroundColor(palette.textPrimary)
-
-                    // Live waveform
-                    LiveWaveformView(
-                        samples: appState.recorder.liveMeterSamples,
-                        accentColor: palette.accent
-                    )
-                    .frame(height: 80)
-                    .padding(.horizontal)
-                }
-
-                Spacer()
-
-                // Recording controls
-                VStack(spacing: 24) {
-                    if appState.recorder.isRecording {
-                        // Stop button
-                        Button {
-                            saveRecording()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(palette.accent)
-                                    .frame(width: 80, height: 80)
-
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(.white)
-                                    .frame(width: 28, height: 28)
-                            }
-                        }
-
-                        Text("Tap to stop and save")
-                            .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
-                    } else {
-                        // Start button
-                        Button {
-                            startRecording()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(palette.accent)
-                                    .frame(width: 80, height: 80)
-
-                                Circle()
-                                    .fill(.white)
-                                    .frame(width: 28, height: 28)
-                            }
-                        }
-
-                        Text("Tap to start recording")
-                            .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                }
-                .padding(.bottom, 60)
-            }
-        }
-    }
-
-    private func computeNextVersionLabel() -> String {
-        if let projectId = sourceRecording.projectId,
-           let project = appState.project(for: projectId) {
-            let nextIndex = appState.nextVersionIndex(for: project)
-            return "V\(nextIndex)"
-        } else {
-            // No project yet - this will become V2 (current becomes V1)
-            return "V2"
-        }
-    }
-
-    private func startRecording() {
-        appState.recorder.startRecording()
-    }
-
-    private func saveRecording() {
-        guard let rawData = appState.recorder.stopRecording() else {
-            dismiss()
-            return
-        }
-
-        // Determine the target project
-        var targetProject: Project
-
-        if let projectId = sourceRecording.projectId,
-           let existingProject = appState.project(for: projectId) {
-            // Already in a project - use it
-            targetProject = existingProject
-        } else {
-            // No project - create one with the source recording as V1
-            targetProject = appState.createProject(from: sourceRecording, title: nil)
-        }
-
-        // Add the new recording using the standard method
-        appState.addRecording(from: rawData)
-
-        // The newly added recording is at index 0
-        guard let newRecording = appState.recordings.first else {
-            dismiss()
-            return
-        }
-
-        // Link to project as new version
-        appState.addVersion(recording: newRecording, to: targetProject)
-
-        // Get the version label for the toast
-        let versionLabel = "V\(appState.nextVersionIndex(for: targetProject) - 1)"
-
-        // Haptic feedback
-        let generator = UINotificationFeedbackGenerator()
-        generator.notificationOccurred(.success)
-
-        // Callback and dismiss
-        onVersionSaved(versionLabel)
-        dismiss()
-    }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        let centiseconds = Int((duration.truncatingRemainder(dividingBy: 1)) * 100)
-        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
-    }
-}

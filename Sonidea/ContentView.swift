@@ -1770,12 +1770,6 @@ struct SearchCalendarRecordingRow: View {
                         .foregroundStyle(palette.textPrimary)
                         .lineLimit(1)
 
-                    if recording.proofStatus == .proven {
-                        Image(systemName: "checkmark.shield.fill")
-                            .font(.caption2)
-                            .foregroundColor(.green)
-                    }
-
                     Spacer()
 
                     Image(systemName: "chevron.right")
@@ -2242,17 +2236,6 @@ struct SearchResultRow: View {
                         .font(.body)
                         .fontWeight(.medium)
                         .lineLimit(1)
-
-                    // Proof badge
-                    if recording.proofStatus == .proven {
-                        Image(systemName: "checkmark.shield.fill")
-                            .font(.caption2)
-                            .foregroundColor(.green)
-                    } else if recording.proofStatus == .pending {
-                        Image(systemName: "shield.lefthalf.filled")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
                 }
 
                 HStack(spacing: 6) {
