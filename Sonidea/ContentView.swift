@@ -206,11 +206,17 @@ struct ContentView: View {
             if appState.recorder.checkForRecoverableRecording() != nil {
                 showRecoveryAlert = true
             }
+            // Wire up Live Activity stop callback
+            appState.recorder.onStopAndSaveRequested = { [self] in
+                saveRecording()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            // Auto-pause when going to background to preserve audio
-            if newPhase == .background && appState.recorder.recordingState == .recording {
-                appState.recorder.pauseRecording()
+            if newPhase == .active {
+                // Check for pending stop request from Live Activity (when app was backgrounded)
+                if appState.recorder.consumePendingStopRequest() && appState.recorder.recordingState.isActive {
+                    saveRecording()
+                }
             }
         }
         .alert("Recover Recording?", isPresented: $showRecoveryAlert) {

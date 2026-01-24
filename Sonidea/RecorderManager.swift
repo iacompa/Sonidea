@@ -36,6 +36,10 @@ final class RecorderManager: NSObject {
     private var accumulatedDuration: TimeInterval = 0
     /// Start time of current recording segment
     private var segmentStartTime: Date?
+    /// Recording start date (for Live Activity timer)
+    private var recordingStartDate: Date?
+    /// Current recording ID (for Live Activity)
+    private var currentRecordingId: String?
 
     // Convenience computed properties
     var isRecording: Bool { recordingState == .recording }
@@ -57,10 +61,61 @@ final class RecorderManager: NSObject {
     private var currentLocation: CLLocation?
     private var currentLocationLabel: String = ""
 
+    // Callback for when recording should be stopped and saved (from Live Activity)
+    var onStopAndSaveRequested: (() -> Void)?
+
     override init() {
         super.init()
         setupInterruptionHandling()
         setupLocationManager()
+        setupIntentNotificationHandling()
+    }
+
+    // MARK: - Intent Notification Handling
+
+    private func setupIntentNotificationHandling() {
+        // Handle stop recording request from Live Activity
+        NotificationCenter.default.addObserver(
+            forName: .stopRecordingRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.onStopAndSaveRequested?()
+            }
+        }
+
+        // Handle pause request from Live Activity
+        NotificationCenter.default.addObserver(
+            forName: .pauseRecordingRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.pauseRecording()
+            }
+        }
+
+        // Handle resume request from Live Activity
+        NotificationCenter.default.addObserver(
+            forName: .resumeRecordingRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.resumeRecording()
+            }
+        }
+    }
+
+    /// Check and consume pending stop recording request (from Live Activity intent when app was backgrounded)
+    func consumePendingStopRequest() -> Bool {
+        let pending = UserDefaults.standard.bool(forKey: StopRecordingIntent.pendingStopKey)
+        if pending {
+            UserDefaults.standard.set(false, forKey: StopRecordingIntent.pendingStopKey)
+            return true
+        }
+        return false
     }
 
     // MARK: - Location Setup
@@ -151,7 +206,9 @@ final class RecorderManager: NSObject {
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.record()
             recordingState = .recording
-            segmentStartTime = Date()
+            let startDate = Date()
+            segmentStartTime = startDate
+            recordingStartDate = startDate
             accumulatedDuration = 0
             currentDuration = 0
             liveMeterSamples = []
@@ -159,6 +216,13 @@ final class RecorderManager: NSObject {
 
             // Track in-progress recording for crash recovery
             markRecordingInProgress(fileURL)
+
+            // Start Live Activity
+            currentRecordingId = UUID().uuidString
+            RecordingLiveActivityManager.shared.startActivity(
+                recordingId: currentRecordingId!,
+                startDate: startDate
+            )
         } catch {
             print("Failed to start recording: \(error)")
         }
@@ -185,6 +249,9 @@ final class RecorderManager: NSObject {
         let latitude = currentLocation?.coordinate.latitude
         let longitude = currentLocation?.coordinate.longitude
         let locationLabel = currentLocationLabel
+
+        // End Live Activity
+        RecordingLiveActivityManager.shared.endActivity()
 
         resetState()
         clearInProgressRecording()
@@ -213,6 +280,12 @@ final class RecorderManager: NSObject {
         recorder.pause()
         stopTimer()
         recordingState = .paused
+
+        // Update Live Activity to show paused state
+        RecordingLiveActivityManager.shared.updateActivity(
+            isRecording: false,
+            pausedDuration: accumulatedDuration
+        )
     }
 
     /// Resume recording after pause
@@ -223,6 +296,12 @@ final class RecorderManager: NSObject {
         segmentStartTime = Date()
         recordingState = .recording
         startTimer()
+
+        // Update Live Activity to show recording state
+        RecordingLiveActivityManager.shared.updateActivity(
+            isRecording: true,
+            pausedDuration: nil
+        )
     }
 
     /// Discard the current recording without saving
@@ -235,6 +314,9 @@ final class RecorderManager: NSObject {
         // Delete the audio file
         try? FileManager.default.removeItem(at: fileURL)
 
+        // End Live Activity
+        RecordingLiveActivityManager.shared.endActivity()
+
         resetState()
         clearInProgressRecording()
     }
@@ -245,6 +327,8 @@ final class RecorderManager: NSObject {
         currentDuration = 0
         accumulatedDuration = 0
         segmentStartTime = nil
+        recordingStartDate = nil
+        currentRecordingId = nil
         audioRecorder = nil
         currentFileURL = nil
         liveMeterSamples = []
