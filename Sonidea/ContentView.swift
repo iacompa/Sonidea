@@ -1357,6 +1357,42 @@ struct SettingsSheetView: View {
     @State private var showActionButtonHelp = false
     @State private var showSiriShortcutsHelp = false
 
+    // MARK: - iCloud Status Computed Properties
+
+    private var iCloudStatusIcon: String {
+        if appState.syncManager.isSyncing {
+            return "arrow.triangle.2.circlepath"
+        } else if appState.syncManager.syncError != nil {
+            return "exclamationmark.icloud"
+        } else if appState.syncManager.lastSyncDate != nil {
+            return "checkmark.icloud"
+        } else {
+            return "icloud"
+        }
+    }
+
+    private var iCloudStatusColor: Color {
+        if appState.syncManager.syncError != nil {
+            return .red
+        } else if appState.syncManager.isSyncing {
+            return .orange
+        } else {
+            return .green
+        }
+    }
+
+    private var iCloudStatusText: String {
+        if appState.syncManager.isSyncing {
+            return "Syncing..."
+        } else if appState.syncManager.syncError != nil {
+            return "Sync Error"
+        } else if appState.syncManager.lastSyncDate != nil {
+            return "Synced"
+        } else {
+            return "Not Synced"
+        }
+    }
+
     var body: some View {
         @Bindable var appState = appState
 
@@ -1661,6 +1697,56 @@ struct SettingsSheetView: View {
                         .foregroundColor(palette.textSecondary)
                 }
 
+                // MARK: - iCloud Sync Section
+                Section {
+                    Toggle("iCloud Sync", isOn: $appState.appSettings.iCloudSyncEnabled)
+                        .tint(palette.toggleOnTint)
+                        .listRowBackground(palette.cardBackground)
+                        .onChange(of: appState.appSettings.iCloudSyncEnabled) { _, enabled in
+                            Task {
+                                if enabled {
+                                    await appState.syncManager.enableSync()
+                                } else {
+                                    appState.syncManager.disableSync()
+                                }
+                            }
+                        }
+
+                    if appState.appSettings.iCloudSyncEnabled {
+                        HStack {
+                            Image(systemName: iCloudStatusIcon)
+                                .foregroundColor(iCloudStatusColor)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(iCloudStatusText)
+                                    .foregroundColor(palette.textPrimary)
+                                if let lastSync = appState.syncManager.lastSyncDate {
+                                    Text("Last synced \(lastSync.formatted(.relative(presentation: .named)))")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                            Spacer()
+                            if appState.syncManager.isSyncing {
+                                ProgressView()
+                                    .tint(palette.accent)
+                            }
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    }
+                } header: {
+                    Text("iCloud")
+                        .foregroundColor(palette.textSecondary)
+                } footer: {
+                    if !appState.appSettings.iCloudSyncEnabled {
+                        Text("Sync recordings, tags, albums, and projects across all your devices.")
+                            .foregroundColor(palette.textSecondary)
+                    } else if let error = appState.syncManager.syncError {
+                        Text(error)
+                            .foregroundColor(.red)
+                    }
+                }
+
                 Section {
                     Button { showTagManager = true } label: {
                         HStack {
@@ -1779,6 +1865,34 @@ struct SettingsSheetView: View {
                 } header: {
                     Text("About")
                         .foregroundColor(palette.textSecondary)
+                }
+
+                // MARK: - Sync Now Button (Bottom of Settings)
+                if appState.appSettings.iCloudSyncEnabled {
+                    Section {
+                        Button {
+                            Task { await appState.syncManager.syncNow() }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if appState.syncManager.isSyncing {
+                                    ProgressView()
+                                        .tint(.white)
+                                        .padding(.trailing, 8)
+                                }
+                                Text(appState.syncManager.isSyncing ? "Syncing..." : "Sync Now")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+                            .foregroundColor(.white)
+                            .padding(.vertical, 12)
+                            .background(appState.syncManager.isSyncing ? Color.gray : palette.accent)
+                            .cornerRadius(10)
+                        }
+                        .disabled(appState.syncManager.isSyncing)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
                 }
             }
             .scrollContentBackground(.hidden)

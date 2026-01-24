@@ -47,6 +47,7 @@ final class AppState {
     let recorder = RecorderManager()
     let locationManager = LocationManager()
     let supportManager = SupportManager()
+    let syncManager = iCloudSyncManager()
 
     private(set) var nextRecordingNumber: Int = 1
 
@@ -90,6 +91,9 @@ final class AppState {
         purgeOldTrashedRecordings()
         recorder.qualityPreset = appSettings.recordingQuality
         loadRecordButtonPosition()
+
+        // Connect sync manager
+        syncManager.appState = self
     }
 
     // MARK: - Record Button Position Management

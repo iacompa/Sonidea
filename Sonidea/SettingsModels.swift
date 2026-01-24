@@ -209,6 +209,7 @@ struct AppSettings: Codable {
     var skipInterval: SkipInterval = .fifteen
     var playbackSpeed: Float = 1.0
     var silenceSkipSettings: SilenceSkipSettings = .default
+    var iCloudSyncEnabled: Bool = false
 
     static let `default` = AppSettings()
 }
