@@ -48,6 +48,7 @@ final class AppState {
     let locationManager = LocationManager()
     let supportManager = SupportManager()
     let syncManager = iCloudSyncManager()
+    let proofManager = ProofManager()
 
     private(set) var nextRecordingNumber: Int = 1
 

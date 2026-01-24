@@ -49,6 +49,26 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     /// Sequential version number (1 = V1, 2 = V2, etc.)
     var versionIndex: Int
 
+    // MARK: - Proof Receipts (Tamper-Evident Timestamps)
+
+    /// Proof status stored as raw string
+    var proofStatusRaw: String?
+
+    /// SHA-256 hash of the audio file
+    var proofSHA256: String?
+
+    /// CloudKit server timestamp when proof was recorded
+    var proofCloudCreatedAt: Date?
+
+    /// CloudKit record name for the proof
+    var proofCloudRecordName: String?
+
+    /// Location mode stored as raw string
+    var locationModeRaw: String?
+
+    /// SHA-256 hash of the location payload JSON
+    var locationProofHash: String?
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
@@ -69,6 +89,38 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     /// Formatted version label (e.g., "V1", "V2")
     var versionLabel: String {
         "V\(versionIndex)"
+    }
+
+    /// Proof status enum (computed from raw string)
+    var proofStatus: ProofStatus {
+        get {
+            guard let raw = proofStatusRaw else { return .none }
+            return ProofStatus(rawValue: raw) ?? .none
+        }
+        set {
+            proofStatusRaw = newValue.rawValue
+        }
+    }
+
+    /// Location mode enum (computed from raw string)
+    var locationMode: LocationMode {
+        get {
+            guard let raw = locationModeRaw else { return .off }
+            return LocationMode(rawValue: raw) ?? .off
+        }
+        set {
+            locationModeRaw = newValue.rawValue
+        }
+    }
+
+    /// Whether this recording has a verified proof
+    var hasProof: Bool {
+        proofStatus == .proven
+    }
+
+    /// Whether proof is pending upload
+    var proofPending: Bool {
+        proofStatus == .pending
     }
 
     // Icon color with fallback to default (legacy property)
@@ -205,7 +257,13 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         eqSettings: EQSettings? = nil,
         projectId: UUID? = nil,
         parentRecordingId: UUID? = nil,
-        versionIndex: Int = 1
+        versionIndex: Int = 1,
+        proofStatusRaw: String? = nil,
+        proofSHA256: String? = nil,
+        proofCloudCreatedAt: Date? = nil,
+        proofCloudRecordName: String? = nil,
+        locationModeRaw: String? = nil,
+        locationProofHash: String? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -226,6 +284,12 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.projectId = projectId
         self.parentRecordingId = parentRecordingId
         self.versionIndex = versionIndex
+        self.proofStatusRaw = proofStatusRaw
+        self.proofSHA256 = proofSHA256
+        self.proofCloudCreatedAt = proofCloudCreatedAt
+        self.proofCloudRecordName = proofCloudRecordName
+        self.locationModeRaw = locationModeRaw
+        self.locationProofHash = locationProofHash
     }
 
     // MARK: - Codable with Migration Support
@@ -235,6 +299,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         case locationLabel, transcript, latitude, longitude, trashedAt
         case lastPlaybackPosition, iconColorHex, eqSettings
         case projectId, parentRecordingId, versionIndex
+        case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
+        case locationModeRaw, locationProofHash
     }
 
     init(from decoder: Decoder) throws {
@@ -261,6 +327,14 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         projectId = try container.decodeIfPresent(UUID.self, forKey: .projectId)
         parentRecordingId = try container.decodeIfPresent(UUID.self, forKey: .parentRecordingId)
         versionIndex = try container.decodeIfPresent(Int.self, forKey: .versionIndex) ?? 1
+
+        // Migration: proof receipt fields
+        proofStatusRaw = try container.decodeIfPresent(String.self, forKey: .proofStatusRaw)
+        proofSHA256 = try container.decodeIfPresent(String.self, forKey: .proofSHA256)
+        proofCloudCreatedAt = try container.decodeIfPresent(Date.self, forKey: .proofCloudCreatedAt)
+        proofCloudRecordName = try container.decodeIfPresent(String.self, forKey: .proofCloudRecordName)
+        locationModeRaw = try container.decodeIfPresent(String.self, forKey: .locationModeRaw)
+        locationProofHash = try container.decodeIfPresent(String.self, forKey: .locationProofHash)
     }
 }
 

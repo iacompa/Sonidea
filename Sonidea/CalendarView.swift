@@ -390,6 +390,17 @@ struct CalendarRecordingRow: View {
                         .foregroundStyle(palette.textPrimary)
                         .lineLimit(1)
 
+                    // Proof badge
+                    if recording.proofStatus == .proven {
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    } else if recording.proofStatus == .pending {
+                        Image(systemName: "shield.lefthalf.filled")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+
                     if isBestTake {
                         HStack(spacing: 2) {
                             Image(systemName: "star.fill")

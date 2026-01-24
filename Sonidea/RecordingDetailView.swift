@@ -55,6 +55,13 @@ struct RecordingDetailView: View {
     @State private var reverseGeocodedName: String?
     @State private var isLoadingReverseGeocode = false
 
+    // Proof state
+    @State private var isCreatingProof = false
+    @State private var isVerifyingProof = false
+    @State private var proofError: String?
+    @State private var showManualLocationEntry = false
+    @State private var manualLocationAddress = ""
+
     // Navigation context flag - when true, tapping project just dismisses back to parent
     private let isOpenedFromProject: Bool
 
@@ -483,6 +490,9 @@ struct RecordingDetailView: View {
 
             // Storage Section
             storageSection
+
+            // Proof Section
+            proofSection
 
             // Icon Color
             VStack(alignment: .leading, spacing: 8) {
@@ -1062,6 +1072,291 @@ struct RecordingDetailView: View {
             }
             .background(palette.inputBackground)
             .cornerRadius(8)
+        }
+    }
+
+    // MARK: - Proof Section
+
+    @ViewBuilder
+    private var proofSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Proof Receipt")
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+                .textCase(.uppercase)
+
+            VStack(spacing: 0) {
+                // Status row
+                HStack {
+                    proofStatusIcon
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(currentRecording.proofStatus.displayName)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(palette.textPrimary)
+                        if currentRecording.proofStatus == .proven, let date = currentRecording.proofCloudCreatedAt {
+                            Text("Verified \(date.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(12)
+
+                // SHA-256 hash (if computed)
+                if let hash = currentRecording.proofSHA256 {
+                    Divider()
+                    HStack {
+                        Text("SHA-256")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        Text(abbreviateHash(hash))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(palette.textPrimary)
+                        Button {
+                            UIPasteboard.general.string = hash
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(palette.accent)
+                        }
+                    }
+                    .padding(12)
+                }
+
+                // Location proof info
+                if currentRecording.locationMode != .off {
+                    Divider()
+                    HStack {
+                        Image(systemName: currentRecording.locationMode.iconName)
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                        Text(currentRecording.locationMode.confidenceLabel)
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        if currentRecording.locationProofHash != nil {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .background(palette.inputBackground)
+            .cornerRadius(8)
+
+            // Error display
+            if let error = proofError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .padding(.top, 4)
+            }
+
+            // Action buttons
+            HStack(spacing: 12) {
+                if currentRecording.proofStatus == .none || currentRecording.proofStatus == .error {
+                    Button {
+                        createProof()
+                    } label: {
+                        HStack {
+                            if isCreatingProof {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "checkmark.shield")
+                            }
+                            Text("Create Proof")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(palette.accent)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(palette.inputBackground)
+                        .cornerRadius(8)
+                    }
+                    .disabled(isCreatingProof)
+                }
+
+                if currentRecording.proofStatus == .proven {
+                    Button {
+                        verifyProof()
+                    } label: {
+                        HStack {
+                            if isVerifyingProof {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "shield.lefthalf.filled")
+                            }
+                            Text("Verify")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(palette.textPrimary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(palette.inputBackground)
+                        .cornerRadius(8)
+                    }
+                    .disabled(isVerifyingProof)
+                }
+
+                if currentRecording.proofStatus == .pending {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Pending...")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(palette.textSecondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                    .background(palette.inputBackground)
+                    .cornerRadius(8)
+                }
+            }
+
+            // Manual location entry (if GPS not available)
+            if currentRecording.proofStatus == .none && !currentRecording.hasCoordinates {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Add Location for Proof")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+
+                    HStack {
+                        TextField("Enter address manually", text: $manualLocationAddress)
+                            .textFieldStyle(.plain)
+                            .foregroundColor(palette.textPrimary)
+                        Button {
+                            geocodeManualAddressForProof()
+                        } label: {
+                            Image(systemName: "location.fill")
+                                .foregroundColor(palette.accent)
+                        }
+                        .disabled(manualLocationAddress.isEmpty)
+                    }
+                    .padding(12)
+                    .background(palette.inputBackground)
+                    .cornerRadius(8)
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    private var proofStatusIcon: some View {
+        Image(systemName: currentRecording.proofStatus.iconName)
+            .font(.title2)
+            .foregroundColor(proofStatusColor)
+            .frame(width: 32)
+    }
+
+    private var proofStatusColor: Color {
+        switch currentRecording.proofStatus {
+        case .none: return palette.textTertiary
+        case .pending: return .orange
+        case .proven: return .green
+        case .mismatch: return .red
+        case .error: return .red
+        }
+    }
+
+    private func abbreviateHash(_ hash: String) -> String {
+        guard hash.count > 16 else { return hash }
+        let start = hash.prefix(8)
+        let end = hash.suffix(8)
+        return "\(start)...\(end)"
+    }
+
+    private func createProof() {
+        isCreatingProof = true
+        proofError = nil
+
+        Task {
+            // Build location payload if coordinates exist
+            var locationPayload: LocationPayload? = nil
+            var locationMode: LocationMode = .off
+
+            if currentRecording.hasCoordinates,
+               let lat = currentRecording.latitude,
+               let lon = currentRecording.longitude {
+                // Determine if precise or approx based on last known location accuracy
+                let accuracy = appState.locationManager.lastKnownLocation?.horizontalAccuracy ?? 100
+                locationMode = accuracy < 50 ? .precise : .approx
+
+                locationPayload = LocationPayload(
+                    latitude: lat,
+                    longitude: lon,
+                    horizontalAccuracy: accuracy,
+                    altitude: nil,
+                    timestamp: currentRecording.createdAt,
+                    manualAddress: nil
+                )
+            }
+
+            let updatedRecording = await appState.proofManager.createProof(
+                for: currentRecording,
+                locationPayload: locationPayload,
+                locationMode: locationMode
+            )
+
+            await MainActor.run {
+                currentRecording = updatedRecording
+                appState.updateRecording(updatedRecording)
+                isCreatingProof = false
+
+                if updatedRecording.proofStatus == .error {
+                    proofError = appState.proofManager.lastError
+                }
+            }
+        }
+    }
+
+    private func verifyProof() {
+        isVerifyingProof = true
+        proofError = nil
+
+        Task {
+            let updatedRecording = await appState.proofManager.verifyProof(for: currentRecording)
+
+            await MainActor.run {
+                currentRecording = updatedRecording
+                appState.updateRecording(updatedRecording)
+                isVerifyingProof = false
+
+                if updatedRecording.proofStatus == .mismatch {
+                    proofError = "File has been modified since proof was created"
+                }
+            }
+        }
+    }
+
+    private func geocodeManualAddressForProof() {
+        guard !manualLocationAddress.isEmpty else { return }
+
+        Task {
+            if let geocoded = await appState.locationManager.geocodeAddress(manualLocationAddress) {
+                await MainActor.run {
+                    // Update recording with manual coordinates
+                    currentRecording.latitude = geocoded.coordinate.latitude
+                    currentRecording.longitude = geocoded.coordinate.longitude
+                    currentRecording.locationLabel = geocoded.label
+                    editedLocationLabel = geocoded.label
+
+                    appState.updateRecordingLocation(
+                        recordingID: currentRecording.id,
+                        latitude: geocoded.coordinate.latitude,
+                        longitude: geocoded.coordinate.longitude,
+                        label: geocoded.label
+                    )
+
+                    manualLocationAddress = ""
+                }
+            }
         }
     }
 
