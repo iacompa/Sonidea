@@ -40,6 +40,8 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTipJar = false
+    @State private var showJournal = false
+    @State private var showCalendar = false
     @State private var showAskPromptFromMain = false
     @State private var showThankYouToast = false
     @State private var showRecoveryAlert = false
@@ -163,6 +165,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showTipJar) {
             TipJarView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
+        .sheet(isPresented: $showJournal) {
+            JournalView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
+        .sheet(isPresented: $showCalendar) {
+            CalendarView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
@@ -565,6 +579,22 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 8) {
+                Button { showJournal = true } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .symbolRenderingMode(.monochrome)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundColor(iconColor)
+                        .frame(width: 44, height: 44)
+                }
+
+                Button { showCalendar = true } label: {
+                    Image(systemName: "calendar")
+                        .symbolRenderingMode(.monochrome)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundColor(iconColor)
+                        .frame(width: 44, height: 44)
+                }
+
                 Button { showSearch = true } label: {
                     Image(systemName: "magnifyingglass")
                         .symbolRenderingMode(.monochrome)
