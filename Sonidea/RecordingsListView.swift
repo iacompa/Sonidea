@@ -300,7 +300,7 @@ struct RecordingsListView: View {
                     .tint(.pink)
                 }
                 .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
 
             // Bottom spacer for floating record button
@@ -433,7 +433,7 @@ struct RecordingRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             if isSelectionMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(isSelected ? .blue : .secondary)
@@ -443,7 +443,7 @@ struct RecordingRow: View {
             // Icon tile - isolated from row highlight states
             RecordingIconTile(recording: recording, colorScheme: colorScheme)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(recording.title)
                     .font(.body)
                     .fontWeight(.medium)
@@ -452,15 +452,15 @@ struct RecordingRow: View {
 
                 HStack(spacing: 6) {
                     Text(recording.formattedDuration)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
 
                     if let album = album {
                         Text("•")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundColor(.secondary)
                         Text(album.name)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
@@ -489,7 +489,7 @@ struct RecordingRow: View {
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 12)
     }
 }
 

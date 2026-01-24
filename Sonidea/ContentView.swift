@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showTipJar = false
     @State private var showAskPromptFromMain = false
+    @State private var showThankYouToast = false
 
     // Drag state for record button
     @State private var dragStartPosition: CGPoint = .zero
@@ -168,8 +169,29 @@ struct ContentView: View {
         .onChange(of: appState.recorder.isRecording) { _, isRecording in
             appState.onRecordingStateChanged(isRecording: isRecording)
         }
+        .onChange(of: appState.supportManager.shouldShowThankYouToast) { _, shouldShow in
+            if shouldShow {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                    showThankYouToast = true
+                }
+                appState.supportManager.shouldShowThankYouToast = false
+                // Auto-dismiss after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        showThankYouToast = false
+                    }
+                }
+            }
+        }
         .onAppear {
             appState.onAppBecameActive()
+        }
+        .overlay(alignment: .top) {
+            if showThankYouToast {
+                ThankYouToast()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 60)
+            }
         }
     }
 
@@ -442,15 +464,53 @@ struct ContentView: View {
 
 struct VoiceMemosRecordButton: View {
     @Environment(AppState.self) var appState
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     @State private var isPulsing = false
+    @State private var goldRingRotation: Double = 0
 
     private var isRecording: Bool {
         appState.recorder.isRecording
     }
 
+    private var isSupporter: Bool {
+        appState.supportManager.hasTippedBefore
+    }
+
+    // Gold gradient for supporter ring
+    private var goldGradient: AngularGradient {
+        AngularGradient(
+            gradient: Gradient(colors: [
+                Color(red: 1.0, green: 0.84, blue: 0.0),      // Gold
+                Color(red: 1.0, green: 0.92, blue: 0.5),      // Light gold
+                Color(red: 0.85, green: 0.65, blue: 0.13),    // Dark gold
+                Color(red: 1.0, green: 0.84, blue: 0.0),      // Gold
+            ]),
+            center: .center,
+            startAngle: .degrees(goldRingRotation),
+            endAngle: .degrees(goldRingRotation + 360)
+        )
+    }
+
     var body: some View {
         ZStack {
+            // Supporter gold ring (behind main button)
+            if isSupporter {
+                Circle()
+                    .stroke(goldGradient, lineWidth: 3)
+                    .frame(width: 92, height: 92)
+                    .opacity(isRecording ? 0.3 : 0.9)
+                    .onAppear {
+                        // Only animate if Reduce Motion is off
+                        if !reduceMotion {
+                            withAnimation(.linear(duration: 25).repeatForever(autoreverses: false)) {
+                                goldRingRotation = 360
+                            }
+                        }
+                    }
+            }
+
+            // Main recording ring
             Circle()
                 .stroke(isRecording ? Color.red : Color.red.opacity(0.3), lineWidth: 4)
                 .frame(width: 80, height: 80)
@@ -460,21 +520,50 @@ struct VoiceMemosRecordButton: View {
                     value: isPulsing
                 )
 
+            // Red fill circle
             Circle()
                 .fill(Color.red)
                 .frame(width: 68, height: 68)
 
+            // Mic icon
             Image(systemName: "mic.fill")
                 .font(.system(size: 28, weight: .bold))
                 .foregroundColor(.white)
         }
         .contentShape(Circle())
+        .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
+        .accessibilityAddTraits(.isButton)
         .onChange(of: isRecording) { _, newValue in
             isPulsing = newValue
         }
         .onAppear {
             isPulsing = isRecording
         }
+    }
+}
+
+// MARK: - Thank You Toast
+
+struct ThankYouToast: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.orange)
+
+            Text("Thank you for supporting Sonidea!")
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        )
+        .accessibilityLabel("Thank you for supporting Sonidea")
     }
 }
 
@@ -1053,6 +1142,23 @@ struct SettingsSheetView: View {
 
         NavigationStack {
             List {
+                // MARK: Supporter Badge (if tipped)
+                if appState.supportManager.hasTippedBefore {
+                    Section {
+                        HStack(spacing: 6) {
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("Supporter")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .listRowBackground(Color(.systemGray6))
+                    }
+                }
+
                 // MARK: Quick Access Section
                 Section {
                     Button { showLockScreenHelp = true } label: {
@@ -1121,6 +1227,47 @@ struct SettingsSheetView: View {
                             }
                         }
                     }
+                }
+
+                // MARK: How It Works Section
+                Section {
+                    NavigationLink {
+                        TagsInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "tag", title: "Tags")
+                    }
+
+                    NavigationLink {
+                        AlbumsInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "folder", title: "Albums")
+                    }
+
+                    NavigationLink {
+                        MapsInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "map", title: "Maps")
+                    }
+
+                    NavigationLink {
+                        RecordButtonInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "hand.draw", title: "Movable Record Button")
+                    }
+
+                    NavigationLink {
+                        SearchInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "magnifyingglass", title: "Search")
+                    }
+
+                    NavigationLink {
+                        AppearanceInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "paintpalette", title: "Appearance")
+                    }
+                } header: {
+                    Text("How it works")
                 }
 
                 // MARK: Recording Quality Section
@@ -1693,6 +1840,343 @@ struct ExportAlbumPickerSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Settings Info Row
+
+struct SettingsInfoRow: View {
+    let icon: String
+    let title: String
+
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(.blue)
+                .frame(width: 24)
+            Text(title)
+                .foregroundColor(.primary)
+        }
+    }
+}
+
+// MARK: - Info Card
+
+struct InfoCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            content
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Info Bullet Row
+
+struct InfoBulletRow: View {
+    let text: String
+    var icon: String = "circle.fill"
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 6))
+                .foregroundColor(.secondary)
+                .frame(width: 12, height: 20, alignment: .center)
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Info Tip Row
+
+struct InfoTipRow: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lightbulb.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.yellow)
+                .frame(width: 12)
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .italic()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Tags Info View
+
+struct TagsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Tags help you label ideas fast so you can find them later.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Add tags to recordings (e.g., beatbox, melody, lyrics, favorite)")
+                        InfoBulletRow(text: "Use tags to filter and search quickly")
+                        InfoBulletRow(text: "Change tag colors for personal organization")
+                        InfoBulletRow(text: "Manage tags in Settings → Manage Tags")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    InfoTipRow(text: "Keep tags short and consistent for best results.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Tags")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Albums Info View
+
+struct AlbumsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Albums are folders for grouping recordings by project or vibe.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Move recordings into albums to keep drafts organized")
+                        InfoBulletRow(text: "Great for separating songs, clients, or sessions")
+                        InfoBulletRow(text: "Works with search and tags together")
+                        InfoBulletRow(text: "Swipe left on a recording to move it to an album")
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Albums")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Maps Info View
+
+struct MapsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("If Location is enabled, Sonidea can pin where ideas were captured.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Each recording can store an optional location")
+                        InfoBulletRow(text: "Map view shows your recording spots over time")
+                        InfoBulletRow(text: "Tap a pin to see the recording details")
+                        InfoBulletRow(text: "You control this: turn Location on/off in iOS Settings")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Note
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.blue)
+                        Text("Location is optional. The app works perfectly without it.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Maps")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Record Button Info View
+
+struct RecordButtonInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Move the record button anywhere to match your workflow.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Drag freely anywhere on screen (below the top menu)")
+                        InfoBulletRow(text: "Position is saved automatically")
+                        InfoBulletRow(text: "Long-press the button to see a quick reset option")
+                        InfoBulletRow(text: "If it ever feels off, use \"Reset Record Button Position\" in Settings")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Note
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 14))
+                            .foregroundColor(.blue)
+                        Text("Reset returns the button to the default bottom-center position, just like Voice Memos.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Movable Record Button")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Search Info View
+
+struct SearchInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Search finds recordings by title, tags, and metadata.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Tap the magnifying glass in the top bar")
+                        InfoBulletRow(text: "Search by recording name")
+                        InfoBulletRow(text: "Search by tags (e.g., \"melody\")")
+                        InfoBulletRow(text: "Filter results by selecting tag chips")
+                        InfoBulletRow(text: "Quickly jump to the exact take you need")
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Search")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Appearance Info View
+
+struct AppearanceInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Make Sonidea feel like yours by customizing colors.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("What you can customize")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Change tag colors in Settings → Manage Tags")
+                        InfoBulletRow(text: "Recording icon colors can vary based on favorite status")
+                        InfoBulletRow(text: "Switch between Light, Dark, or System appearance")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    InfoTipRow(text: "Use color as a system: red for hooks, blue for beats, purple for lyrics — whatever works for you.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

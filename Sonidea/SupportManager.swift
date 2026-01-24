@@ -26,13 +26,49 @@ struct TipTier: Identifiable {
         TipTier(id: "patron", productID: "com.iacompa.sonidea.tip.patron", title: "Patron", amount: "$25", impact: "Backs major improvements.")
     ]
 
-    // Additional fixed amounts for custom tip sheet
-    static let customChips: [(id: String, productID: String, amount: String)] = [
-        ("tip1", "com.iacompa.sonidea.tip.custom1", "$1"),
-        ("tip3", "com.iacompa.sonidea.tip.custom3", "$3"),
-        ("tip7", "com.iacompa.sonidea.tip.custom7", "$7"),
-        ("tip15", "com.iacompa.sonidea.tip.custom15", "$15")
-    ]
+    // All supported custom amounts (must have IAP products for each)
+    // Expanded list for better "any amount" matching
+    static let supportedAmounts: [Int] = [1, 2, 3, 5, 7, 10, 15, 25, 50, 75, 100, 150, 200, 300, 500]
+
+    // Quick pick amounts for UI chips
+    static let quickPickAmounts: [Int] = [1, 3, 5, 10, 25, 50, 100]
+
+    // Product ID mapping for custom amounts
+    static func productID(for amount: Int) -> String {
+        switch amount {
+        case 1: return "com.iacompa.sonidea.tip.custom1"
+        case 2: return "com.iacompa.sonidea.tip.coffee"
+        case 3: return "com.iacompa.sonidea.tip.custom3"
+        case 5: return "com.iacompa.sonidea.tip.feature"
+        case 7: return "com.iacompa.sonidea.tip.custom7"
+        case 10: return "com.iacompa.sonidea.tip.studio"
+        case 15: return "com.iacompa.sonidea.tip.custom15"
+        case 25: return "com.iacompa.sonidea.tip.patron"
+        case 50: return "com.iacompa.sonidea.tip.custom50"
+        case 75: return "com.iacompa.sonidea.tip.custom75"
+        case 100: return "com.iacompa.sonidea.tip.custom100"
+        case 150: return "com.iacompa.sonidea.tip.custom150"
+        case 200: return "com.iacompa.sonidea.tip.custom200"
+        case 300: return "com.iacompa.sonidea.tip.custom300"
+        case 500: return "com.iacompa.sonidea.tip.custom500"
+        default:
+            // For amounts not in the list, find nearest and return its product ID
+            let nearest = nearestSupportedAmount(to: amount)
+            return productID(for: nearest)
+        }
+    }
+
+    // Find nearest supported amount (no upper limit)
+    static func nearestSupportedAmount(to value: Int) -> Int {
+        guard value >= 1 else { return 1 }
+        // Find the closest supported amount
+        return supportedAmounts.min(by: { abs($0 - value) < abs($1 - value) }) ?? supportedAmounts.last!
+    }
+
+    // All product IDs for loading
+    static var allProductIDs: Set<String> {
+        Set(supportedAmounts.map { productID(for: $0) })
+    }
 }
 
 // MARK: - Roadmap Item
@@ -65,6 +101,7 @@ final class SupportManager {
     // MARK: - Published State
 
     var shouldShowAskPromptSheet = false
+    var shouldShowThankYouToast = false
     var isPurchasing = false
     var purchaseError: String?
     var products: [Product] = []
@@ -75,6 +112,11 @@ final class SupportManager {
     var hasTippedBefore: Bool {
         get { UserDefaults.standard.bool(forKey: Keys.hasTippedBefore) }
         set { UserDefaults.standard.set(newValue, forKey: Keys.hasTippedBefore) }
+    }
+
+    var hasShownSupporterThankYou: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.hasShownSupporterThankYou) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.hasShownSupporterThankYou) }
     }
 
     var lastTipDate: Date? {
@@ -196,6 +238,7 @@ final class SupportManager {
 
     private enum Keys {
         static let hasTippedBefore = "support.hasTippedBefore"
+        static let hasShownSupporterThankYou = "support.hasShownSupporterThankYou"
         static let lastTipDate = "support.lastTipDate"
         static let supporterDisplayName = "support.displayName"
         static let showNameOnWall = "support.showNameOnWall"
@@ -237,10 +280,8 @@ final class SupportManager {
     func loadProducts() async {
         isLoadingProducts = true
 
-        let productIDs = TipTier.allTiers.map { $0.productID } + TipTier.customChips.map { $0.productID }
-
         do {
-            products = try await Product.products(for: Set(productIDs))
+            products = try await Product.products(for: TipTier.allProductIDs)
             isLoadingProducts = false
         } catch {
             print("Failed to load products: \(error)")
@@ -266,10 +307,19 @@ final class SupportManager {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
+                    // Check if this is the first tip (before marking as tipped)
+                    let isFirstTip = !hasTippedBefore
+
                     // Mark as tipped
                     hasTippedBefore = true
                     lastTipDate = Date()
                     tipPurchaseSuccessCount += 1
+
+                    // Trigger thank you toast if first time
+                    if isFirstTip && !hasShownSupporterThankYou {
+                        shouldShowThankYouToast = true
+                        hasShownSupporterThankYou = true
+                    }
 
                     // Finish the transaction
                     await transaction.finish()
@@ -297,6 +347,13 @@ final class SupportManager {
 
     func priceForProduct(_ productID: String) -> String? {
         products.first { $0.id == productID }?.displayPrice
+    }
+
+    // Get price for a specific dollar amount
+    func priceForAmount(_ amount: Int) -> String? {
+        let nearestAmount = TipTier.nearestSupportedAmount(to: amount)
+        let productID = TipTier.productID(for: nearestAmount)
+        return priceForProduct(productID)
     }
 
     // MARK: - Active Day Registration
@@ -374,6 +431,12 @@ final class SupportManager {
 
     func onTipJarOpened() {
         tipJarOpenedCount += 1
+    }
+
+    // MARK: - Thank You Toast
+
+    func dismissThankYouToast() {
+        shouldShowThankYouToast = false
     }
 
     // MARK: - Ask Prompt Logic
@@ -479,6 +542,7 @@ final class SupportManager {
     func debugResetAllMetrics() {
         let keysToReset = [
             Keys.hasTippedBefore,
+            Keys.hasShownSupporterThankYou,
             Keys.lastTipDate,
             Keys.activeDaysTotal,
             Keys.activeDaysStreak,
@@ -506,6 +570,10 @@ final class SupportManager {
 
     func debugTriggerAskPrompt() {
         showAskPrompt()
+    }
+
+    func debugTriggerThankYou() {
+        shouldShowThankYouToast = true
     }
     #endif
 }
