@@ -55,7 +55,10 @@ struct RecordingDetailView: View {
     @State private var reverseGeocodedName: String?
     @State private var isLoadingReverseGeocode = false
 
-    init(recording: RecordingItem) {
+    // Navigation context flag - when true, tapping project just dismisses back to parent
+    private let isOpenedFromProject: Bool
+
+    init(recording: RecordingItem, isOpenedFromProject: Bool = false) {
         _editedTitle = State(initialValue: recording.title)
         _editedNotes = State(initialValue: recording.notes)
         _editedLocationLabel = State(initialValue: recording.locationLabel)
@@ -64,6 +67,7 @@ struct RecordingDetailView: View {
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
         // Store original hex to avoid overwriting with lossy Color -> hex conversion
         self.originalIconColorHex = recording.iconColorHex
+        self.isOpenedFromProject = isOpenedFromProject
     }
 
     var body: some View {
@@ -602,7 +606,14 @@ struct RecordingDetailView: View {
                 // Recording is part of a project
                 if let project = appState.project(for: currentRecording.projectId) {
                     Button {
-                        showProjectSheet = true
+                        if isOpenedFromProject {
+                            // Already came from project - just go back (dismiss)
+                            saveChanges()
+                            dismiss()
+                        } else {
+                            // Open project sheet
+                            showProjectSheet = true
+                        }
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "folder.fill")
@@ -639,9 +650,16 @@ struct RecordingDetailView: View {
 
                             Spacer()
 
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                            if isOpenedFromProject {
+                                // Show "Back" indicator when opened from project
+                                Text("Back")
+                                    .font(.caption)
+                                    .foregroundColor(palette.accent)
+                            } else {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
                         }
                         .padding(12)
                         .background(palette.inputBackground)
@@ -649,19 +667,21 @@ struct RecordingDetailView: View {
                     }
                     .buttonStyle(.plain)
 
-                    // Remove from project button
-                    Button(role: .destructive) {
-                        appState.removeFromProject(recording: currentRecording)
-                        refreshRecording()
-                    } label: {
-                        HStack {
-                            Image(systemName: "folder.badge.minus")
-                            Text("Remove from Project")
+                    // Remove from project button (only show if not opened from project context)
+                    if !isOpenedFromProject {
+                        Button(role: .destructive) {
+                            appState.removeFromProject(recording: currentRecording)
+                            refreshRecording()
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.badge.minus")
+                                Text("Remove from Project")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.red)
                         }
-                        .font(.caption)
-                        .foregroundColor(.red)
+                        .padding(.top, 4)
                     }
-                    .padding(.top, 4)
                 }
             } else {
                 // Standalone recording - show options to add to project

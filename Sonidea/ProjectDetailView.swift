@@ -81,7 +81,8 @@ struct ProjectDetailView: View {
                 AddVersionSheet(project: currentProject)
             }
             .sheet(item: $selectedRecording) { recording in
-                RecordingDetailView(recording: recording)
+                // Pass isOpenedFromProject: true to prevent navigation loop
+                RecordingDetailView(recording: recording, isOpenedFromProject: true)
                     .environment(appState)
             }
             .alert("Delete Project?", isPresented: $showDeleteConfirmation) {
@@ -95,6 +96,12 @@ struct ProjectDetailView: View {
             }
             .onAppear {
                 refreshProject()
+            }
+            .onChange(of: selectedRecording) { _, newValue in
+                // Refresh project when sheet is dismissed (recording is nil again)
+                if newValue == nil {
+                    refreshProject()
+                }
             }
         }
     }
@@ -163,7 +170,7 @@ struct ProjectDetailView: View {
     // MARK: - Versions Section
 
     private var versionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Versions")
                     .font(.caption)
@@ -184,31 +191,42 @@ struct ProjectDetailView: View {
                 }
             }
 
+            // Hint for Best Take discovery
+            if !versions.isEmpty {
+                Text("Tip: Press and hold a take to set Best Take.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if versions.isEmpty {
                 emptyVersionsView
+                    .padding(.top, 4)
             } else {
-                ForEach(versions) { recording in
-                    VersionRow(
-                        recording: recording,
-                        isBestTake: currentProject.bestTakeRecordingId == recording.id,
-                        palette: palette,
-                        onTap: {
-                            selectedRecording = recording
-                        },
-                        onSetBestTake: {
-                            if currentProject.bestTakeRecordingId == recording.id {
-                                appState.clearBestTake(for: currentProject)
-                            } else {
-                                appState.setBestTake(recording, for: currentProject)
+                VStack(spacing: 8) {
+                    ForEach(versions) { recording in
+                        VersionRow(
+                            recording: recording,
+                            isBestTake: currentProject.bestTakeRecordingId == recording.id,
+                            palette: palette,
+                            onTap: {
+                                selectedRecording = recording
+                            },
+                            onSetBestTake: {
+                                if currentProject.bestTakeRecordingId == recording.id {
+                                    appState.clearBestTake(for: currentProject)
+                                } else {
+                                    appState.setBestTake(recording, for: currentProject)
+                                }
+                                refreshProject()
+                            },
+                            onRemoveFromProject: {
+                                appState.removeFromProject(recording: recording)
+                                refreshProject()
                             }
-                            refreshProject()
-                        },
-                        onRemoveFromProject: {
-                            appState.removeFromProject(recording: recording)
-                            refreshProject()
-                        }
-                    )
+                        )
+                    }
                 }
+                .padding(.top, 4)
             }
         }
     }
