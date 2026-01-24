@@ -31,9 +31,24 @@ final class ProofManager {
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
 
-    /// CloudKit container
-    private let container = CKContainer.default()
-    private var privateDatabase: CKDatabase { container.privateCloudDatabase }
+    /// CloudKit container (lazy to avoid crash if entitlements not configured)
+    private var _container: CKContainer?
+    private var container: CKContainer? {
+        if _container == nil {
+            // Check if CloudKit is available before accessing
+            if isCloudKitAvailable {
+                _container = CKContainer.default()
+            }
+        }
+        return _container
+    }
+    private var privateDatabase: CKDatabase? { container?.privateCloudDatabase }
+
+    /// Whether CloudKit is available (entitlements configured)
+    var isCloudKitAvailable: Bool {
+        // Check if iCloud is available on the device
+        FileManager.default.ubiquityIdentityToken != nil
+    }
 
     /// Record type for proof receipts
     private static let recordType = "ProofReceipt"
@@ -203,6 +218,10 @@ final class ProofManager {
         locationProofHash: String?
     ) async throws -> (recordName: String, serverDate: Date) {
 
+        guard let database = privateDatabase else {
+            throw ProofManagerError.cloudKitNotConfigured
+        }
+
         let recordID = CKRecord.ID(recordName: UUID().uuidString)
         let record = CKRecord(recordType: Self.recordType, recordID: recordID)
 
@@ -229,7 +248,7 @@ final class ProofManager {
             }
         }
 
-        let savedRecord = try await privateDatabase.save(record)
+        let savedRecord = try await database.save(record)
 
         guard let serverDate = savedRecord.creationDate else {
             throw ProofManagerError.noServerDate
@@ -339,6 +358,7 @@ final class ProofManager {
 enum ProofManagerError: LocalizedError {
     case noServerDate
     case networkUnavailable
+    case cloudKitNotConfigured
 
     var errorDescription: String? {
         switch self {
@@ -346,6 +366,8 @@ enum ProofManagerError: LocalizedError {
             return "CloudKit did not return a server timestamp"
         case .networkUnavailable:
             return "Network unavailable"
+        case .cloudKitNotConfigured:
+            return "iCloud is not available. Sign in to iCloud in Settings."
         }
     }
 }

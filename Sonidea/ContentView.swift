@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Combine
+import MapKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -27,6 +28,32 @@ enum SearchScope: String, CaseIterable {
         case .recordings: return "Recordings"
         case .projects: return "Projects"
         case .albums: return "Albums"
+        }
+    }
+}
+
+// MARK: - Search Mode Enum
+enum SearchMode: String, CaseIterable {
+    case `default`
+    case map
+    case calendar
+    case timeline
+
+    var displayName: String {
+        switch self {
+        case .default: return "Default"
+        case .map: return "Map"
+        case .calendar: return "Calendar"
+        case .timeline: return "Timeline"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .default: return "magnifyingglass"
+        case .map: return "map"
+        case .calendar: return "calendar"
+        case .timeline: return "clock"
         }
     }
 }
@@ -994,6 +1021,7 @@ struct SearchSheetView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
 
+    @State private var searchMode: SearchMode = .default
     @State private var searchScope: SearchScope = .recordings
     @State private var searchQuery = ""
     @State private var selectedTagIDs: Set<UUID> = []
@@ -1050,76 +1078,58 @@ struct SearchSheetView: View {
             ZStack {
                 palette.background.ignoresSafeArea()
 
-                VStack(spacing: 12) {
-                    // Stats header
-                    HStack(spacing: 16) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "waveform")
-                                .font(.caption)
-                            Text("\(totalRecordingCount) recordings")
-                        }
-
-                        HStack(spacing: 4) {
-                            Image(systemName: "internaldrive")
-                                .font(.caption)
-                            Text(totalStorageUsed)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                    Picker("Search Scope", selection: $searchScope) {
-                        ForEach(SearchScope.allCases, id: \.self) { scope in
-                            Text(scope.displayName).tag(scope)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(palette.textSecondary)
-                        TextField(searchPlaceholder, text: $searchQuery)
-                            .foregroundColor(palette.textPrimary)
-                    }
-                    .padding(12)
-                    .background(palette.inputBackground)
-                    .cornerRadius(10)
-                    .padding(.horizontal)
-
-                    if searchScope == .recordings && !appState.tags.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(appState.tags) { tag in
-                                    TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
-                                        if selectedTagIDs.contains(tag.id) {
-                                            selectedTagIDs.remove(tag.id)
-                                        } else {
-                                            selectedTagIDs.insert(tag.id)
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-
-                    switch searchScope {
-                    case .recordings:
-                        recordingsResultsView
-                    case .projects:
-                        projectsResultsView
-                    case .albums:
-                        albumsResultsView
-                    }
+                switch searchMode {
+                case .default:
+                    defaultSearchContent
+                case .map:
+                    mapSearchContent
+                case .calendar:
+                    calendarSearchContent
+                case .timeline:
+                    timelineSearchContent
                 }
-                .padding(.top)
             }
-            .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 12) {
+                        // Mode menu on the left
+                        Menu {
+                            ForEach(SearchMode.allCases, id: \.self) { mode in
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        searchMode = mode
+                                    }
+                                } label: {
+                                    Label(mode.displayName, systemImage: mode.iconName)
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(searchMode.displayName)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundStyle(palette.accent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(palette.accent.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
+
+                        // Title centered
+                        Text("Search")
+                            .font(.headline)
+                            .foregroundStyle(palette.textPrimary)
+                    }
+                }
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(palette.accent)
                 }
             }
             .sheet(item: $selectedRecording) { recording in
@@ -1136,6 +1146,95 @@ struct SearchSheetView: View {
             }
         }
     }
+
+    // MARK: - Default Search Content
+
+    private var defaultSearchContent: some View {
+        VStack(spacing: 12) {
+            // Stats header
+            HStack(spacing: 16) {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform")
+                        .font(.caption)
+                    Text("\(totalRecordingCount) recordings")
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "internaldrive")
+                        .font(.caption)
+                    Text(totalStorageUsed)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Picker("Search Scope", selection: $searchScope) {
+                ForEach(SearchScope.allCases, id: \.self) { scope in
+                    Text(scope.displayName).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(palette.textSecondary)
+                TextField(searchPlaceholder, text: $searchQuery)
+                    .foregroundColor(palette.textPrimary)
+            }
+            .padding(12)
+            .background(palette.inputBackground)
+            .cornerRadius(10)
+            .padding(.horizontal)
+
+            if searchScope == .recordings && !appState.tags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(appState.tags) { tag in
+                            TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
+                                if selectedTagIDs.contains(tag.id) {
+                                    selectedTagIDs.remove(tag.id)
+                                } else {
+                                    selectedTagIDs.insert(tag.id)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+
+            switch searchScope {
+            case .recordings:
+                recordingsResultsView
+            case .projects:
+                projectsResultsView
+            case .albums:
+                albumsResultsView
+            }
+        }
+        .padding(.top)
+    }
+
+    // MARK: - Map Search Content
+
+    private var mapSearchContent: some View {
+        SearchMapView(selectedRecording: $selectedRecording)
+    }
+
+    // MARK: - Calendar Search Content
+
+    private var calendarSearchContent: some View {
+        SearchCalendarView(selectedRecording: $selectedRecording)
+    }
+
+    // MARK: - Timeline Search Content
+
+    private var timelineSearchContent: some View {
+        SearchTimelineView(selectedRecording: $selectedRecording)
+    }
+
+    // MARK: - Recordings Results
 
     @ViewBuilder
     private var recordingsResultsView: some View {
@@ -1177,6 +1276,8 @@ struct SearchSheetView: View {
         }
     }
 
+    // MARK: - Albums Results
+
     @ViewBuilder
     private var albumsResultsView: some View {
         if albumResults.isEmpty {
@@ -1216,6 +1317,8 @@ struct SearchSheetView: View {
         }
     }
 
+    // MARK: - Projects Results
+
     @ViewBuilder
     private var projectsResultsView: some View {
         if projectResults.isEmpty {
@@ -1253,6 +1356,643 @@ struct SearchSheetView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
+    }
+}
+
+// MARK: - Search Map View (Embedded)
+
+struct SearchMapView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+    @Binding var selectedRecording: RecordingItem?
+
+    @State private var cameraPosition: MapCameraPosition = .automatic
+
+    private var recordingsWithLocation: [RecordingItem] {
+        appState.activeRecordings.filter { $0.hasCoordinates }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if recordingsWithLocation.isEmpty {
+                Spacer()
+                VStack(spacing: 12) {
+                    Image(systemName: "map")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No locations recorded")
+                        .font(.headline)
+                        .foregroundStyle(palette.textPrimary)
+                    Text("Recordings with location data will appear on the map")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+                Spacer()
+            } else {
+                Map(position: $cameraPosition) {
+                    ForEach(recordingsWithLocation) { recording in
+                        if let lat = recording.latitude, let lon = recording.longitude {
+                            Annotation(recording.title, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                                Button {
+                                    selectedRecording = recording
+                                } label: {
+                                    Image(systemName: "waveform.circle.fill")
+                                        .font(.title)
+                                        .foregroundStyle(palette.accent)
+                                        .background(Circle().fill(.white).frame(width: 28, height: 28))
+                                }
+                            }
+                        }
+                    }
+                }
+                .mapStyle(.standard)
+                .onAppear {
+                    fitToRecordings()
+                }
+            }
+        }
+    }
+
+    private func fitToRecordings() {
+        guard !recordingsWithLocation.isEmpty else { return }
+
+        let coordinates = recordingsWithLocation.compactMap { recording -> CLLocationCoordinate2D? in
+            guard let lat = recording.latitude, let lon = recording.longitude else { return nil }
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+
+        guard !coordinates.isEmpty else { return }
+
+        if coordinates.count == 1 {
+            cameraPosition = .region(MKCoordinateRegion(
+                center: coordinates[0],
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            ))
+        } else {
+            let minLat = coordinates.map(\.latitude).min() ?? 0
+            let maxLat = coordinates.map(\.latitude).max() ?? 0
+            let minLon = coordinates.map(\.longitude).min() ?? 0
+            let maxLon = coordinates.map(\.longitude).max() ?? 0
+
+            let center = CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            )
+            let span = MKCoordinateSpan(
+                latitudeDelta: (maxLat - minLat) * 1.3 + 0.01,
+                longitudeDelta: (maxLon - minLon) * 1.3 + 0.01
+            )
+
+            cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
+        }
+    }
+}
+
+// MARK: - Search Calendar View (Embedded)
+
+struct SearchCalendarView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+    @Binding var selectedRecording: RecordingItem?
+
+    @State private var currentMonth: Date = Date()
+    @State private var selectedDate: Date?
+
+    private let calendar = Calendar.current
+    private let daysOfWeek = ["S", "M", "T", "W", "T", "F", "S"]
+
+    private var recordingsByDay: [Date: [RecordingItem]] {
+        Dictionary(grouping: appState.activeRecordings) { recording in
+            calendar.startOfDay(for: recording.createdAt)
+        }
+    }
+
+    private var daysWithRecordings: Set<Date> {
+        Set(recordingsByDay.keys)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Month navigation
+            monthNavigationHeader
+
+            // Days of week header
+            daysOfWeekHeader
+
+            // Calendar grid
+            calendarGrid
+
+            Divider()
+                .padding(.top, 8)
+
+            // Selected day recordings
+            if let date = selectedDate {
+                dayRecordingsList(for: date)
+            } else {
+                selectDayPrompt
+            }
+        }
+    }
+
+    private var monthNavigationHeader: some View {
+        HStack {
+            Button {
+                withAnimation {
+                    currentMonth = calendar.date(byAdding: .month, value: -1, to: currentMonth) ?? currentMonth
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(palette.textPrimary)
+                    .frame(width: 44, height: 44)
+            }
+
+            Spacer()
+
+            Text(monthYearString)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(palette.textPrimary)
+
+            Spacer()
+
+            Button {
+                withAnimation {
+                    currentMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) ?? currentMonth
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(palette.textPrimary)
+                    .frame(width: 44, height: 44)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+    }
+
+    private var monthYearString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter.string(from: currentMonth)
+    }
+
+    private var daysOfWeekHeader: some View {
+        HStack(spacing: 0) {
+            ForEach(daysOfWeek, id: \.self) { day in
+                Text(day)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.textSecondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var calendarGrid: some View {
+        let days = daysInMonth()
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
+
+        return LazyVGrid(columns: columns, spacing: 4) {
+            ForEach(days, id: \.self) { date in
+                if let date = date {
+                    calendarDayCell(for: date)
+                } else {
+                    Color.clear
+                        .frame(height: 44)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private func calendarDayCell(for date: Date) -> some View {
+        let isSelected = selectedDate != nil && calendar.isDate(date, inSameDayAs: selectedDate!)
+        let isToday = calendar.isDateInToday(date)
+        let hasRecordings = daysWithRecordings.contains(calendar.startOfDay(for: date))
+        let recordingCount = recordingsByDay[calendar.startOfDay(for: date)]?.count ?? 0
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedDate = calendar.startOfDay(for: date)
+            }
+        } label: {
+            VStack(spacing: 2) {
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.body.weight(isToday ? .bold : .regular))
+                    .foregroundStyle(
+                        isSelected ? Color.white :
+                        isToday ? palette.accent :
+                        palette.textPrimary
+                    )
+
+                if hasRecordings {
+                    if recordingCount > 1 {
+                        Text("\(recordingCount)")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.9) : palette.accent)
+                    } else {
+                        Circle()
+                            .fill(isSelected ? Color.white.opacity(0.9) : palette.accent)
+                            .frame(width: 5, height: 5)
+                    }
+                } else {
+                    Color.clear
+                        .frame(width: 5, height: 5)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .background(
+                Group {
+                    if isSelected {
+                        Circle()
+                            .fill(palette.accent)
+                    } else if isToday {
+                        Circle()
+                            .strokeBorder(palette.accent, lineWidth: 1)
+                    }
+                }
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dayRecordingsList(for date: Date) -> some View {
+        let recordings = recordingsByDay[calendar.startOfDay(for: date)] ?? []
+
+        return VStack(spacing: 0) {
+            HStack {
+                Text(dayHeaderString(for: date))
+                    .font(.headline)
+                    .foregroundStyle(palette.textPrimary)
+
+                Spacer()
+
+                if !recordings.isEmpty {
+                    Text("\(recordings.count) recording\(recordings.count == 1 ? "" : "s")")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.textSecondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            if recordings.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .font(.title)
+                        .foregroundStyle(palette.textTertiary)
+
+                    Text("No recordings")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 40)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(recordings.sorted(by: { $0.createdAt > $1.createdAt })) { recording in
+                            SearchCalendarRecordingRow(recording: recording)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedRecording = recording
+                                }
+
+                            if recording.id != recordings.last?.id {
+                                Divider()
+                                    .padding(.leading, 16)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 40)
+                }
+            }
+        }
+    }
+
+    private func dayHeaderString(for date: Date) -> String {
+        let formatter = DateFormatter()
+        if calendar.isDateInToday(date) {
+            return "Today"
+        } else if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            formatter.dateFormat = "EEEE, MMMM d"
+            return formatter.string(from: date)
+        }
+    }
+
+    private var selectDayPrompt: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "calendar")
+                .font(.title)
+                .foregroundStyle(palette.textTertiary)
+
+            Text("Select a day to view recordings")
+                .font(.subheadline)
+                .foregroundStyle(palette.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 40)
+    }
+
+    private func daysInMonth() -> [Date?] {
+        guard let monthInterval = calendar.dateInterval(of: .month, for: currentMonth) else {
+            return []
+        }
+
+        var days: [Date?] = []
+
+        let startOfMonth = monthInterval.start
+        let weekdayOfFirst = calendar.component(.weekday, from: startOfMonth)
+        for _ in 1..<weekdayOfFirst {
+            days.append(nil)
+        }
+
+        var date = startOfMonth
+        while date < monthInterval.end {
+            days.append(date)
+            date = calendar.date(byAdding: .day, value: 1, to: date) ?? date
+        }
+
+        return days
+    }
+}
+
+// MARK: - Search Calendar Recording Row
+
+struct SearchCalendarRecordingRow: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let recording: RecordingItem
+
+    private var formattedTime: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: recording.createdAt)
+    }
+
+    private var formattedDuration: String {
+        let minutes = Int(recording.duration) / 60
+        let seconds = Int(recording.duration) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(formattedTime)
+                .font(.caption)
+                .foregroundStyle(palette.textSecondary)
+                .frame(width: 60, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(recording.title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(palette.textPrimary)
+                        .lineLimit(1)
+
+                    if recording.proofStatus == .proven {
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.textTertiary)
+                }
+
+                Label(formattedDuration, systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(palette.textSecondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(palette.background)
+    }
+}
+
+// MARK: - Search Timeline View (Embedded)
+
+struct SearchTimelineView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+    @Binding var selectedRecording: RecordingItem?
+
+    private var timelineGroups: [TimelineGroup] {
+        let items = TimelineBuilder.buildTimeline(
+            recordings: appState.recordings,
+            projects: appState.projects
+        )
+        return TimelineBuilder.groupByDay(items)
+    }
+
+    var body: some View {
+        if timelineGroups.isEmpty {
+            VStack(spacing: 16) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 48))
+                    .foregroundStyle(palette.textTertiary)
+
+                Text("No Recordings Yet")
+                    .font(.headline)
+                    .foregroundStyle(palette.textPrimary)
+
+                Text("Your recording timeline will appear here")
+                    .font(.subheadline)
+                    .foregroundStyle(palette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(timelineGroups) { group in
+                        Section {
+                            ForEach(group.items) { item in
+                                SearchTimelineRowView(item: item, tags: tagsForItem(item))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        handleItemTap(item)
+                                    }
+
+                                if item.id != group.items.last?.id {
+                                    Divider()
+                                        .padding(.leading, 60)
+                                }
+                            }
+                        } header: {
+                            sectionHeader(for: group)
+                        }
+                    }
+                }
+                .padding(.bottom, 40)
+            }
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    private func sectionHeader(for group: TimelineGroup) -> some View {
+        HStack {
+            Text(group.displayTitle)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(palette.textSecondary)
+                .textCase(.uppercase)
+
+            Spacer()
+
+            Text("\(group.items.count)")
+                .font(.footnote)
+                .foregroundStyle(palette.textTertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(palette.background)
+    }
+
+    private func tagsForItem(_ item: TimelineItem) -> [Tag] {
+        item.tagIDs.compactMap { appState.tag(for: $0) }
+    }
+
+    private func handleItemTap(_ item: TimelineItem) {
+        if let recording = appState.recording(for: item.recordingID) {
+            selectedRecording = recording
+        }
+    }
+}
+
+// MARK: - Search Timeline Row View
+
+struct SearchTimelineRowView: View {
+    @Environment(\.themePalette) private var palette
+
+    let item: TimelineItem
+    let tags: [Tag]
+
+    private var formattedTime: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: item.timestamp)
+    }
+
+    private var formattedDuration: String {
+        let minutes = Int(item.duration) / 60
+        let seconds = Int(item.duration) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .trailing) {
+                Text(formattedTime)
+                    .font(.caption)
+                    .foregroundStyle(palette.textSecondary)
+            }
+            .frame(width: 50, alignment: .trailing)
+
+            VStack(spacing: 4) {
+                Circle()
+                    .fill(item.isBestTake ? Color.yellow : palette.accent)
+                    .frame(width: 10, height: 10)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text(item.title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(palette.textPrimary)
+                        .lineLimit(1)
+
+                    if item.isBestTake {
+                        HStack(spacing: 3) {
+                            Image(systemName: "star.fill")
+                                .font(.caption2)
+                            Text("Best")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.yellow)
+                        .clipShape(Capsule())
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.textTertiary)
+                }
+
+                HStack(spacing: 8) {
+                    Label(formattedDuration, systemImage: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+
+                    if case .projectTake(let projectTitle, let takeLabel) = item.type {
+                        Text("\u{2022}")
+                            .font(.caption)
+                            .foregroundStyle(palette.textTertiary)
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder")
+                                .font(.caption2)
+                            Text("\(projectTitle) \u{00B7} \(takeLabel)")
+                                .lineLimit(1)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+                    }
+
+                    Spacer()
+                }
+
+                if !tags.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(tags.prefix(3)) { tag in
+                            HStack(spacing: 3) {
+                                Circle()
+                                    .fill(tag.color)
+                                    .frame(width: 6, height: 6)
+                                Text(tag.name)
+                                    .lineLimit(1)
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(palette.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(palette.chipBackground)
+                            .clipShape(Capsule())
+                        }
+
+                        if tags.count > 3 {
+                            Text("+\(tags.count - 3)")
+                                .font(.caption2)
+                                .foregroundStyle(palette.textTertiary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(palette.background)
     }
 }
 
