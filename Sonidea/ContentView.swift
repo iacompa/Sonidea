@@ -829,12 +829,53 @@ struct SearchSheetView: View {
         }
     }
 
+    // MARK: - Stats
+
+    private var totalRecordingCount: Int {
+        appState.activeRecordings.count
+    }
+
+    private var totalStorageUsed: String {
+        let totalBytes = appState.activeRecordings.reduce(into: Int64(0)) { result, recording in
+            let url = recording.fileURL
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let fileSize = attrs[.size] as? Int64 {
+                result += fileSize
+            }
+        }
+        return formatBytes(totalBytes)
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 palette.background.ignoresSafeArea()
 
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    // Stats header
+                    HStack(spacing: 16) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform")
+                                .font(.caption)
+                            Text("\(totalRecordingCount) recordings")
+                        }
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "internaldrive")
+                                .font(.caption)
+                            Text(totalStorageUsed)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                     Picker("Search Scope", selection: $searchScope) {
                         ForEach(SearchScope.allCases, id: \.self) { scope in
                             Text(scope.displayName).tag(scope)

@@ -42,6 +42,14 @@ struct TagManagerView: View {
                 .padding(.horizontal)
                 .padding(.top, 8)
 
+                // Tip line
+                Text("Tip: Swipe to delete, tap to edit color and name.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 // Tag list
                 List {
                     ForEach(filteredTags) { tag in

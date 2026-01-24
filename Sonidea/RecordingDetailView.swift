@@ -1300,6 +1300,7 @@ struct ChooseAlbumSheet: View {
     @Binding var recording: RecordingItem
 
     @State private var newAlbumName = ""
+    @State private var showCannotDeleteAlert = false
 
     var body: some View {
         NavigationStack {
@@ -1335,11 +1336,17 @@ struct ChooseAlbumSheet: View {
                             let album = appState.albums[index]
                             if album.canDelete {
                                 appState.deleteAlbum(album)
+                            } else {
+                                showCannotDeleteAlert = true
                             }
                         }
                     }
                 } header: {
                     Text("Albums")
+                } footer: {
+                    Text("Tip: Swipe left on an album to delete it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -1365,6 +1372,11 @@ struct ChooseAlbumSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
                 }
+            }
+            .alert("Cannot Delete", isPresented: $showCannotDeleteAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The Drafts album is protected and cannot be deleted.")
             }
         }
     }
