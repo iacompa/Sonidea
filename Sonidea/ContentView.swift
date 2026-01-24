@@ -19,11 +19,13 @@ enum AppRoute: String, CaseIterable {
 // MARK: - Search Scope Enum
 enum SearchScope: String, CaseIterable {
     case recordings
+    case projects
     case albums
 
     var displayName: String {
         switch self {
         case .recordings: return "Recordings"
+        case .projects: return "Projects"
         case .albums: return "Albums"
         }
     }
@@ -393,31 +395,56 @@ struct ContentView: View {
     // MARK: - Fixed Top Bar
 
     private func fixedTopBar(safeAreaTop: CGFloat) -> some View {
-        VStack(spacing: 0) {
+        let isCustomTheme = appState.selectedTheme.isCustomTheme
+
+        return VStack(spacing: 0) {
             topNavigationBar
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
                 .padding(.bottom, 8)
                 .background(
                     Rectangle()
-                        .fill(currentRoute == .map
-                            ? AnyShapeStyle(.ultraThinMaterial)
-                            : (palette.useMaterials ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(palette.navigationBarBackground)))
+                        .fill(toolbarBackgroundStyle(isCustomTheme: isCustomTheme))
                         .ignoresSafeArea(edges: .top)
                 )
             Spacer()
         }
     }
 
+    /// Returns the appropriate toolbar background style
+    /// Custom themes: Use explicit palette.navigationBarBackground
+    /// System theme: Use iOS defaults (material for map, system background for recordings)
+    private func toolbarBackgroundStyle(isCustomTheme: Bool) -> AnyShapeStyle {
+        if isCustomTheme {
+            // Custom themes always use their explicit nav bar background
+            return AnyShapeStyle(palette.navigationBarBackground)
+        } else {
+            // System theme uses iOS defaults
+            if currentRoute == .map {
+                return AnyShapeStyle(.ultraThinMaterial)
+            } else {
+                return AnyShapeStyle(Color(.systemBackground))
+            }
+        }
+    }
+
     // MARK: - Top Navigation Bar
 
     private var topNavigationBar: some View {
-        HStack(spacing: 8) {
+        let isCustomTheme = appState.selectedTheme.isCustomTheme
+
+        // For custom themes: use effective toolbar text colors for consistency
+        // For system theme: use palette.textPrimary (iOS defaults)
+        let iconColor = isCustomTheme ? palette.effectiveToolbarTextPrimary : palette.textPrimary
+        let activeIconColor = palette.accent
+
+        return HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape.fill")
+                        .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(palette.textPrimary)
+                        .foregroundColor(iconColor)
                         .frame(width: 44, height: 44)
                 }
 
@@ -425,8 +452,9 @@ struct ContentView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .map }
                 } label: {
                     Image(systemName: "map.fill")
+                        .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .map ? palette.accent : palette.textPrimary)
+                        .foregroundColor(currentRoute == .map ? activeIconColor : iconColor)
                         .frame(width: 44, height: 44)
                 }
 
@@ -434,8 +462,9 @@ struct ContentView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .recordings }
                 } label: {
                     Image(systemName: "waveform")
+                        .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .recordings ? palette.accent : palette.textPrimary)
+                        .foregroundColor(currentRoute == .recordings ? activeIconColor : iconColor)
                         .frame(width: 44, height: 44)
                 }
             }
@@ -445,15 +474,17 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Button { showSearch = true } label: {
                     Image(systemName: "magnifyingglass")
+                        .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(palette.textPrimary)
+                        .foregroundColor(iconColor)
                         .frame(width: 44, height: 44)
                 }
 
                 Button { showTipJar = true } label: {
                     Image(systemName: "heart.fill")
+                        .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(palette.textPrimary)
+                        .foregroundColor(iconColor)
                         .frame(width: 44, height: 44)
                 }
             }
@@ -776,6 +807,7 @@ struct SearchSheetView: View {
     @State private var selectedTagIDs: Set<UUID> = []
     @State private var selectedRecording: RecordingItem?
     @State private var selectedAlbum: Album?
+    @State private var selectedProject: Project?
 
     private var recordingResults: [RecordingItem] {
         appState.searchRecordings(query: searchQuery, filterTagIDs: selectedTagIDs)
@@ -783,6 +815,18 @@ struct SearchSheetView: View {
 
     private var albumResults: [Album] {
         appState.searchAlbums(query: searchQuery)
+    }
+
+    private var projectResults: [Project] {
+        appState.searchProjects(query: searchQuery)
+    }
+
+    private var searchPlaceholder: String {
+        switch searchScope {
+        case .recordings: return "Search recordings..."
+        case .projects: return "Search projects..."
+        case .albums: return "Search albums..."
+        }
     }
 
     var body: some View {
@@ -802,7 +846,7 @@ struct SearchSheetView: View {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(palette.textSecondary)
-                        TextField(searchScope == .recordings ? "Search recordings..." : "Search albums...", text: $searchQuery)
+                        TextField(searchPlaceholder, text: $searchQuery)
                             .foregroundColor(palette.textPrimary)
                     }
                     .padding(12)
@@ -827,9 +871,12 @@ struct SearchSheetView: View {
                         }
                     }
 
-                    if searchScope == .recordings {
+                    switch searchScope {
+                    case .recordings:
                         recordingsResultsView
-                    } else {
+                    case .projects:
+                        projectsResultsView
+                    case .albums:
                         albumsResultsView
                     }
                 }
@@ -848,8 +895,11 @@ struct SearchSheetView: View {
             .sheet(item: $selectedAlbum) { album in
                 AlbumDetailSheet(album: album)
             }
+            .sheet(item: $selectedProject) { project in
+                ProjectDetailView(project: project)
+            }
             .onChange(of: searchScope) { _, _ in
-                if searchScope == .albums { selectedTagIDs.removeAll() }
+                if searchScope != .recordings { selectedTagIDs.removeAll() }
             }
         }
     }
@@ -931,6 +981,117 @@ struct SearchSheetView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
+    }
+
+    @ViewBuilder
+    private var projectsResultsView: some View {
+        if projectResults.isEmpty {
+            Spacer()
+            if searchQuery.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Search your projects")
+                        .font(.headline)
+                    Text("Find projects by name or notes")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No projects found")
+                        .font(.headline)
+                }
+            }
+            Spacer()
+        } else {
+            List {
+                ForEach(projectResults) { project in
+                    ProjectSearchRow(project: project)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedProject = project }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+// MARK: - Project Search Row
+
+struct ProjectSearchRow: View {
+    @Environment(AppState.self) var appState
+    @Environment(\.themePalette) var palette
+    let project: Project
+
+    private var versionCount: Int {
+        appState.recordingCount(in: project)
+    }
+
+    private var stats: ProjectStats {
+        appState.stats(for: project)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(palette.accent.opacity(0.15))
+                    .frame(width: 44, height: 44)
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(palette.accent)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(project.title)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textPrimary)
+                        .lineLimit(1)
+
+                    if project.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    if stats.hasBestTake {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundColor(.yellow)
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text("\(versionCount) version\(versionCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+
+                    Text("•")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+
+                    Text(stats.formattedTotalDuration)
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1266,6 +1427,13 @@ struct SettingsSheetView: View {
                         AlbumsInfoView()
                     } label: {
                         SettingsInfoRow(icon: "folder", title: "Albums")
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        ProjectsInfoView()
+                    } label: {
+                        SettingsInfoRow(icon: "folder.badge.plus", title: "Projects")
                     }
                     .listRowBackground(palette.cardBackground)
 
@@ -2103,6 +2271,56 @@ struct AlbumsInfoView: View {
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Albums")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Projects Info View
+
+struct ProjectsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Keep versions organized without clutter.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How to use")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "A Project groups related takes in one place (Hook v1, Chorus v2, Verse idea)")
+                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3...) instead of scattering files")
+                        InfoBulletRow(text: "Mark a take as Best Take to highlight the one you want to keep (optional)")
+                        InfoBulletRow(text: "Projects don't replace Albums: Albums organize your library, Projects link versions")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.yellow)
+                        Text("Use \"Record New Version\" in any recording's Details screen to quickly capture a new take.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

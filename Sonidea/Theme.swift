@@ -81,6 +81,32 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
             return true   // Custom themes use accent
         }
     }
+
+    /// Whether this is a custom theme (not System)
+    /// Custom themes apply explicit toolbar styling
+    var isCustomTheme: Bool {
+        switch self {
+        case .system:
+            return false
+        case .angstRobot, .cream, .logicPro, .fruity, .avid:
+            return true
+        }
+    }
+
+    /// The color scheme to use for the toolbar (for status bar readability)
+    /// Returns nil for System theme (use iOS defaults)
+    var toolbarColorSchemeOverride: ColorScheme? {
+        switch self {
+        case .system:
+            return nil  // Use iOS defaults
+        case .cream:
+            return .light  // Light background needs light scheme (dark status bar)
+        case .logicPro:
+            return .light  // Light toolbar on dark canvas
+        case .angstRobot, .fruity, .avid:
+            return .dark   // Dark backgrounds need dark scheme (light status bar)
+        }
+    }
 }
 
 // MARK: - Theme Palette

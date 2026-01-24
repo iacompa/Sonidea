@@ -449,6 +449,15 @@ struct RecordingRow: View {
         appState.album(for: recording.albumID)
     }
 
+    private var project: Project? {
+        appState.project(for: recording.projectId)
+    }
+
+    private var isBestTake: Bool {
+        guard let project = project else { return false }
+        return project.bestTakeRecordingId == recording.id
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             if isSelectionMode {
@@ -461,18 +470,51 @@ struct RecordingRow: View {
             RecordingIconTile(recording: recording, colorScheme: colorScheme)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(recording.title)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .foregroundColor(palette.textPrimary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(recording.title)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textPrimary)
+                        .lineLimit(1)
+
+                    // Version badge for project recordings
+                    if recording.belongsToProject {
+                        Text(recording.versionLabel)
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(palette.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(palette.accent.opacity(0.15))
+                            .cornerRadius(4)
+
+                        if isBestTake {
+                            Image(systemName: "star.fill")
+                                .font(.caption2)
+                                .foregroundColor(.yellow)
+                        }
+                    }
+                }
 
                 HStack(spacing: 6) {
                     Text(recording.formattedDuration)
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)
 
-                    if let album = album {
+                    // Show project name if in project
+                    if let project = project {
+                        Text("•")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                        HStack(spacing: 3) {
+                            Image(systemName: "folder.fill")
+                                .font(.caption2)
+                            Text(project.title)
+                                .lineLimit(1)
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(palette.accent.opacity(0.9))
+                    } else if let album = album {
                         Text("•")
                             .font(.subheadline)
                             .foregroundColor(palette.textSecondary)

@@ -23,6 +23,12 @@ struct RecordingDetailView: View {
     @State private var showChooseAlbum = false
     @State private var showShareSheet = false
     @State private var showSpeedPicker = false
+    @State private var showProjectSheet = false
+    @State private var showChooseProject = false
+    @State private var showCreateProject = false
+    @State private var showRecordNewVersion = false
+    @State private var showVersionSavedToast = false
+    @State private var savedVersionLabel: String = ""
 
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
@@ -120,7 +126,59 @@ struct RecordingDetailView: View {
                     ShareSheet(items: [url])
                 }
             }
+            .sheet(isPresented: $showProjectSheet) {
+                if let projectId = currentRecording.projectId,
+                   let project = appState.project(for: projectId) {
+                    ProjectDetailView(project: project)
+                        .environment(appState)
+                }
+            }
+            .sheet(isPresented: $showChooseProject) {
+                ChooseProjectSheet(recording: $currentRecording)
+            }
+            .sheet(isPresented: $showCreateProject) {
+                CreateProjectSheet(recording: currentRecording)
+            }
+            .fullScreenCover(isPresented: $showRecordNewVersion) {
+                RecordNewVersionSheet(
+                    sourceRecording: currentRecording,
+                    onVersionSaved: { versionLabel in
+                        savedVersionLabel = versionLabel
+                        refreshRecording()
+                        // Show toast briefly
+                        showVersionSavedToast = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            showVersionSavedToast = false
+                        }
+                    }
+                )
+            }
+            .overlay(alignment: .bottom) {
+                if showVersionSavedToast {
+                    versionSavedToast
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: showVersionSavedToast)
+                }
+            }
         }
+    }
+
+    // MARK: - Version Saved Toast
+
+    private var versionSavedToast: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+            Text("Saved as \(savedVersionLabel)")
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.85))
+        .cornerRadius(25)
+        .padding(.bottom, 20)
     }
 
     // MARK: - Playback Section
@@ -283,11 +341,39 @@ struct RecordingDetailView: View {
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
 
+            // Record New Version button
+            recordNewVersionButton
+
             // Collapsible EQ Panel
             if showEQPanel {
                 eqPanel
             }
         }
+    }
+
+    // MARK: - Record New Version Button
+
+    private var recordNewVersionButton: some View {
+        Button {
+            // Pause playback before recording
+            playback.stop()
+            showRecordNewVersion = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "mic.circle.fill")
+                    .font(.system(size: 20))
+                Text("Record New Version")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            .foregroundColor(palette.accent)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(palette.accent.opacity(0.12))
+            .cornerRadius(12)
+        }
+        .padding(.top, 8)
     }
 
     // MARK: - EQ Panel
@@ -357,6 +443,9 @@ struct RecordingDetailView: View {
                     .cornerRadius(8)
                 }
             }
+
+            // Project & Version
+            projectSection
 
             // Tags
             VStack(alignment: .leading, spacing: 8) {
@@ -496,6 +585,126 @@ struct RecordingDetailView: View {
                     .background(palette.inputBackground)
                     .cornerRadius(8)
             }
+        }
+    }
+
+    // MARK: - Project Section
+
+    @ViewBuilder
+    private var projectSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Project")
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+                .textCase(.uppercase)
+
+            if currentRecording.belongsToProject {
+                // Recording is part of a project
+                if let project = appState.project(for: currentRecording.projectId) {
+                    Button {
+                        showProjectSheet = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "folder.fill")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(project.title)
+                                        .font(.subheadline)
+                                        .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
+
+                                    Text(currentRecording.versionLabel)
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(palette.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(palette.accent.opacity(0.15))
+                                        .cornerRadius(4)
+
+                                    if project.bestTakeRecordingId == currentRecording.id {
+                                        Image(systemName: "star.fill")
+                                            .font(.caption)
+                                            .foregroundColor(.yellow)
+                                    }
+                                }
+
+                                Text("\(appState.recordingCount(in: project)) versions")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                        .padding(12)
+                        .background(palette.inputBackground)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+
+                    // Remove from project button
+                    Button(role: .destructive) {
+                        appState.removeFromProject(recording: currentRecording)
+                        refreshRecording()
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.minus")
+                            Text("Remove from Project")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    }
+                    .padding(.top, 4)
+                }
+            } else {
+                // Standalone recording - show options to add to project
+                HStack(spacing: 12) {
+                    Button {
+                        showCreateProject = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.plus")
+                            Text("Create Project")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(palette.accent)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(palette.inputBackground)
+                        .cornerRadius(8)
+                    }
+
+                    if !appState.projects.isEmpty {
+                        Button {
+                            showChooseProject = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                Text("Add to Project")
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(palette.textPrimary)
+                            .padding(12)
+                            .frame(maxWidth: .infinity)
+                            .background(palette.inputBackground)
+                            .cornerRadius(8)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func refreshRecording() {
+        if let updated = appState.recording(for: currentRecording.id) {
+            currentRecording = updated
         }
     }
 
@@ -1138,5 +1347,376 @@ struct ChooseAlbumSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Choose Project Sheet
+
+struct ChooseProjectSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+    @Binding var recording: RecordingItem
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                List {
+                    ForEach(appState.sortedProjects) { project in
+                        Button {
+                            appState.addVersion(recording: recording, to: project)
+                            if let updated = appState.recording(for: recording.id) {
+                                recording = updated
+                            }
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "folder.fill")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(project.title)
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textPrimary)
+                                            .lineLimit(1)
+
+                                        if project.pinned {
+                                            Image(systemName: "pin.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(palette.textSecondary)
+                                        }
+                                    }
+
+                                    let versionCount = appState.recordingCount(in: project)
+                                    Text("\(versionCount) version\(versionCount == 1 ? "" : "s")")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+
+                                Spacer()
+
+                                Text("V\(appState.nextVersionIndex(for: project))")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(palette.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(palette.accent.opacity(0.15))
+                                    .cornerRadius(4)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to Project")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Create Project Sheet
+
+struct CreateProjectSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let recording: RecordingItem
+
+    @State private var projectTitle: String
+
+    init(recording: RecordingItem) {
+        self.recording = recording
+        _projectTitle = State(initialValue: recording.title)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                VStack(spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Project Title")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                            .textCase(.uppercase)
+
+                        TextField("Enter project title", text: $projectTitle)
+                            .textFieldStyle(.plain)
+                            .foregroundColor(palette.textPrimary)
+                            .padding(12)
+                            .background(palette.inputBackground)
+                            .cornerRadius(8)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("First Version")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                            .textCase(.uppercase)
+
+                        HStack(spacing: 12) {
+                            Image(systemName: "waveform")
+                                .foregroundColor(palette.textSecondary)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(recording.title)
+                                        .font(.subheadline)
+                                        .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
+
+                                    Text("V1")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(palette.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(palette.accent.opacity(0.15))
+                                        .cornerRadius(4)
+                                }
+
+                                Text("\(recording.formattedDuration) \u{2022} \(recording.formattedDate)")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(palette.inputBackground)
+                        .cornerRadius(8)
+                    }
+
+                    Spacer()
+
+                    Text("This recording will become V1 of the new project.")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+            }
+            .navigationTitle("Create Project")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Create") {
+                        appState.createProject(from: recording, title: projectTitle.isEmpty ? nil : projectTitle)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(projectTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Record New Version Sheet
+
+struct RecordNewVersionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let sourceRecording: RecordingItem
+    let onVersionSaved: (String) -> Void
+
+    @State private var isRecording = false
+    @State private var recordingDuration: TimeInterval = 0
+    @State private var liveSamples: [Float] = []
+
+    var body: some View {
+        ZStack {
+            palette.background.ignoresSafeArea()
+
+            VStack(spacing: 32) {
+                // Header
+                HStack {
+                    Button("Cancel") {
+                        if appState.recorder.isRecording {
+                            _ = appState.recorder.stopRecording()
+                        }
+                        dismiss()
+                    }
+                    .foregroundColor(palette.textPrimary)
+
+                    Spacer()
+
+                    VStack(spacing: 2) {
+                        Text("New Version")
+                            .font(.headline)
+                            .foregroundColor(palette.textPrimary)
+
+                        if let project = appState.project(for: sourceRecording.projectId) {
+                            Text(project.title)
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        } else {
+                            Text(sourceRecording.title)
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    // Placeholder for symmetry
+                    Text("Cancel")
+                        .foregroundColor(.clear)
+                }
+                .padding(.horizontal)
+                .padding(.top)
+
+                Spacer()
+
+                // Recording info
+                VStack(spacing: 16) {
+                    // Version badge
+                    let nextVersion = computeNextVersionLabel()
+                    Text(nextVersion)
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundColor(palette.accent)
+
+                    // Duration
+                    Text(formatDuration(appState.recorder.currentDuration))
+                        .font(.system(size: 56, weight: .light, design: .monospaced))
+                        .foregroundColor(palette.textPrimary)
+
+                    // Live waveform
+                    LiveWaveformView(
+                        samples: appState.recorder.liveMeterSamples,
+                        accentColor: palette.accent
+                    )
+                    .frame(height: 80)
+                    .padding(.horizontal)
+                }
+
+                Spacer()
+
+                // Recording controls
+                VStack(spacing: 24) {
+                    if appState.recorder.isRecording {
+                        // Stop button
+                        Button {
+                            saveRecording()
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(palette.accent)
+                                    .frame(width: 80, height: 80)
+
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.white)
+                                    .frame(width: 28, height: 28)
+                            }
+                        }
+
+                        Text("Tap to stop and save")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                    } else {
+                        // Start button
+                        Button {
+                            startRecording()
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(palette.accent)
+                                    .frame(width: 80, height: 80)
+
+                                Circle()
+                                    .fill(.white)
+                                    .frame(width: 28, height: 28)
+                            }
+                        }
+
+                        Text("Tap to start recording")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                    }
+                }
+                .padding(.bottom, 60)
+            }
+        }
+    }
+
+    private func computeNextVersionLabel() -> String {
+        if let projectId = sourceRecording.projectId,
+           let project = appState.project(for: projectId) {
+            let nextIndex = appState.nextVersionIndex(for: project)
+            return "V\(nextIndex)"
+        } else {
+            // No project yet - this will become V2 (current becomes V1)
+            return "V2"
+        }
+    }
+
+    private func startRecording() {
+        appState.recorder.startRecording()
+    }
+
+    private func saveRecording() {
+        guard let rawData = appState.recorder.stopRecording() else {
+            dismiss()
+            return
+        }
+
+        // Determine the target project
+        var targetProject: Project
+
+        if let projectId = sourceRecording.projectId,
+           let existingProject = appState.project(for: projectId) {
+            // Already in a project - use it
+            targetProject = existingProject
+        } else {
+            // No project - create one with the source recording as V1
+            targetProject = appState.createProject(from: sourceRecording, title: nil)
+        }
+
+        // Add the new recording using the standard method
+        appState.addRecording(from: rawData)
+
+        // The newly added recording is at index 0
+        guard let newRecording = appState.recordings.first else {
+            dismiss()
+            return
+        }
+
+        // Link to project as new version
+        appState.addVersion(recording: newRecording, to: targetProject)
+
+        // Get the version label for the toast
+        let versionLabel = "V\(appState.nextVersionIndex(for: targetProject) - 1)"
+
+        // Haptic feedback
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+
+        // Callback and dismiss
+        onVersionSaved(versionLabel)
+        dismiss()
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        let centiseconds = Int((duration.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
 }

@@ -25,6 +25,7 @@ final class AppState {
     var recordings: [RecordingItem] = []
     var tags: [Tag] = []
     var albums: [Album] = []
+    var projects: [Project] = []
     var appearanceMode: AppearanceMode = .system {
         didSet {
             saveAppearanceMode()
@@ -52,6 +53,7 @@ final class AppState {
     private let recordingsKey = "savedRecordings"
     private let tagsKey = "savedTags"
     private let albumsKey = "savedAlbums"
+    private let projectsKey = "savedProjects"
     private let nextNumberKey = "nextRecordingNumber"
     private let appearanceModeKey = "appearanceMode"
     private let selectedThemeKey = "selectedTheme"
@@ -78,6 +80,7 @@ final class AppState {
         loadNextRecordingNumber()
         loadTags()
         loadAlbums()
+        loadProjects()
         loadRecordings()
         seedDefaultTagsIfNeeded()
         ensureDraftsAlbum()
@@ -636,6 +639,12 @@ final class AppState {
                 if recording.transcript.lowercased().contains(lowercasedQuery) {
                     return true
                 }
+                // Match project title
+                if let projectId = recording.projectId,
+                   let project = project(for: projectId),
+                   project.title.lowercased().contains(lowercasedQuery) {
+                    return true
+                }
                 return false
             }
         }
@@ -906,6 +915,235 @@ final class AppState {
         albums[index].name = trimmedName
         saveAlbums()
         return true
+    }
+
+    // MARK: - Project Management
+
+    /// Get a project by ID
+    func project(for id: UUID?) -> Project? {
+        guard let id = id else { return nil }
+        return projects.first { $0.id == id }
+    }
+
+    /// Get all recordings (versions) belonging to a project, sorted by version index
+    func recordings(in project: Project) -> [RecordingItem] {
+        activeRecordings
+            .filter { $0.projectId == project.id }
+            .sorted { $0.versionIndex < $1.versionIndex }
+    }
+
+    /// Get recording count for a project
+    func recordingCount(in project: Project) -> Int {
+        activeRecordings.filter { $0.projectId == project.id }.count
+    }
+
+    /// Get the next version number for a project
+    func nextVersionIndex(for project: Project) -> Int {
+        let versions = recordings(in: project)
+        return (versions.map { $0.versionIndex }.max() ?? 0) + 1
+    }
+
+    /// Get the best take recording for a project
+    func bestTake(for project: Project) -> RecordingItem? {
+        guard let bestTakeId = project.bestTakeRecordingId else { return nil }
+        return recording(for: bestTakeId)
+    }
+
+    /// Create a new project from an existing recording (recording becomes V1)
+    @discardableResult
+    func createProject(from recording: RecordingItem, title: String? = nil) -> Project {
+        // Create the project
+        var project = Project(
+            title: title ?? recording.title,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+
+        // Update the recording to belong to this project as V1
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].projectId = project.id
+            recordings[index].parentRecordingId = nil
+            recordings[index].versionIndex = 1
+        }
+
+        projects.insert(project, at: 0)
+        saveProjects()
+        saveRecordings()
+        return project
+    }
+
+    /// Create a new empty project
+    @discardableResult
+    func createProject(title: String) -> Project {
+        let project = Project(title: title)
+        projects.insert(project, at: 0)
+        saveProjects()
+        return project
+    }
+
+    /// Add a recording as a new version to an existing project
+    func addVersion(recording: RecordingItem, to project: Project) {
+        let nextVersion = nextVersionIndex(for: project)
+
+        // Find the latest version to link as parent
+        let versions = recordings(in: project)
+        let latestVersion = versions.last
+
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].projectId = project.id
+            recordings[index].parentRecordingId = latestVersion?.id
+            recordings[index].versionIndex = nextVersion
+        }
+
+        // Update project's updatedAt
+        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[projectIndex].updatedAt = Date()
+        }
+
+        saveRecordings()
+        saveProjects()
+    }
+
+    /// Remove a recording from its project (makes it standalone)
+    func removeFromProject(recording: RecordingItem) {
+        guard let projectId = recording.projectId else { return }
+
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].projectId = nil
+            recordings[index].parentRecordingId = nil
+            recordings[index].versionIndex = 1
+        }
+
+        // Update project's updatedAt
+        if let projectIndex = projects.firstIndex(where: { $0.id == projectId }) {
+            projects[projectIndex].updatedAt = Date()
+
+            // If this was the best take, clear it
+            if projects[projectIndex].bestTakeRecordingId == recording.id {
+                projects[projectIndex].bestTakeRecordingId = nil
+            }
+        }
+
+        saveRecordings()
+        saveProjects()
+    }
+
+    /// Set the best take for a project
+    func setBestTake(_ recording: RecordingItem, for project: Project) {
+        guard recording.projectId == project.id else { return }
+
+        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[projectIndex].bestTakeRecordingId = recording.id
+            projects[projectIndex].updatedAt = Date()
+        }
+        saveProjects()
+    }
+
+    /// Clear the best take for a project
+    func clearBestTake(for project: Project) {
+        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[projectIndex].bestTakeRecordingId = nil
+            projects[projectIndex].updatedAt = Date()
+        }
+        saveProjects()
+    }
+
+    /// Update project properties
+    func updateProject(_ project: Project) {
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            var updated = project
+            updated.updatedAt = Date()
+            projects[index] = updated
+            saveProjects()
+        }
+    }
+
+    /// Toggle project pin status
+    func toggleProjectPin(_ project: Project) {
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index].pinned.toggle()
+            projects[index].updatedAt = Date()
+            saveProjects()
+        }
+    }
+
+    /// Delete a project (recordings become standalone)
+    func deleteProject(_ project: Project) {
+        // Remove project association from all recordings
+        for i in recordings.indices {
+            if recordings[i].projectId == project.id {
+                recordings[i].projectId = nil
+                recordings[i].parentRecordingId = nil
+                recordings[i].versionIndex = 1
+            }
+        }
+
+        projects.removeAll { $0.id == project.id }
+        saveProjects()
+        saveRecordings()
+    }
+
+    /// Get project statistics
+    func stats(for project: Project) -> ProjectStats {
+        let versions = recordings(in: project)
+        let totalDuration = versions.reduce(0) { $0 + $1.duration }
+        let dates = versions.map { $0.createdAt }
+
+        return ProjectStats(
+            versionCount: versions.count,
+            totalDuration: totalDuration,
+            oldestVersion: dates.min(),
+            newestVersion: dates.max(),
+            hasBestTake: project.bestTakeRecordingId != nil
+        )
+    }
+
+    /// Search projects by query
+    func searchProjects(query: String) -> [Project] {
+        guard !query.isEmpty else { return projects }
+        let lowercasedQuery = query.lowercased()
+        return projects.filter { project in
+            // Match title
+            if project.title.lowercased().contains(lowercasedQuery) {
+                return true
+            }
+            // Match notes
+            if project.notes.lowercased().contains(lowercasedQuery) {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Get all projects sorted (pinned first, then by updatedAt)
+    var sortedProjects: [Project] {
+        projects.sorted { a, b in
+            if a.pinned != b.pinned {
+                return a.pinned
+            }
+            return a.updatedAt > b.updatedAt
+        }
+    }
+
+    /// Get recordings that are standalone (not part of any project)
+    var standaloneRecordings: [RecordingItem] {
+        activeRecordings.filter { $0.projectId == nil }
+    }
+
+    // MARK: - Project Persistence
+
+    private func saveProjects() {
+        if let data = try? JSONEncoder().encode(projects) {
+            UserDefaults.standard.set(data, forKey: projectsKey)
+        }
+    }
+
+    private func loadProjects() {
+        guard let data = UserDefaults.standard.data(forKey: projectsKey),
+              let saved = try? JSONDecoder().decode([Project].self, from: data) else {
+            return
+        }
+        projects = saved
     }
 }
 

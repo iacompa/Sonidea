@@ -38,11 +38,37 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     // Per-recording EQ settings
     var eqSettings: EQSettings?
 
+    // MARK: - Project & Versioning
+
+    /// Parent project ID (nil = standalone recording)
+    var projectId: UUID?
+
+    /// Link to previous version in chain (nil = root/V1)
+    var parentRecordingId: UUID?
+
+    /// Sequential version number (1 = V1, 2 = V2, etc.)
+    var versionIndex: Int
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
     var isTrashed: Bool {
         trashedAt != nil
+    }
+
+    /// Whether this recording belongs to a project
+    var belongsToProject: Bool {
+        projectId != nil
+    }
+
+    /// Whether this is the root/first version in a project (V1)
+    var isRootVersion: Bool {
+        parentRecordingId == nil && projectId != nil
+    }
+
+    /// Formatted version label (e.g., "V1", "V2")
+    var versionLabel: String {
+        "V\(versionIndex)"
     }
 
     // Icon color with fallback to default (legacy property)
@@ -164,7 +190,10 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         trashedAt: Date? = nil,
         lastPlaybackPosition: TimeInterval = 0,
         iconColorHex: String? = nil,
-        eqSettings: EQSettings? = nil
+        eqSettings: EQSettings? = nil,
+        projectId: UUID? = nil,
+        parentRecordingId: UUID? = nil,
+        versionIndex: Int = 1
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -182,6 +211,44 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.lastPlaybackPosition = lastPlaybackPosition
         self.iconColorHex = iconColorHex
         self.eqSettings = eqSettings
+        self.projectId = projectId
+        self.parentRecordingId = parentRecordingId
+        self.versionIndex = versionIndex
+    }
+
+    // MARK: - Codable with Migration Support
+
+    enum CodingKeys: String, CodingKey {
+        case id, fileURL, createdAt, duration, title, notes, tagIDs, albumID
+        case locationLabel, transcript, latitude, longitude, trashedAt
+        case lastPlaybackPosition, iconColorHex, eqSettings
+        case projectId, parentRecordingId, versionIndex
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(UUID.self, forKey: .id)
+        fileURL = try container.decode(URL.self, forKey: .fileURL)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        duration = try container.decode(TimeInterval.self, forKey: .duration)
+        title = try container.decode(String.self, forKey: .title)
+        notes = try container.decode(String.self, forKey: .notes)
+        tagIDs = try container.decode([UUID].self, forKey: .tagIDs)
+        albumID = try container.decodeIfPresent(UUID.self, forKey: .albumID)
+        locationLabel = try container.decode(String.self, forKey: .locationLabel)
+        transcript = try container.decode(String.self, forKey: .transcript)
+        latitude = try container.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try container.decodeIfPresent(Double.self, forKey: .longitude)
+        trashedAt = try container.decodeIfPresent(Date.self, forKey: .trashedAt)
+        lastPlaybackPosition = try container.decode(TimeInterval.self, forKey: .lastPlaybackPosition)
+        iconColorHex = try container.decodeIfPresent(String.self, forKey: .iconColorHex)
+        eqSettings = try container.decodeIfPresent(EQSettings.self, forKey: .eqSettings)
+
+        // Migration: new fields with defaults for existing recordings
+        projectId = try container.decodeIfPresent(UUID.self, forKey: .projectId)
+        parentRecordingId = try container.decodeIfPresent(UUID.self, forKey: .parentRecordingId)
+        versionIndex = try container.decodeIfPresent(Int.self, forKey: .versionIndex) ?? 1
     }
 }
 
