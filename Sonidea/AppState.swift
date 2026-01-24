@@ -30,6 +30,11 @@ final class AppState {
             saveAppearanceMode()
         }
     }
+    var selectedTheme: AppTheme = .system {
+        didSet {
+            saveSelectedTheme()
+        }
+    }
     var appSettings: AppSettings = .default {
         didSet {
             saveAppSettings()
@@ -49,6 +54,7 @@ final class AppState {
     private let albumsKey = "savedAlbums"
     private let nextNumberKey = "nextRecordingNumber"
     private let appearanceModeKey = "appearanceMode"
+    private let selectedThemeKey = "selectedTheme"
     private let tagMigrationKey = "didMigrateFavToFavorite"
     private let appSettingsKey = "appSettings"
     private let draftsMigrationKey = "didMigrateToDrafts"
@@ -67,6 +73,7 @@ final class AppState {
 
     init() {
         loadAppearanceMode()
+        loadSelectedTheme()
         loadAppSettings()
         loadNextRecordingNumber()
         loadTags()
@@ -835,6 +842,18 @@ final class AppState {
             return
         }
         appearanceMode = mode
+    }
+
+    private func saveSelectedTheme() {
+        UserDefaults.standard.set(selectedTheme.rawValue, forKey: selectedThemeKey)
+    }
+
+    private func loadSelectedTheme() {
+        guard let rawValue = UserDefaults.standard.string(forKey: selectedThemeKey),
+              let theme = AppTheme(rawValue: rawValue) else {
+            return
+        }
+        selectedTheme = theme
     }
 
     private func saveAppSettings() {

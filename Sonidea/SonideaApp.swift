@@ -15,9 +15,7 @@ struct SonideaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(appState)
-                .preferredColorScheme(appState.appearanceMode.preferredColorScheme)
+            ThemedAppContainer(appState: appState)
                 .onAppear {
                     // Check for pending actions on app launch
                     appState.consumePendingStartRecording()
@@ -90,5 +88,30 @@ class SceneDelegate: NSObject, UIWindowSceneDelegate {
     ) {
         let handled = QuickActionHandler.handleShortcutItem(shortcutItem)
         completionHandler(handled)
+    }
+}
+
+// MARK: - Themed App Container
+
+/// Container view that injects theme palette into the environment
+struct ThemedAppContainer: View {
+    @Bindable var appState: AppState
+    @Environment(\.colorScheme) private var systemColorScheme
+
+    private var effectiveColorScheme: ColorScheme {
+        // Theme can force a color scheme, or follow system
+        appState.selectedTheme.forcedColorScheme ?? appState.appearanceMode.preferredColorScheme ?? systemColorScheme
+    }
+
+    private var currentPalette: ThemePalette {
+        appState.selectedTheme.palette(for: effectiveColorScheme)
+    }
+
+    var body: some View {
+        ContentView()
+            .environment(appState)
+            .environment(\.themePalette, currentPalette)
+            .environment(\.appTheme, appState.selectedTheme)
+            .preferredColorScheme(appState.selectedTheme.forcedColorScheme ?? appState.appearanceMode.preferredColorScheme)
     }
 }

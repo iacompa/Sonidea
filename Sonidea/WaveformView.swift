@@ -137,6 +137,7 @@ struct MiniWaveformView: View {
 
 struct LiveWaveformView: View {
     let samples: [Float]
+    var accentColor: Color = .red  // Default to red for backward compatibility
 
     var body: some View {
         Canvas { context, size in
@@ -159,7 +160,7 @@ struct LiveWaveformView: View {
 
                 // Gradient effect: more recent samples are brighter
                 let alpha = 0.3 + (Double(index) / Double(barCount)) * 0.7
-                context.fill(path, with: .color(.red.opacity(alpha)))
+                context.fill(path, with: .color(accentColor.opacity(alpha)))
             }
         }
     }

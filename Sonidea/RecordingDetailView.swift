@@ -11,6 +11,7 @@ import MapKit
 struct RecordingDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
     @State private var playback = PlaybackEngine()
 
     @State private var editedTitle: String
@@ -62,12 +63,14 @@ struct RecordingDetailView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(.systemBackground).ignoresSafeArea()
+                palette.background.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 24) {
                         playbackSection
-                        Divider()
+                        Rectangle()
+                            .fill(palette.separator)
+                            .frame(height: 1)
                         metadataSection
                     }
                     .padding()
@@ -128,12 +131,12 @@ struct RecordingDetailView: View {
             ZStack {
                 if isLoadingWaveform {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .primary))
+                        .progressViewStyle(CircularProgressViewStyle(tint: palette.textPrimary))
                         .frame(height: 100)
                 } else if waveformSamples.isEmpty {
                     Image(systemName: "waveform")
                         .font(.system(size: 60))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .frame(height: 100)
                 } else {
                     WaveformView(
@@ -151,10 +154,10 @@ struct RecordingDetailView: View {
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                     Text("\(Int(zoomScale * 100))%")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                     Spacer()
                     Button {
                         withAnimation {
@@ -163,7 +166,7 @@ struct RecordingDetailView: View {
                     } label: {
                         Text("Reset")
                             .font(.caption)
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.accent)
                     }
                 }
             }
@@ -172,12 +175,12 @@ struct RecordingDetailView: View {
             HStack {
                 Text(formatTime(playback.currentTime))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .monospacedDigit()
                 Spacer()
                 Text(formatTime(playback.duration))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .monospacedDigit()
             }
 
@@ -185,11 +188,11 @@ struct RecordingDetailView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Rectangle()
-                        .fill(Color(.systemGray4))
+                        .fill(palette.stroke)
                         .frame(height: 4)
                         .cornerRadius(2)
                     Rectangle()
-                        .fill(Color.accentColor)
+                        .fill(palette.accent)
                         .frame(width: progressWidth(in: geometry.size.width), height: 4)
                         .cornerRadius(2)
                 }
@@ -213,7 +216,7 @@ struct RecordingDetailView: View {
                 } label: {
                     Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                 }
 
                 // Play/Pause
@@ -222,7 +225,7 @@ struct RecordingDetailView: View {
                 } label: {
                     Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 56))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(palette.accent)
                 }
 
                 // Skip forward
@@ -231,7 +234,7 @@ struct RecordingDetailView: View {
                 } label: {
                     Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                 }
             }
 
@@ -278,7 +281,7 @@ struct RecordingDetailView: View {
 
             Text(currentRecording.formattedDate)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
 
             // Collapsible EQ Panel
             if showEQPanel {
@@ -303,7 +306,7 @@ struct RecordingDetailView: View {
             )
         }
         .padding(16)
-        .background(Color(.systemGray6))
+        .background(palette.inputBackground)
         .cornerRadius(12)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
@@ -316,12 +319,13 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Title")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .textCase(.uppercase)
                 TextField("Recording title", text: $editedTitle)
                     .textFieldStyle(.plain)
+                    .foregroundColor(palette.textPrimary)
                     .padding(12)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
             }
 
@@ -329,7 +333,7 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Album")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .textCase(.uppercase)
 
                 Button {
@@ -338,18 +342,18 @@ struct RecordingDetailView: View {
                     HStack {
                         if let album = appState.album(for: currentRecording.albumID) {
                             Text(album.name)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                         } else {
                             Text("None")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
                     .padding(12)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
                 }
             }
@@ -359,14 +363,14 @@ struct RecordingDetailView: View {
                 HStack {
                     Text("Tags")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .textCase(.uppercase)
                     Spacer()
                     Button("Manage") {
                         showManageTags = true
                     }
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(palette.accent)
                 }
 
                 FlowLayout(spacing: 8) {
@@ -388,12 +392,12 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Icon Color")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .textCase(.uppercase)
                 HStack {
                     Text("Choose a color for this recording's icon")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                     Spacer()
                     ColorPicker("", selection: $editedIconColor, supportsOpacity: false)
                         .labelsHidden()
@@ -403,7 +407,7 @@ struct RecordingDetailView: View {
                         }
                 }
                 .padding(12)
-                .background(Color(.systemGray6))
+                .background(palette.inputBackground)
                 .cornerRadius(8)
             }
 
@@ -412,7 +416,7 @@ struct RecordingDetailView: View {
                 HStack {
                     Text("Transcription")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .textCase(.uppercase)
                     Spacer()
                     if !currentRecording.transcript.isEmpty {
@@ -431,11 +435,11 @@ struct RecordingDetailView: View {
                             .progressViewStyle(CircularProgressViewStyle())
                         Text("Transcribing...")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
                 } else if let error = transcriptionError {
                     VStack(alignment: .leading, spacing: 8) {
@@ -446,11 +450,11 @@ struct RecordingDetailView: View {
                             transcribeRecording()
                         }
                         .font(.subheadline)
-                        .foregroundColor(.blue)
+                        .foregroundColor(palette.accent)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
                 } else if currentRecording.transcript.isEmpty {
                     Button {
@@ -461,19 +465,19 @@ struct RecordingDetailView: View {
                             Text("Transcribe Recording")
                         }
                         .font(.subheadline)
-                        .foregroundColor(.blue)
+                        .foregroundColor(palette.accent)
                         .padding(12)
                         .frame(maxWidth: .infinity)
-                        .background(Color(.systemGray6))
+                        .background(palette.inputBackground)
                         .cornerRadius(8)
                     }
                 } else {
                     Text(currentRecording.transcript)
                         .font(.subheadline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.systemGray6))
+                        .background(palette.inputBackground)
                         .cornerRadius(8)
                 }
             }
@@ -482,13 +486,14 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Notes")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                     .textCase(.uppercase)
                 TextEditor(text: $editedNotes)
                     .scrollContentBackground(.hidden)
+                    .foregroundColor(palette.textPrimary)
                     .padding(8)
                     .frame(minHeight: 100)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
             }
         }
@@ -501,7 +506,7 @@ struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Location")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
                 .textCase(.uppercase)
 
             if currentRecording.hasCoordinates {
@@ -526,7 +531,7 @@ struct RecordingDetailView: View {
                     Text("Pinned Location")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
 
                     if isLoadingReverseGeocode {
                         HStack(spacing: 4) {
@@ -534,22 +539,22 @@ struct RecordingDetailView: View {
                                 .scaleEffect(0.7)
                             Text("Loading...")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     } else if let name = reverseGeocodedName, !name.isEmpty {
                         Text(name)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(2)
                     } else if !editedLocationLabel.isEmpty {
                         Text(editedLocationLabel)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(2)
                     } else if let lat = currentRecording.latitude, let lon = currentRecording.longitude {
                         Text(String(format: "%.4f, %.4f", lat, lon))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
                 }
 
@@ -560,19 +565,20 @@ struct RecordingDetailView: View {
                     clearLocation()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .font(.system(size: 20))
                 }
             }
             .padding(12)
-            .background(Color(.systemGray6))
+            .background(palette.inputBackground)
             .cornerRadius(8)
 
             // Editable label
             TextField("Location label (optional)", text: $editedLocationLabel)
                 .textFieldStyle(.plain)
+                .foregroundColor(palette.textPrimary)
                 .padding(12)
-                .background(Color(.systemGray6))
+                .background(palette.inputBackground)
                 .cornerRadius(8)
         }
     }
@@ -582,9 +588,10 @@ struct RecordingDetailView: View {
             // Search field
             HStack {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
                 TextField("Search for a place or address", text: $locationSearchQuery)
                     .textFieldStyle(.plain)
+                    .foregroundColor(palette.textPrimary)
                     .onChange(of: locationSearchQuery) { _, newValue in
                         appState.locationManager.searchQuery = newValue
                     }
@@ -595,12 +602,12 @@ struct RecordingDetailView: View {
                         appState.locationManager.clearSearch()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
                 }
             }
             .padding(12)
-            .background(Color(.systemGray6))
+            .background(palette.inputBackground)
             .cornerRadius(8)
 
             // Search results
@@ -618,12 +625,12 @@ struct RecordingDetailView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(result.title)
                                         .font(.subheadline)
-                                        .foregroundColor(.primary)
+                                        .foregroundColor(palette.textPrimary)
                                         .lineLimit(1)
                                     if !result.subtitle.isEmpty {
                                         Text(result.subtitle)
                                             .font(.caption)
-                                            .foregroundColor(.secondary)
+                                            .foregroundColor(palette.textSecondary)
                                             .lineLimit(1)
                                     }
                                 }
@@ -632,7 +639,7 @@ struct RecordingDetailView: View {
 
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textSecondary)
                             }
                             .padding(.vertical, 10)
                             .padding(.horizontal, 12)
@@ -640,12 +647,14 @@ struct RecordingDetailView: View {
                         .buttonStyle(.plain)
 
                         if result != appState.locationManager.searchResults.prefix(5).last {
-                            Divider()
+                            Rectangle()
+                                .fill(palette.separator)
+                                .frame(height: 1)
                                 .padding(.leading, 48)
                         }
                     }
                 }
-                .background(Color(.systemGray6))
+                .background(palette.inputBackground)
                 .cornerRadius(8)
             }
 
@@ -664,10 +673,10 @@ struct RecordingDetailView: View {
                         Text("Save as Location")
                     }
                     .font(.subheadline)
-                    .foregroundColor(.blue)
+                    .foregroundColor(palette.accent)
                     .padding(12)
                     .frame(maxWidth: .infinity)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(8)
                 }
                 .disabled(isSearchingLocation)
@@ -683,7 +692,7 @@ struct RecordingDetailView: View {
                         Text("Enable GPS for automatic location")
                     }
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(palette.accent)
                 }
                 .padding(.top, 4)
             }

@@ -32,6 +32,7 @@ enum SearchScope: String, CaseIterable {
 // MARK: - Main Content View
 struct ContentView: View {
     @Environment(AppState.self) var appState
+    @Environment(\.themePalette) var palette
     @State private var currentRoute: AppRoute = .recordings
     @State private var showSearch = false
     @State private var showSettings = false
@@ -146,17 +147,29 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSearch) {
             SearchSheetView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
         .sheet(isPresented: $showTipJar) {
             TipJarView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
         .sheet(isPresented: $showAskPromptFromMain) {
             AskPromptSheet {
                 showTipJar = true
             }
+            .environment(appState)
+            .environment(\.themePalette, palette)
+            .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
             .presentationDetents([.height(300)])
             .presentationDragIndicator(.hidden)
         }
@@ -350,7 +363,7 @@ struct ContentView: View {
     private func mainContentLayer(safeArea: EdgeInsets) -> some View {
         switch currentRoute {
         case .recordings:
-            Color(.systemBackground)
+            palette.background
                 .ignoresSafeArea()
                 .overlay(
                     VStack(spacing: 0) {
@@ -387,7 +400,9 @@ struct ContentView: View {
                 .padding(.bottom, 8)
                 .background(
                     Rectangle()
-                        .fill(currentRoute == .map ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color(.systemBackground)))
+                        .fill(currentRoute == .map
+                            ? AnyShapeStyle(.ultraThinMaterial)
+                            : (palette.useMaterials ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(palette.navigationBarBackground)))
                         .ignoresSafeArea(edges: .top)
                 )
             Spacer()
@@ -402,7 +417,7 @@ struct ContentView: View {
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                         .frame(width: 44, height: 44)
                 }
 
@@ -411,7 +426,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "map.fill")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .map ? .accentColor : .primary)
+                        .foregroundColor(currentRoute == .map ? palette.accent : palette.textPrimary)
                         .frame(width: 44, height: 44)
                 }
 
@@ -420,7 +435,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "waveform")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .recordings ? .accentColor : .primary)
+                        .foregroundColor(currentRoute == .recordings ? palette.accent : palette.textPrimary)
                         .frame(width: 44, height: 44)
                 }
             }
@@ -431,14 +446,14 @@ struct ContentView: View {
                 Button { showSearch = true } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                         .frame(width: 44, height: 44)
                 }
 
                 Button { showTipJar = true } label: {
                     Image(systemName: "heart.fill")
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                         .frame(width: 44, height: 44)
                 }
             }
@@ -574,6 +589,7 @@ struct RecordingHUDCard: View {
     let liveSamples: [Float]
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePalette) private var palette
     @State private var isPulsing = false
 
     private var formattedDuration: String {
@@ -592,16 +608,16 @@ struct RecordingHUDCard: View {
             HStack(alignment: .center) {
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(Color.red)
+                        .fill(palette.recordButton)
                         .frame(width: 12, height: 12)
                         .scaleEffect(isPulsing ? 1.3 : 1.0)
                         .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
-                        .shadow(color: .red.opacity(0.5), radius: isPulsing ? 6 : 2)
+                        .shadow(color: palette.recordButton.opacity(0.5), radius: isPulsing ? 6 : 2)
 
                     Text("Recording")
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                 }
 
                 Spacer()
@@ -609,7 +625,7 @@ struct RecordingHUDCard: View {
                 Text(formattedDuration)
                     .font(.system(size: 34, weight: .medium, design: .monospaced))
                     .monospacedDigit()
-                    .foregroundColor(.red)
+                    .foregroundColor(palette.liveRecordingAccent)
                     .contentTransition(.numericText())
             }
             .padding(.horizontal, 20)
@@ -619,17 +635,17 @@ struct RecordingHUDCard: View {
             ZStack {
                 if liveSamples.isEmpty {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.primary.opacity(0.05))
+                        .fill(palette.textPrimary.opacity(0.05))
                         .frame(height: 56)
                 } else {
-                    LiveWaveformView(samples: liveSamples)
+                    LiveWaveformView(samples: liveSamples, accentColor: palette.liveRecordingAccent)
                         .frame(height: 56)
                 }
             }
             .padding(.horizontal, 20)
 
             Rectangle()
-                .fill(Color.primary.opacity(0.08))
+                .fill(palette.separator)
                 .frame(height: 1)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
@@ -638,10 +654,10 @@ struct RecordingHUDCard: View {
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                     Text(currentInputName)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .lineLimit(1)
                 }
 
@@ -657,12 +673,12 @@ struct RecordingHUDCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.thinMaterial)
+                .fill(palette.useMaterials ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(palette.surface))
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.08), radius: 12, y: 4)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
         )
         .onAppear { isPulsing = true }
     }
@@ -753,6 +769,7 @@ struct MapPlaceholderView: View {
 struct SearchSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     @State private var searchScope: SearchScope = .recordings
     @State private var searchQuery = ""
@@ -771,7 +788,7 @@ struct SearchSheetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(.systemBackground).ignoresSafeArea()
+                palette.background.ignoresSafeArea()
 
                 VStack(spacing: 16) {
                     Picker("Search Scope", selection: $searchScope) {
@@ -784,12 +801,12 @@ struct SearchSheetView: View {
 
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                         TextField(searchScope == .recordings ? "Search recordings..." : "Search albums...", text: $searchQuery)
-                            .foregroundColor(.primary)
+                            .foregroundColor(palette.textPrimary)
                     }
                     .padding(12)
-                    .background(Color(.systemGray6))
+                    .background(palette.inputBackground)
                     .cornerRadius(10)
                     .padding(.horizontal)
 
@@ -1118,6 +1135,7 @@ struct SearchResultRow: View {
 struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     @State private var isExporting = false
     @State private var exportProgress: String = ""
@@ -1152,10 +1170,10 @@ struct SettingsSheetView: View {
                             Text("Supporter")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowBackground(Color(.systemGray6))
+                        .listRowBackground(palette.cardBackground)
                     }
                 }
 
@@ -1164,48 +1182,53 @@ struct SettingsSheetView: View {
                     Button { showLockScreenHelp = true } label: {
                         HStack {
                             Image(systemName: "lock.rectangle.on.rectangle")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                                 .frame(width: 24)
                             Text("Lock Screen Widget")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     Button { showActionButtonHelp = true } label: {
                         HStack {
                             Image(systemName: "button.horizontal.top.press")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                                 .frame(width: 24)
                             Text("Action Button")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     Button { showSiriShortcutsHelp = true } label: {
                         HStack {
                             Image(systemName: "mic.badge.plus")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                                 .frame(width: 24)
                             Text("Siri & Shortcuts")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Quick Access")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Set up fast ways to start recording from anywhere.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 // MARK: Record Button Position Section
@@ -1216,17 +1239,18 @@ struct SettingsSheetView: View {
                     } label: {
                         HStack {
                             Image(systemName: "arrow.counterclockwise")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Reset Record Button Position")
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(palette.textPrimary)
                                 Text("Moves the floating button back to the default location.")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textSecondary)
                             }
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 }
 
                 // MARK: How It Works Section
@@ -1236,38 +1260,45 @@ struct SettingsSheetView: View {
                     } label: {
                         SettingsInfoRow(icon: "tag", title: "Tags")
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
                         AlbumsInfoView()
                     } label: {
                         SettingsInfoRow(icon: "folder", title: "Albums")
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
                         MapsInfoView()
                     } label: {
                         SettingsInfoRow(icon: "map", title: "Maps")
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
                         RecordButtonInfoView()
                     } label: {
                         SettingsInfoRow(icon: "hand.draw", title: "Movable Record Button")
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
                         SearchInfoView()
                     } label: {
                         SettingsInfoRow(icon: "magnifyingglass", title: "Search")
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
                         AppearanceInfoView()
                     } label: {
                         SettingsInfoRow(icon: "paintpalette", title: "Appearance")
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("How it works")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 // MARK: Recording Quality Section
@@ -1277,10 +1308,13 @@ struct SettingsSheetView: View {
                             Text(preset.displayName).tag(preset)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Recording Quality")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text(appState.appSettings.recordingQuality.description)
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -1293,34 +1327,39 @@ struct SettingsSheetView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: inputIcon(for: input))
-                                        .foregroundColor(.blue)
+                                        .foregroundColor(palette.accent)
                                         .frame(width: 24)
                                     Text(input.portName)
-                                        .foregroundColor(.primary)
+                                        .foregroundColor(palette.textPrimary)
                                     Spacer()
                                     if AudioSessionManager.shared.currentInput?.uid == input.uid {
                                         Image(systemName: "checkmark")
-                                            .foregroundColor(.blue)
+                                            .foregroundColor(palette.accent)
                                     }
                                 }
                             }
+                            .listRowBackground(palette.cardBackground)
                         }
                     } else {
                         // Single or no inputs - just show current
                         HStack {
                             Image(systemName: "mic.fill")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                                 .frame(width: 24)
                             Text("Current Input")
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Text(AudioSessionManager.shared.currentInput?.portName ?? "Default")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
                 } header: {
                     Text("Audio Input")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Select your preferred microphone for recording.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -1329,29 +1368,72 @@ struct SettingsSheetView: View {
                             Text(interval.displayName).tag(interval)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     HStack {
                         Text("Playback Speed")
+                            .foregroundColor(palette.textPrimary)
                         Spacer()
                         Text(String(format: "%.1fx", appState.appSettings.playbackSpeed))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Playback")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
                     Toggle("Auto-Transcribe", isOn: $appState.appSettings.autoTranscribe)
+                        .tint(palette.toggleOnTint)
+                        .listRowBackground(palette.cardBackground)
 
                     Picker("Language", selection: $appState.appSettings.transcriptionLanguage) {
                         ForEach(TranscriptionLanguage.allCases) { language in
                             Text(language.displayName).tag(language)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Transcription")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Auto-transcribe new recordings when saved.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
+                // MARK: Theme Section
+                Section {
+                    ForEach(AppTheme.allCases) { theme in
+                        Button {
+                            appState.selectedTheme = theme
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(theme.displayName)
+                                        .font(.body)
+                                        .foregroundStyle(palette.textPrimary)
+                                    Text(theme.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(palette.textSecondary)
+                                }
+                                Spacer()
+                                if appState.selectedTheme == theme {
+                                    Image(systemName: "checkmark")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(palette.accent)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(palette.cardBackground)
+                    }
+                } header: {
+                    Text("Theme")
+                        .foregroundStyle(palette.textSecondary)
+                } footer: {
+                    Text("Not all pages will change themes.")
+                        .foregroundStyle(palette.textSecondary)
                 }
 
                 Section {
@@ -1361,70 +1443,84 @@ struct SettingsSheetView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Appearance")
+                    Text("Light/Dark Mode")
+                        .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Applies when using the System theme.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
                     Button { showTagManager = true } label: {
                         HStack {
                             Image(systemName: "tag.fill")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                             Text("Manage Tags")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Text("\(appState.tags.count)")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                             Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Tags")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
                     Button { exportAllRecordings() } label: {
                         HStack {
                             Image(systemName: "square.and.arrow.up")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                             Text("Export All Recordings")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             if isExporting && exportProgress == "all" {
                                 ProgressView()
+                                    .tint(palette.accent)
                             }
                         }
                     }
                     .disabled(isExporting || appState.activeRecordings.isEmpty)
+                    .listRowBackground(palette.cardBackground)
 
                     Button { showAlbumPicker = true } label: {
                         HStack {
                             Image(systemName: "square.stack")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                             Text("Export Album...")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             if isExporting && exportProgress == "album" {
                                 ProgressView()
+                                    .tint(palette.accent)
                             }
                         }
                     }
                     .disabled(isExporting || appState.albums.isEmpty)
+                    .listRowBackground(palette.cardBackground)
 
                     Button { showFileImporter = true } label: {
                         HStack {
                             Image(systemName: "square.and.arrow.down")
-                                .foregroundColor(.blue)
+                                .foregroundColor(palette.accent)
                             Text("Import Recordings")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Export & Import")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Export as WAV files in ZIP. Import m4a, wav, mp3, or aiff files.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -1433,15 +1529,16 @@ struct SettingsSheetView: View {
                             Image(systemName: "trash")
                                 .foregroundColor(.red)
                             Text("View Trash")
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             Text("\(appState.trashedCount) items")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                             Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
 
                     Button(role: .destructive) { showEmptyTrashAlert = true } label: {
                         HStack {
@@ -1450,32 +1547,42 @@ struct SettingsSheetView: View {
                         }
                     }
                     .disabled(appState.trashedCount == 0)
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Trash")
+                        .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Items in trash are automatically deleted after 30 days.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
                     HStack {
                         Image(systemName: "info.circle")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                         Text("Sonidea")
+                            .foregroundColor(palette.textPrimary)
                         Spacer()
                         Text("1.0")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                     }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("About")
+                        .foregroundColor(palette.textSecondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.groupedBackground)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
+            .tint(palette.accent)
             .sheet(isPresented: $showShareSheet) {
                 if let url = exportedZIPURL {
                     ShareSheet(items: [url])

@@ -27,6 +27,7 @@ enum BottomSheetState {
 
 struct GPSInsightsMapView: View {
     @Environment(AppState.self) var appState
+    @Environment(\.themePalette) var palette
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var selectedRecording: RecordingItem?
     @State private var sheetState: BottomSheetState = .collapsed
@@ -101,6 +102,8 @@ struct GPSInsightsMapView: View {
         .sheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
                 .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
     }
 
@@ -128,7 +131,7 @@ struct GPSInsightsMapView: View {
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(palette.useMaterials ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(palette.sheetBackground))
                 .shadow(color: .black.opacity(0.15), radius: 10, y: -5)
         )
         .gesture(
@@ -160,27 +163,37 @@ struct GPSInsightsMapView: View {
 
     private var dragHandle: some View {
         VStack(spacing: 8) {
+            // Drag indicator capsule
             Capsule()
-                .fill(Color(.systemGray3))
+                .fill(palette.stroke)
                 .frame(width: 36, height: 5)
                 .padding(.top, 8)
 
-            // Title
+            // Title row
             HStack {
                 Image(systemName: "map.fill")
-                    .foregroundColor(.accentColor)
+                    .font(.system(size: 16))
+                    .foregroundColor(palette.accent)
+
                 Text("Recording Spots")
                     .font(.headline)
                     .fontWeight(.semibold)
+                    .foregroundColor(palette.textPrimary)
+
                 Spacer()
 
                 // Expand/collapse chevron
                 Image(systemName: sheetState == .expanded ? "chevron.down" : "chevron.up")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(palette.textSecondary)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
+
+            // Separator line
+            Rectangle()
+                .fill(palette.separator)
+                .frame(height: 0.5)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -200,7 +213,7 @@ struct GPSInsightsMapView: View {
                     SpotCategorySection(
                         title: "Most Recorded",
                         icon: "mappin.and.ellipse",
-                        iconColor: .blue,
+                        iconColor: palette.accent,
                         spots: topRecordedSpots,
                         valueKeyPath: \.totalCount,
                         valueLabel: "recordings",
@@ -211,7 +224,7 @@ struct GPSInsightsMapView: View {
                     SpotCategorySection(
                         title: "Most Favorited",
                         icon: "heart.fill",
-                        iconColor: .pink,
+                        iconColor: palette.recordButton,
                         spots: topFavoritedSpots,
                         valueKeyPath: \.favoriteCount,
                         valueLabel: "favorites",
@@ -226,13 +239,13 @@ struct GPSInsightsMapView: View {
                         Text("All Spots")
                             .font(.subheadline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                             .padding(.horizontal, 16)
 
                         if allSpots.isEmpty {
                             Text("No recording spots yet")
                                 .font(.subheadline)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 20)
                         } else {
@@ -262,15 +275,15 @@ struct GPSInsightsMapView: View {
         VStack(spacing: 12) {
             Image(systemName: locationIconName(for: locationStatus))
                 .font(.system(size: 32))
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
 
             Text(locationTitle(for: locationStatus))
                 .font(.headline)
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
 
             Text(locationDescription(for: locationStatus))
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
@@ -281,8 +294,10 @@ struct GPSInsightsMapView: View {
                 } label: {
                     Label("Enable Location", systemImage: "location.fill")
                         .font(.subheadline.weight(.medium))
+                        .foregroundColor(palette.primaryButtonForeground)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(palette.primaryButtonBackground)
                 .padding(.top, 8)
             } else if locationStatus == .denied || locationStatus == .restricted {
                 Button {
@@ -292,8 +307,10 @@ struct GPSInsightsMapView: View {
                 } label: {
                     Label("Open Settings", systemImage: "gear")
                         .font(.subheadline.weight(.medium))
+                        .foregroundColor(palette.secondaryButtonForeground)
                 }
                 .buttonStyle(.bordered)
+                .tint(palette.accent)
                 .padding(.top, 8)
             }
         }
@@ -382,6 +399,7 @@ struct GPSInsightsMapView: View {
 // MARK: - Spot Category Section
 
 struct SpotCategorySection: View {
+    @Environment(\.themePalette) private var palette
     let title: String
     let icon: String
     let iconColor: Color
@@ -400,13 +418,13 @@ struct SpotCategorySection: View {
                 Text(title)
                     .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
 
             if spots.isEmpty {
                 Text("No spots yet")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                     .padding(.vertical, 4)
             } else {
                 // Show up to 3 spots with rank
@@ -426,7 +444,7 @@ struct SpotCategorySection: View {
                             Text(spot.displayName)
                                 .font(.caption)
                                 .fontWeight(.medium)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                                 .lineLimit(1)
 
                             Spacer(minLength: 4)
@@ -434,7 +452,7 @@ struct SpotCategorySection: View {
                             // Count
                             Text("\(spot[keyPath: valueKeyPath])")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
                     .buttonStyle(.plain)
@@ -445,7 +463,7 @@ struct SpotCategorySection: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemGray6))
+                .fill(palette.cardBackground)
         )
     }
 
@@ -462,6 +480,7 @@ struct SpotCategorySection: View {
 // MARK: - Spot List Row
 
 struct SpotListRow: View {
+    @Environment(\.themePalette) private var palette
     let rank: Int
     let spot: RecordingSpot
     let onTap: () -> Void
@@ -485,13 +504,13 @@ struct SpotListRow: View {
                     Text(spot.displayName)
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                         .lineLimit(1)
 
                     HStack(spacing: 8) {
                         Text("\(spot.totalCount) recording\(spot.totalCount == 1 ? "" : "s")")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
 
                         if spot.favoriteCount > 0 {
                             HStack(spacing: 2) {
@@ -511,7 +530,7 @@ struct SpotListRow: View {
                 // Chevron
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -525,7 +544,7 @@ struct SpotListRow: View {
         case 1: return .yellow.opacity(0.9)
         case 2: return .gray.opacity(0.7)
         case 3: return .orange.opacity(0.7)
-        default: return Color(.systemGray3)
+        default: return palette.textSecondary.opacity(0.5)
         }
     }
 }
@@ -534,12 +553,13 @@ struct SpotListRow: View {
 
 struct RecordingMapPin: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePalette) private var palette
 
     var body: some View {
         ZStack {
             // Shadow/glow
             Circle()
-                .fill(Color.red.opacity(0.3))
+                .fill(palette.recordButton.opacity(0.3))
                 .frame(width: 36, height: 36)
 
             // White background circle
@@ -548,9 +568,9 @@ struct RecordingMapPin: View {
                 .frame(width: 28, height: 28)
                 .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
 
-            // Red inner circle
+            // Themed record button color
             Circle()
-                .fill(Color.red)
+                .fill(palette.recordButton)
                 .frame(width: 22, height: 22)
 
             // Waveform icon

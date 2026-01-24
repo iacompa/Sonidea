@@ -27,42 +27,45 @@ struct TipTier: Identifiable {
     ]
 
     // All supported custom amounts (must have IAP products for each)
-    // Expanded list for better "any amount" matching
-    static let supportedAmounts: [Int] = [1, 2, 3, 5, 7, 10, 15, 25, 50, 75, 100, 150, 200, 300, 500]
+    // Full range: every dollar from $1-$100, then increments above
+    static let supportedAmounts: [Int] = {
+        var amounts = Array(1...100)  // $1 to $100, every dollar
+        amounts.append(contentsOf: [125, 150, 175, 200, 250, 300, 400, 500])  // Larger amounts
+        return amounts
+    }()
 
     // Quick pick amounts for UI chips
     static let quickPickAmounts: [Int] = [1, 3, 5, 10, 25, 50, 100]
 
     // Product ID mapping for custom amounts
     static func productID(for amount: Int) -> String {
+        // Named tiers (for backward compatibility)
         switch amount {
-        case 1: return "com.iacompa.sonidea.tip.custom1"
         case 2: return "com.iacompa.sonidea.tip.coffee"
-        case 3: return "com.iacompa.sonidea.tip.custom3"
         case 5: return "com.iacompa.sonidea.tip.feature"
-        case 7: return "com.iacompa.sonidea.tip.custom7"
         case 10: return "com.iacompa.sonidea.tip.studio"
-        case 15: return "com.iacompa.sonidea.tip.custom15"
         case 25: return "com.iacompa.sonidea.tip.patron"
-        case 50: return "com.iacompa.sonidea.tip.custom50"
-        case 75: return "com.iacompa.sonidea.tip.custom75"
-        case 100: return "com.iacompa.sonidea.tip.custom100"
-        case 150: return "com.iacompa.sonidea.tip.custom150"
-        case 200: return "com.iacompa.sonidea.tip.custom200"
-        case 300: return "com.iacompa.sonidea.tip.custom300"
-        case 500: return "com.iacompa.sonidea.tip.custom500"
         default:
+            // All other amounts use the uniform custom format
+            if supportedAmounts.contains(amount) {
+                return "com.iacompa.sonidea.tip.custom\(amount)"
+            }
             // For amounts not in the list, find nearest and return its product ID
             let nearest = nearestSupportedAmount(to: amount)
             return productID(for: nearest)
         }
     }
 
-    // Find nearest supported amount (no upper limit)
+    // Find nearest supported amount (no upper limit - caps at max supported)
     static func nearestSupportedAmount(to value: Int) -> Int {
         guard value >= 1 else { return 1 }
-        // Find the closest supported amount
-        return supportedAmounts.min(by: { abs($0 - value) < abs($1 - value) }) ?? supportedAmounts.last!
+        // For values within 1-100, return exact (no rounding needed)
+        if value <= 100 {
+            return value
+        }
+        // For values above 100, find the closest supported amount
+        let largeAmounts = supportedAmounts.filter { $0 > 100 }
+        return largeAmounts.min(by: { abs($0 - value) < abs($1 - value) }) ?? supportedAmounts.last!
     }
 
     // All product IDs for loading

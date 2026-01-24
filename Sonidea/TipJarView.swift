@@ -12,6 +12,7 @@ struct TipJarView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     @State private var showCustomAmountSheet = false
 
@@ -54,7 +55,7 @@ struct TipJarView: View {
                 }
                 .padding()
             }
-            .background(Color(.systemGroupedBackground))
+            .background(palette.groupedBackground)
             .navigationTitle("Support Sonidea")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -67,6 +68,9 @@ struct TipJarView: View {
             }
             .sheet(isPresented: $showCustomAmountSheet) {
                 CustomAmountSheet()
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
+                    .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
             }
             .alert("Purchase Error", isPresented: .constant(supportManager.purchaseError != nil)) {
                 Button("OK") {
@@ -88,11 +92,11 @@ struct TipJarView: View {
             Text("Supporter")
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(Color(.systemGray6))
+        .background(palette.inputBackground)
         .cornerRadius(16)
     }
 
@@ -103,26 +107,28 @@ struct TipJarView: View {
             HStack {
                 Image(systemName: "waveform.circle.fill")
                     .font(.title2)
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(palette.accent)
                 Text("Free forever — powered by tips.")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
 
             Text("Sonidea helps artists capture ideas fast.")
                 .font(.body)
+                .foregroundColor(palette.textPrimary)
 
             Text("It will be free forever.")
                 .font(.body)
                 .fontWeight(.medium)
+                .foregroundColor(palette.textPrimary)
 
             Text("If it's saved you even one idea, a tip helps keep the app polished, reliable, and improving.")
                 .font(.callout)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
+        .background(palette.cardBackground)
         .cornerRadius(12)
     }
 
@@ -159,24 +165,24 @@ struct TipJarView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Other amount")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     Text("Choose any tip amount you'd like.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -190,6 +196,7 @@ struct TipJarView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Supporter Perks")
                 .font(.headline)
+                .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -197,7 +204,7 @@ struct TipJarView: View {
                 PerkRow(icon: "person.2.fill", color: .purple, text: "Name on Supporters wall (optional)")
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
         }
     }
@@ -208,6 +215,7 @@ struct TipJarView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("What I'm building next")
                 .font(.headline)
+                .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -215,15 +223,15 @@ struct TipJarView: View {
                     HStack(spacing: 12) {
                         Image(systemName: "circle")
                             .font(.caption2)
-                            .foregroundColor(.accentColor)
+                            .foregroundColor(palette.accent)
                         Text(item.title)
                             .font(.subheadline)
-                            .foregroundColor(.primary)
+                            .foregroundColor(palette.textPrimary)
                     }
                 }
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
         }
     }
@@ -241,10 +249,10 @@ struct TipJarView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Send us app suggestions")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     Text("Got an idea or found something annoying? Tell us — it helps a lot.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .lineLimit(2)
                 }
 
@@ -252,14 +260,14 @@ struct TipJarView: View {
 
                 Image(systemName: "arrow.up.right")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -276,10 +284,10 @@ struct TipJarView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Review Sonidea")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     Text("If it helped you capture a great idea, a review means a lot.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .lineLimit(2)
                 }
 
@@ -287,14 +295,14 @@ struct TipJarView: View {
 
                 Image(systemName: "star")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -313,7 +321,7 @@ struct TipJarView: View {
     private var thankYouFooter: some View {
         Text("Thank you for keeping Sonidea free.")
             .font(.footnote)
-            .foregroundColor(.secondary)
+            .foregroundColor(palette.textSecondary)
             .multilineTextAlignment(.center)
             .padding(.top, 8)
     }
@@ -326,6 +334,7 @@ struct TipTierButton: View {
     let action: () -> Void
 
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     var body: some View {
         Button(action: action) {
@@ -333,10 +342,10 @@ struct TipTierButton: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(tier.title)
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     Text(tier.impact)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Spacer()
@@ -345,14 +354,14 @@ struct TipTierButton: View {
                 Text(appState.supportManager.priceForProduct(tier.productID) ?? tier.amount)
                     .font(.headline)
                     .fontWeight(.semibold)
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(palette.accent)
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(palette.cardBackground)
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -364,6 +373,7 @@ struct TipTierButton: View {
 // MARK: - Perk Row
 
 struct PerkRow: View {
+    @Environment(\.themePalette) private var palette
     let icon: String
     let color: Color
     let text: String
@@ -375,7 +385,7 @@ struct PerkRow: View {
                 .frame(width: 24)
             Text(text)
                 .font(.subheadline)
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
         }
     }
 }
@@ -385,6 +395,7 @@ struct PerkRow: View {
 struct CustomAmountSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
     @FocusState private var isTextFieldFocused: Bool
 
     // The actual typed amount (can be any value >= 1)
@@ -399,16 +410,18 @@ struct CustomAmountSheet: View {
         typedAmount <= 100
     }
 
-    private var nearestSupportedAmount: Int {
+    // For amounts 1-100, we support exact dollars. Above 100, we snap to nearest tier.
+    private var actualChargeAmount: Int {
         TipTier.nearestSupportedAmount(to: typedAmount)
     }
 
-    private var needsRounding: Bool {
-        typedAmount != nearestSupportedAmount
+    // Only show rounding notice for amounts > 100 that need snapping
+    private var needsRoundingNotice: Bool {
+        typedAmount > 100 && typedAmount != actualChargeAmount
     }
 
     private var displayPrice: String {
-        appState.supportManager.priceForAmount(nearestSupportedAmount) ?? "$\(nearestSupportedAmount)"
+        appState.supportManager.priceForAmount(actualChargeAmount) ?? "$\(actualChargeAmount)"
     }
 
     private var isValidAmount: Bool {
@@ -419,38 +432,39 @@ struct CustomAmountSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Large amount display
+                    // Large amount display (shows what user typed - exact for $1-$100)
                     VStack(spacing: 6) {
                         Text("$\(typedAmount)")
                             .font(.system(size: 56, weight: .bold, design: .rounded))
-                            .foregroundColor(.primary)
+                            .foregroundColor(palette.textPrimary)
                             .contentTransition(.numericText())
                             .animation(.spring(response: 0.3), value: typedAmount)
 
-                        if needsRounding && isValidAmount {
-                            Text("Will be processed as \(displayPrice)")
+                        if needsRoundingNotice && isValidAmount {
+                            Text("Will charge $\(actualChargeAmount) (nearest available)")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                                 .transition(.opacity)
                         }
                     }
                     .padding(.top, 8)
-                    .animation(.easeInOut(duration: 0.2), value: needsRounding)
+                    .animation(.easeInOut(duration: 0.2), value: needsRoundingNotice)
 
                     // Manual entry field (primary input)
                     HStack {
                         Text("$")
                             .font(.title2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
 
                         TextField("Amount", text: $textInput)
                             .font(.title2)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.center)
+                            .foregroundColor(palette.textPrimary)
                             .frame(width: 100)
                             .padding(.vertical, 10)
                             .padding(.horizontal, 14)
-                            .background(Color(.systemGray6))
+                            .background(palette.inputBackground)
                             .cornerRadius(10)
                             .focused($isTextFieldFocused)
                             .onChange(of: textInput) { _, newValue in
@@ -468,20 +482,20 @@ struct CustomAmountSheet: View {
                         VStack(spacing: 8) {
                             Text("Quick pick")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
 
                             Slider(value: $sliderValue, in: 1...100, step: 1) {
                                 Text("Amount")
                             } minimumValueLabel: {
                                 Text("$1")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textSecondary)
                             } maximumValueLabel: {
                                 Text("$100")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textSecondary)
                             }
-                            .tint(.accentColor)
+                            .tint(palette.accent)
                             .onChange(of: sliderValue) { _, newValue in
                                 let intValue = Int(newValue)
                                 typedAmount = intValue
@@ -494,19 +508,19 @@ struct CustomAmountSheet: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    // Info note for large amounts
+                    // Info note for amounts over $100
                     if !showSlider {
                         HStack(spacing: 8) {
                             Image(systemName: "info.circle")
                                 .font(.caption)
-                                .foregroundColor(.blue)
-                            Text("Tips are processed in preset amounts on iOS. We'll match the closest available tier.")
+                                .foregroundColor(palette.accent)
+                            Text("Amounts over $100 will be rounded to the nearest available tier.")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                                 .multilineTextAlignment(.leading)
                         }
                         .padding()
-                        .background(Color(.systemGray6))
+                        .background(palette.inputBackground)
                         .cornerRadius(10)
                         .padding(.horizontal)
                     }
@@ -531,7 +545,7 @@ struct CustomAmountSheet: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .frame(height: 50)
-                            .background(isValidAmount ? Color.accentColor : Color.gray)
+                            .background(isValidAmount ? palette.accent : Color.gray)
                             .cornerRadius(12)
                         }
                         .disabled(!isValidAmount || appState.supportManager.isPurchasing)
@@ -542,7 +556,7 @@ struct CustomAmountSheet: View {
                             dismiss()
                         }
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                         .frame(height: 44)
                     }
                     .padding(.horizontal)
@@ -550,6 +564,7 @@ struct CustomAmountSheet: View {
                 }
                 .padding(.top)
             }
+            .background(palette.background)
             .navigationTitle("Other Amount")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -617,7 +632,7 @@ struct CustomAmountSheet: View {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         isTextFieldFocused = false
 
-        let productID = TipTier.productID(for: nearestSupportedAmount)
+        let productID = TipTier.productID(for: actualChargeAmount)
 
         Task {
             await appState.supportManager.purchase(productID: productID)
@@ -631,6 +646,7 @@ struct CustomAmountSheet: View {
 // MARK: - Quick Pick Chip
 
 struct QuickPickChip: View {
+    @Environment(\.themePalette) private var palette
     let amount: Int
     let isSelected: Bool
     let action: () -> Void
@@ -640,14 +656,14 @@ struct QuickPickChip: View {
             Text("$\(amount)")
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .foregroundColor(isSelected ? .white : .accentColor)
+                .foregroundColor(isSelected ? .white : palette.accent)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(isSelected ? Color.accentColor : Color(.systemGray6))
+                .background(isSelected ? palette.accent : palette.inputBackground)
                 .cornerRadius(20)
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
-                        .stroke(isSelected ? Color.clear : Color.accentColor.opacity(0.3), lineWidth: 1)
+                        .stroke(isSelected ? Color.clear : palette.accent.opacity(0.3), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -661,6 +677,7 @@ struct QuickPickChip: View {
 struct AskPromptSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let onSupport: () -> Void
 
@@ -668,7 +685,7 @@ struct AskPromptSheet: View {
         VStack(spacing: 20) {
             // Handle bar
             RoundedRectangle(cornerRadius: 2.5)
-                .fill(Color(.systemGray4))
+                .fill(palette.stroke)
                 .frame(width: 36, height: 5)
                 .padding(.top, 8)
 
@@ -681,11 +698,12 @@ struct AskPromptSheet: View {
             Text("Keep Sonidea free")
                 .font(.title3)
                 .fontWeight(.semibold)
+                .foregroundColor(palette.textPrimary)
 
             // Body
             Text("If Sonidea helps you capture ideas, consider leaving a tip.")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
@@ -704,7 +722,7 @@ struct AskPromptSheet: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.accentColor)
+                        .background(palette.accent)
                         .cornerRadius(12)
                 }
 
@@ -714,7 +732,7 @@ struct AskPromptSheet: View {
                 } label: {
                     Text("Not now")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
                 }
             }
             .padding(.horizontal)

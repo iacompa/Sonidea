@@ -10,6 +10,7 @@ import SwiftUI
 struct RecordingsListView: View {
     @Environment(AppState.self) var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.themePalette) private var palette
 
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
@@ -38,19 +39,26 @@ struct RecordingsListView: View {
     }
 
     var body: some View {
-        Group {
-            if appState.activeRecordings.isEmpty {
-                emptyState
-            } else {
-                VStack(spacing: 0) {
-                    listHeader
+        ZStack {
+            // Full background - ensures no dead zones
+            palette.background
+                .ignoresSafeArea()
 
-                    if isSelectionMode {
-                        selectionHeader
-                        selectionActionBar
+            // Content
+            Group {
+                if appState.activeRecordings.isEmpty {
+                    emptyState
+                } else {
+                    VStack(spacing: 0) {
+                        listHeader
+
+                        if isSelectionMode {
+                            selectionHeader
+                            selectionActionBar
+                        }
+
+                        recordingsList
                     }
-
-                    recordingsList
                 }
             }
         }
@@ -99,14 +107,14 @@ struct RecordingsListView: View {
         VStack(spacing: 16) {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 64))
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
             Text("No Recordings")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
             Text("Tap the red button to start recording")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
         }
     }
 
@@ -117,7 +125,7 @@ struct RecordingsListView: View {
             Text("Recordings")
                 .font(.title2)
                 .fontWeight(.bold)
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
 
             Spacer()
 
@@ -129,12 +137,13 @@ struct RecordingsListView: View {
                 } label: {
                     Text("Select")
                         .font(.subheadline)
-                        .foregroundColor(.blue)
+                        .foregroundColor(palette.accent)
                 }
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .background(palette.background)
     }
 
     // MARK: - Selection Header
@@ -146,13 +155,13 @@ struct RecordingsListView: View {
                     clearSelection()
                 }
             }
-            .foregroundColor(.blue)
+            .foregroundColor(palette.accent)
 
             Spacer()
 
             Text("\(selectedRecordingIDs.count) selected")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textSecondary)
 
             Spacer()
 
@@ -165,11 +174,11 @@ struct RecordingsListView: View {
                     }
                 }
             }
-            .foregroundColor(.blue)
+            .foregroundColor(palette.accent)
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
-        .background(Color(.secondarySystemBackground))
+        .background(palette.surface)
     }
 
     // MARK: - Selection Action Bar (Horizontal, Apple-like)
@@ -188,6 +197,7 @@ struct RecordingsListView: View {
 
             Divider()
                 .frame(height: 40)
+                .background(palette.separator)
 
             // Tags
             SelectionActionButton(
@@ -201,6 +211,7 @@ struct RecordingsListView: View {
 
             Divider()
                 .frame(height: 40)
+                .background(palette.separator)
 
             // Export
             SelectionActionButton(
@@ -214,6 +225,7 @@ struct RecordingsListView: View {
 
             Divider()
                 .frame(height: 40)
+                .background(palette.separator)
 
             // Delete
             SelectionActionButton(
@@ -226,7 +238,7 @@ struct RecordingsListView: View {
             }
         }
         .frame(height: 64)
-        .background(Color(.systemGray6))
+        .background(palette.inputBackground)
         .cornerRadius(12)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -270,7 +282,7 @@ struct RecordingsListView: View {
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
-                    .tint(.blue)
+                    .tint(palette.accent)
 
                     Button {
                         recordingToTag = recording
@@ -301,6 +313,7 @@ struct RecordingsListView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .listRowSeparatorTint(palette.separator)
             }
 
             // Bottom spacer for floating record button
@@ -369,6 +382,7 @@ struct RecordingsListView: View {
 // MARK: - Selection Action Button
 
 struct SelectionActionButton: View {
+    @Environment(\.themePalette) private var palette
     let icon: String
     let label: String
     let isEnabled: Bool
@@ -396,20 +410,22 @@ struct SelectionActionButton: View {
 
     private var buttonColor: Color {
         if !isEnabled {
-            return .secondary.opacity(0.4)
+            return palette.textSecondary.opacity(0.4)
         }
-        return isDestructive ? .red : .primary
+        return isDestructive ? .red : palette.textPrimary
     }
 }
 
 // MARK: - Selection Action Button Style
 
 struct SelectionActionButtonStyle: ButtonStyle {
+    @Environment(\.themePalette) private var palette
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
                 configuration.isPressed
-                    ? Color.primary.opacity(0.08)
+                    ? palette.textPrimary.opacity(0.08)
                     : Color.clear
             )
     }
@@ -420,6 +436,7 @@ struct SelectionActionButtonStyle: ButtonStyle {
 struct RecordingRow: View {
     @Environment(AppState.self) var appState
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.themePalette) var palette
     let recording: RecordingItem
     var isSelectionMode: Bool = false
     var isSelected: Bool = false
@@ -436,7 +453,7 @@ struct RecordingRow: View {
         HStack(spacing: 14) {
             if isSelectionMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isSelected ? .blue : .secondary)
+                    .foregroundColor(isSelected ? palette.accent : palette.textSecondary)
                     .font(.system(size: 22))
             }
 
@@ -447,21 +464,21 @@ struct RecordingRow: View {
                 Text(recording.title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.primary)
+                    .foregroundColor(palette.textPrimary)
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
                     Text(recording.formattedDuration)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
 
                     if let album = album {
                         Text("•")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                         Text(album.name)
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                     }
                 }
@@ -475,7 +492,7 @@ struct RecordingRow: View {
                         if recordingTags.count > 2 {
                             Text("+\(recordingTags.count - 2)")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                     }
                 }
@@ -486,7 +503,7 @@ struct RecordingRow: View {
             if !isSelectionMode {
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textSecondary)
             }
         }
         .padding(.vertical, 12)
@@ -537,6 +554,7 @@ struct TagChipSmall: View {
 struct MoveToAlbumSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let recording: RecordingItem
     @State private var searchQuery = ""
@@ -563,7 +581,7 @@ struct MoveToAlbumSheet: View {
                                 .foregroundColor(.purple)
                                 .frame(width: 24)
                             Text(album.name)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             if album.isSystem {
                                 Text("SYSTEM")
                                     .font(.caption2)
@@ -577,18 +595,22 @@ struct MoveToAlbumSheet: View {
                             Spacer()
                             if recording.albumID == album.id {
                                 Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(palette.accent)
                             }
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.groupedBackground)
             .searchable(text: $searchQuery, prompt: "Search albums")
             .navigationTitle("Move to Album")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
         }
@@ -600,6 +622,7 @@ struct MoveToAlbumSheet: View {
 struct BatchAlbumPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let selectedRecordingIDs: Set<UUID>
     let onComplete: () -> Void
@@ -629,7 +652,7 @@ struct BatchAlbumPickerSheet: View {
                                 .foregroundColor(.purple)
                                 .frame(width: 24)
                             Text(album.name)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             if album.isSystem {
                                 Text("SYSTEM")
                                     .font(.caption2)
@@ -643,14 +666,18 @@ struct BatchAlbumPickerSheet: View {
                             Spacer()
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.groupedBackground)
             .searchable(text: $searchQuery, prompt: "Search albums")
             .navigationTitle("Move to Album")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
         }
@@ -662,6 +689,7 @@ struct BatchAlbumPickerSheet: View {
 struct BatchTagPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let selectedRecordingIDs: Set<UUID>
     let onComplete: () -> Void
@@ -681,15 +709,17 @@ struct BatchTagPickerSheet: View {
                                     .fill(tag.color)
                                     .frame(width: 20, height: 20)
                                 Text(tag.name)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(palette.textPrimary)
                                 Spacer()
                                 Image(systemName: "plus")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(palette.accent)
                             }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
                 } header: {
                     Text("Add Tag")
+                        .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -704,22 +734,27 @@ struct BatchTagPickerSheet: View {
                                     .fill(tag.color)
                                     .frame(width: 20, height: 20)
                                 Text(tag.name)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(palette.textPrimary)
                                 Spacer()
                                 Image(systemName: "minus")
                                     .foregroundColor(.red)
                             }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
                 } header: {
                     Text("Remove Tag")
+                        .foregroundColor(palette.textSecondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.groupedBackground)
             .navigationTitle("Manage Tags")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
         }
@@ -731,6 +766,7 @@ struct BatchTagPickerSheet: View {
 struct SingleRecordingTagSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let recording: RecordingItem
 
@@ -752,21 +788,25 @@ struct SingleRecordingTagSheet: View {
                                 .fill(tag.color)
                                 .frame(width: 20, height: 20)
                             Text(tag.name)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             Spacer()
                             if isSelected {
                                 Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(palette.accent)
                             }
                         }
                     }
+                    .listRowBackground(palette.cardBackground)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.groupedBackground)
             .navigationTitle("Tags")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
         }
