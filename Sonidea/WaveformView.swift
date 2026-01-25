@@ -67,11 +67,14 @@ struct WaveformCanvas: View {
             let availableWidth = size.width - totalSpacing
             let barWidth = max(2, availableWidth / CGFloat(barCount))
 
+            // Calculate progress position - bars BEFORE this index are "played" (behind playhead)
             let progressIndex = Int(progress * Double(barCount))
 
+            // Colors: played = bright/tinted (BEHIND playhead), unplayed = dim (AHEAD of playhead)
             let playedColor: Color = isDarkMode ? .white : .accentColor
-            let unplayedColor: Color = isDarkMode ? .white.opacity(0.3) : Color(.systemGray3)
+            let unplayedColor: Color = isDarkMode ? .white.opacity(0.25) : Color(.systemGray4)
 
+            // Draw all waveform bars
             for (index, sample) in samples.enumerated() {
                 let x = CGFloat(index) * (barWidth + barSpacing)
                 let barHeight = max(4, CGFloat(sample) * size.height * 0.9)
@@ -81,19 +84,27 @@ struct WaveformCanvas: View {
                 let path = RoundedRectangle(cornerRadius: cornerRadius)
                     .path(in: rect)
 
+                // Bars BEFORE progressIndex are played (behind playhead = bright)
+                // Bars AT or AFTER progressIndex are unplayed (ahead of playhead = dim)
                 let isPlayed = index < progressIndex
                 let color: Color = isPlayed ? playedColor : unplayedColor
 
                 context.fill(path, with: .color(color))
             }
 
-            // Draw playhead line
-            if progress > 0 && progress < 1 {
+            // Draw playhead line (vertical needle at current position)
+            if progress > 0.001 && progress < 0.999 {
                 let playheadX = CGFloat(progress) * size.width
+
+                // Playhead: distinct accent color line with slight glow
                 let playheadPath = Path { path in
                     path.move(to: CGPoint(x: playheadX, y: 0))
                     path.addLine(to: CGPoint(x: playheadX, y: size.height))
                 }
+
+                // Draw a subtle glow behind the playhead for visibility
+                context.stroke(playheadPath, with: .color(playedColor.opacity(0.3)), lineWidth: 4)
+                // Draw the main playhead line
                 context.stroke(playheadPath, with: .color(playedColor), lineWidth: 2)
             }
         }

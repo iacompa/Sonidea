@@ -1966,55 +1966,56 @@ struct VerificationInfoSheet: View {
         let locationStatus = locationVerificationStatus(for: recording)
         let canVerifyNow = canVerify(for: recording)
 
-        VStack(spacing: 20) {
-            VStack(spacing: 12) {
-                // Date verification row
-                HStack {
-                    Text("Date")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text(dateStatus.text)
+        ScrollView {
+            VStack(spacing: 20) {
+                VStack(spacing: 12) {
+                    // Date verification row
+                    HStack {
+                        Text("Date")
                             .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(dateStatus.verified ? palette.textPrimary : palette.textSecondary)
-                        if dateStatus.verified {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(.green)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Text(dateStatus.text)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(dateStatus.verified ? palette.textPrimary : palette.textSecondary)
+                            if dateStatus.verified {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
                         }
                     }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(palette.inputBackground)
-                .cornerRadius(10)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(palette.inputBackground)
+                    .cornerRadius(10)
 
-                // Location verification row
-                HStack {
-                    Text("Location")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text(locationStatus.text)
+                    // Location verification row
+                    HStack {
+                        Text("Location")
                             .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(locationStatus.verified ? palette.textPrimary : palette.textSecondary)
-                        if locationStatus.verified {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(.green)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Text(locationStatus.text)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(locationStatus.verified ? palette.textPrimary : palette.textSecondary)
+                            if locationStatus.verified {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(palette.inputBackground)
+                    .cornerRadius(10)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(palette.inputBackground)
-                .cornerRadius(10)
-            }
-            .padding(.horizontal)
+                .padding(.horizontal)
 
             // Verify button (only show if not already verified)
             if recording.proofStatus != .proven {
@@ -2054,16 +2055,17 @@ struct VerificationInfoSheet: View {
                 }
             }
 
-            // Footnote
-            Text("Verified using iCloud server timestamp + file fingerprint.")
-                .font(.caption)
-                .foregroundColor(palette.textTertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-
-            Spacer()
+                // Footnote
+                Text("Verified using iCloud server timestamp + file fingerprint.")
+                    .font(.caption)
+                    .foregroundColor(palette.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 8)
+            }
+            .padding(.top, 20)
+            .padding(.bottom, 32)
         }
-        .padding(.top, 24)
     }
 
     // MARK: - Unavailable Content (fallback if recording not found)

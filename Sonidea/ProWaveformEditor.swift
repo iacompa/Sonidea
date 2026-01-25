@@ -35,8 +35,34 @@ final class WaveformTimeline {
         duration / Double(zoomScale)
     }
 
+    /// Seconds per point (pixel) at current zoom - useful for determining precision
+    func secondsPerPoint(width: CGFloat) -> TimeInterval {
+        guard width > 0 else { return 0.01 }
+        return visibleDuration / Double(width)
+    }
+
+    /// Returns the appropriate quantization step based on current zoom level
+    /// - High zoom (< 2s visible): 0.01s (10ms) steps
+    /// - Medium zoom (2-20s visible): 0.1s steps
+    /// - Low zoom (> 20s visible): 1.0s steps
+    func quantizationStep() -> TimeInterval {
+        switch visibleDuration {
+        case 0..<2:    return 0.01  // Very zoomed in: 10ms precision
+        case 2..<10:   return 0.05  // Zoomed in: 50ms precision
+        case 10..<30:  return 0.1   // Medium zoom: 100ms precision
+        case 30..<120: return 0.5   // Zoomed out: 500ms precision
+        default:       return 1.0   // Very zoomed out: 1s precision
+        }
+    }
+
+    /// Quantize a time value based on current zoom level
+    func quantize(_ time: TimeInterval) -> TimeInterval {
+        let step = quantizationStep()
+        return (time / step).rounded() * step
+    }
+
     static let minZoom: CGFloat = 1.0
-    static let maxZoom: CGFloat = 50.0 // Can zoom to see ~2 seconds of a 100s recording
+    static let maxZoom: CGFloat = 200.0 // Can zoom to see ~0.5 seconds of a 100s recording (DAW-like)
 
     init(duration: TimeInterval) {
         self.duration = max(0.01, duration)
@@ -260,6 +286,7 @@ struct ProWaveformEditor: View {
                 .contentShape(Rectangle())
                 .gesture(panGesture(width: width))
                 .gesture(tapGesture(width: width))
+                .gesture(doubleTapGesture(width: width))
                 .simultaneousGesture(zoomGesture)
             }
             .frame(height: waveformHeight)
@@ -319,7 +346,16 @@ struct ProWaveformEditor: View {
                 if isPrecisionMode { deltaX *= 0.25 }
 
                 let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
-                timeline.visibleStartTime = panStartTime + timeDelta
+                let newStartTime = panStartTime + timeDelta
+
+                // Clamp at call site to avoid any potential recursion issues
+                // (safe even if @Observable implementation changes)
+                let clampedStart = max(0, min(newStartTime, timeline.duration - timeline.visibleDuration))
+
+                // Only assign if meaningfully different (prevents redundant updates)
+                if abs(clampedStart - timeline.visibleStartTime) > 0.0001 {
+                    timeline.visibleStartTime = clampedStart
+                }
             }
             .onEnded { _ in
                 isPanning = false
@@ -331,17 +367,29 @@ struct ProWaveformEditor: View {
             .onEnded { value in
                 var tappedTime = timeline.xToTime(value.location.x, width: width)
                 tappedTime = max(0, min(tappedTime, duration))
-                tappedTime = quantize(tappedTime)
+                // Use zoom-adaptive quantization
+                tappedTime = timeline.quantize(tappedTime)
                 playheadPosition = tappedTime
                 impactGenerator.impactOccurred(intensity: 0.4)
             }
     }
 
-    private func quantize(_ time: TimeInterval) -> TimeInterval {
-        // Always use 0.01s precision for accurate marker placement
-        // Precision mode is for handle dragging speed, not quantization
-        let step: TimeInterval = 0.01
-        return (time / step).rounded() * step
+    /// Double-tap to toggle zoom (zoomed out → 4x zoom, zoomed in → reset)
+    private func doubleTapGesture(width: CGFloat) -> some Gesture {
+        SpatialTapGesture(count: 2)
+            .onEnded { value in
+                let tappedTime = timeline.xToTime(value.location.x, width: width)
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    if timeline.zoomScale > 1.5 {
+                        // Zoomed in → reset to full view
+                        timeline.reset()
+                    } else {
+                        // Zoomed out → zoom to 4x centered on tap
+                        timeline.zoom(to: 4.0, centeredOn: tappedTime)
+                    }
+                }
+                impactGenerator.impactOccurred(intensity: 0.5)
+            }
     }
 }
 
@@ -373,15 +421,19 @@ struct TimeRulerBar: View {
     }
 
     private func tickIntervals(for duration: TimeInterval) -> (major: TimeInterval, minor: TimeInterval) {
+        // Adaptive tick intervals based on visible duration (zoom level)
+        // More granular at high zoom for DAW-like precision editing
         switch duration {
-        case 0..<2:      return (0.5, 0.1)
-        case 2..<5:      return (1.0, 0.2)
-        case 5..<15:     return (2.0, 0.5)
-        case 15..<30:    return (5.0, 1.0)
-        case 30..<60:    return (10.0, 2.0)
-        case 60..<180:   return (30.0, 5.0)
-        case 180..<600:  return (60.0, 10.0)
-        default:         return (120.0, 30.0)
+        case 0..<0.5:    return (0.1, 0.01)   // Very high zoom: major every 100ms, minor every 10ms
+        case 0.5..<1:    return (0.2, 0.05)   // High zoom: major every 200ms, minor every 50ms
+        case 1..<2:      return (0.5, 0.1)    // Zoomed in: major every 500ms, minor every 100ms
+        case 2..<5:      return (1.0, 0.2)    // Medium-high: major every 1s, minor every 200ms
+        case 5..<15:     return (2.0, 0.5)    // Medium: major every 2s, minor every 500ms
+        case 15..<30:    return (5.0, 1.0)    // Medium-low: major every 5s, minor every 1s
+        case 30..<60:    return (10.0, 2.0)   // Low: major every 10s, minor every 2s
+        case 60..<180:   return (30.0, 5.0)   // Very low: major every 30s, minor every 5s
+        case 180..<600:  return (60.0, 10.0)  // Ultra low: major every 1min, minor every 10s
+        default:         return (120.0, 30.0) // Extreme: major every 2min, minor every 30s
         }
     }
 
@@ -424,8 +476,17 @@ struct TimeRulerBar: View {
         let seconds = totalSeconds % 60
         let fraction = time.truncatingRemainder(dividingBy: 1)
 
-        if fraction > 0.05 && timeline.visibleDuration < 10 {
-            return String(format: "%d:%02d.%d", minutes, seconds, Int(fraction * 10))
+        // Show milliseconds when zoomed in enough to see 10ms ticks
+        if timeline.visibleDuration < 1 {
+            // Very high zoom: show centiseconds (0:00.05)
+            let centiseconds = Int(fraction * 100)
+            return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
+        } else if timeline.visibleDuration < 5 {
+            // High zoom: show tenths (0:00.5)
+            let tenths = Int(fraction * 10)
+            if tenths > 0 {
+                return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+            }
         }
         return String(format: "%d:%02d", minutes, seconds)
     }
@@ -591,9 +652,12 @@ struct PlayheadLineView: View {
                 }
 
                 newTime = max(0, min(newTime, duration))
-                newTime = (newTime / 0.01).rounded() * 0.01
+                // Use zoom-adaptive quantization
+                newTime = timeline.quantize(newTime)
 
-                if abs(newTime - lastHapticTime) >= 0.05 {
+                // Haptic feedback at quantization step boundaries
+                let step = timeline.quantizationStep()
+                if abs(newTime - lastHapticTime) >= step {
                     selectionGenerator.selectionChanged()
                     lastHapticTime = newTime
                 }
@@ -707,8 +771,9 @@ struct SelectionHandleView: View {
                 let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
                 var newTime = dragStartTime + timeDelta
 
-                // Always use 0.01s quantization for precision
-                let step: TimeInterval = 0.01
+                // Use zoom-adaptive quantization for consistency
+                // At high zoom: 0.01s precision, at low zoom: coarser steps
+                let step = timeline.quantizationStep()
                 newTime = (newTime / step).rounded() * step
 
                 // Clamp to prevent crossing
@@ -718,8 +783,8 @@ struct SelectionHandleView: View {
                     newTime = max(otherTime + minGap, min(newTime, duration))
                 }
 
-                // Light haptic on 0.01s changes
-                if abs(newTime - lastHapticTime) >= 0.05 {
+                // Haptic at quantization step boundaries
+                if abs(newTime - lastHapticTime) >= step {
                     selectionGenerator.selectionChanged()
                     lastHapticTime = newTime
                 }
@@ -882,9 +947,11 @@ struct MarkerItemView: View {
                     let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
                     var newTime = dragStartTime + timeDelta
                     newTime = max(0, min(newTime, duration))
-                    newTime = (newTime / 0.01).rounded() * 0.01
+                    // Use zoom-adaptive quantization
+                    newTime = timeline.quantize(newTime)
 
-                    if abs(newTime - lastHapticTime) >= 0.05 {
+                    let step = timeline.quantizationStep()
+                    if abs(newTime - lastHapticTime) >= step {
                         selectionGenerator.selectionChanged()
                         lastHapticTime = newTime
                     }
