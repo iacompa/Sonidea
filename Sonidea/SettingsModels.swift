@@ -240,6 +240,69 @@ struct SilenceSkipSettings: Codable, Equatable {
     static let `default` = SilenceSkipSettings()
 }
 
+// MARK: - Recording Input Settings (Gain + Limiter)
+
+struct RecordingInputSettings: Codable, Equatable {
+    /// Input gain in dB (-6 to +6)
+    var gainDb: Float = 0
+
+    /// Whether the limiter is enabled
+    var limiterEnabled: Bool = false
+
+    /// Limiter ceiling in dB (0, -1, -2, -3, -4, -5, -6)
+    var limiterCeilingDb: Float = -1
+
+    // Gain range
+    static let minGainDb: Float = -6
+    static let maxGainDb: Float = 6
+    static let gainStep: Float = 0.5
+
+    // Limiter ceiling options
+    static let ceilingOptions: [Float] = [0, -1, -2, -3, -4, -5, -6]
+
+    static let `default` = RecordingInputSettings()
+
+    /// Check if settings are at default values
+    var isDefault: Bool {
+        abs(gainDb) < 0.1 && !limiterEnabled
+    }
+
+    /// Format gain for display with sign
+    var gainDisplayString: String {
+        if gainDb > 0 {
+            return String(format: "+%.1f dB", gainDb)
+        } else if gainDb < 0 {
+            return String(format: "%.1f dB", gainDb)
+        } else {
+            return "0 dB"
+        }
+    }
+
+    /// Format ceiling for display
+    var ceilingDisplayString: String {
+        if limiterCeilingDb == 0 {
+            return "0 dB"
+        } else {
+            return String(format: "%.0f dB", limiterCeilingDb)
+        }
+    }
+
+    /// Summary string for banner display (only non-defaults)
+    var summaryString: String? {
+        var parts: [String] = []
+
+        if abs(gainDb) >= 0.1 {
+            parts.append("Gain \(gainDisplayString)")
+        }
+
+        if limiterEnabled {
+            parts.append("Limiter \(ceilingDisplayString)")
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
 // MARK: - App Settings (persisted)
 
 struct AppSettings: Codable {
@@ -253,6 +316,9 @@ struct AppSettings: Codable {
 
     // Audio input preference (nil = Automatic)
     var preferredInputUID: String? = nil
+
+    // Recording input controls (gain + limiter)
+    var recordingInputSettings: RecordingInputSettings = .default
 
     // Move hint tracking
     var hasShownMoveHint: Bool = false

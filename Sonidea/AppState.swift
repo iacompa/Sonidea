@@ -26,6 +26,7 @@ final class AppState {
     var tags: [Tag] = []
     var albums: [Album] = []
     var projects: [Project] = []
+    var overdubGroups: [OverdubGroup] = []
     var appearanceMode: AppearanceMode = .system {
         didSet {
             saveAppearanceMode()
@@ -57,6 +58,7 @@ final class AppState {
     private let tagsKey = "savedTags"
     private let albumsKey = "savedAlbums"
     private let projectsKey = "savedProjects"
+    private let overdubGroupsKey = "savedOverdubGroups"
     private let nextNumberKey = "nextRecordingNumber"
     private let appearanceModeKey = "appearanceMode"
     private let selectedThemeKey = "selectedTheme"
@@ -84,6 +86,7 @@ final class AppState {
         loadTags()
         loadAlbums()
         loadProjects()
+        loadOverdubGroups()
         loadRecordings()
         seedDefaultTagsIfNeeded()
         ensureDraftsAlbum()
@@ -1210,6 +1213,129 @@ final class AppState {
             return
         }
         projects = saved
+    }
+
+    // MARK: - Overdub Groups Persistence
+
+    private func saveOverdubGroups() {
+        if let data = try? JSONEncoder().encode(overdubGroups) {
+            UserDefaults.standard.set(data, forKey: overdubGroupsKey)
+        }
+    }
+
+    private func loadOverdubGroups() {
+        guard let data = UserDefaults.standard.data(forKey: overdubGroupsKey),
+              let saved = try? JSONDecoder().decode([OverdubGroup].self, from: data) else {
+            return
+        }
+        overdubGroups = saved
+    }
+
+    // MARK: - Overdub Group Management
+
+    /// Get overdub group by ID
+    func overdubGroup(for id: UUID) -> OverdubGroup? {
+        overdubGroups.first { $0.id == id }
+    }
+
+    /// Get overdub group for a recording (if it belongs to one)
+    func overdubGroup(for recording: RecordingItem) -> OverdubGroup? {
+        guard let groupId = recording.overdubGroupId else { return nil }
+        return overdubGroup(for: groupId)
+    }
+
+    /// Get all recordings in an overdub group
+    func recordings(in group: OverdubGroup) -> [RecordingItem] {
+        let ids = Set(group.allRecordingIds)
+        return recordings.filter { ids.contains($0.id) }
+    }
+
+    /// Get the base recording for an overdub group
+    func baseRecording(for group: OverdubGroup) -> RecordingItem? {
+        recordings.first { $0.id == group.baseRecordingId }
+    }
+
+    /// Get layer recordings for an overdub group (ordered by index)
+    func layerRecordings(for group: OverdubGroup) -> [RecordingItem] {
+        let layerIds = Set(group.layerRecordingIds)
+        return recordings
+            .filter { layerIds.contains($0.id) }
+            .sorted { ($0.overdubIndex ?? 0) < ($1.overdubIndex ?? 0) }
+    }
+
+    /// Create a new overdub group with a base recording
+    func createOverdubGroup(baseRecording: RecordingItem) -> OverdubGroup {
+        let group = OverdubGroup(baseRecordingId: baseRecording.id)
+
+        // Update the base recording
+        if let index = recordings.firstIndex(where: { $0.id == baseRecording.id }) {
+            recordings[index].overdubGroupId = group.id
+            recordings[index].overdubRole = .base
+            recordings[index].overdubIndex = 0
+        }
+
+        overdubGroups.append(group)
+        saveOverdubGroups()
+        saveRecordings()
+
+        return group
+    }
+
+    /// Add a layer recording to an overdub group
+    func addLayerToOverdubGroup(
+        groupId: UUID,
+        layerRecording: RecordingItem,
+        offsetSeconds: Double = 0
+    ) {
+        guard var group = overdubGroup(for: groupId),
+              group.canAddLayer else { return }
+
+        let layerIndex = group.nextLayerIndex ?? 1
+
+        // Update the layer recording
+        if let index = recordings.firstIndex(where: { $0.id == layerRecording.id }) {
+            recordings[index].overdubGroupId = groupId
+            recordings[index].overdubRole = .layer
+            recordings[index].overdubIndex = layerIndex
+            recordings[index].overdubOffsetSeconds = offsetSeconds
+            recordings[index].overdubSourceBaseId = group.baseRecordingId
+        }
+
+        // Add to group
+        group.addLayer(recordingId: layerRecording.id)
+
+        // Update the group in storage
+        if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
+            overdubGroups[groupIndex] = group
+        }
+
+        saveOverdubGroups()
+        saveRecordings()
+    }
+
+    /// Check if a recording can have overdub layers added
+    func canAddOverdubLayer(to recording: RecordingItem) -> Bool {
+        // If not part of an overdub group yet, it can start one
+        guard let groupId = recording.overdubGroupId else { return true }
+
+        // If already in a group, check if group has room
+        guard let group = overdubGroup(for: groupId) else { return true }
+        return group.canAddLayer
+    }
+
+    /// Get the number of existing layers for a recording
+    func overdubLayerCount(for recording: RecordingItem) -> Int {
+        guard let groupId = recording.overdubGroupId,
+              let group = overdubGroup(for: groupId) else { return 0 }
+        return group.layerCount
+    }
+
+    /// Update layer offset for sync adjustment
+    func updateLayerOffset(recordingId: UUID, offsetSeconds: Double) {
+        if let index = recordings.firstIndex(where: { $0.id == recordingId }) {
+            recordings[index].overdubOffsetSeconds = offsetSeconds
+            saveRecordings()
+        }
     }
 }
 

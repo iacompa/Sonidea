@@ -16,12 +16,14 @@ private struct IdentifiableUUID: Identifiable {
     let id: UUID
 }
 
-// MARK: - Inline Recorder State
+// NOTE: Inline recorder now uses appState.recorder.recordingState directly
+// to ensure UI always reflects actual recorder state (no sync issues)
 
-private enum InlineRecorderState: Equatable {
-    case idle       // Not recording - shows "Record New Version" button
-    case recording  // Actively recording
-    case paused     // Recording paused
+// MARK: - Silence Mode (2-step flow)
+
+private enum SilenceMode: Equatable {
+    case idle                                      // No silence highlighted
+    case highlighted([SelectableSilenceRange])    // Silence ranges detected, each can be toggled
 }
 
 // MARK: - Original State Snapshot (for Done/Save logic)
@@ -36,6 +38,7 @@ private struct RecordingSnapshot: Equatable {
     let latitude: Double?
     let longitude: Double?
     let iconColorHex: String?
+    let iconName: String?
     let fileURL: URL
     let duration: TimeInterval
     let markers: [Marker]
@@ -50,6 +53,7 @@ private struct RecordingSnapshot: Equatable {
         self.latitude = recording.latitude
         self.longitude = recording.longitude
         self.iconColorHex = recording.iconColorHex
+        self.iconName = recording.iconName
         self.fileURL = recording.fileURL
         self.duration = recording.duration
         self.markers = recording.markers
@@ -74,12 +78,16 @@ struct RecordingDetailView: View {
     @State private var showProjectSheet = false
     @State private var showChooseProject = false
     @State private var showCreateProject = false
+    @State private var showProjectActionSheet = false
     @State private var showVersionSavedToast = false
     @State private var savedVersionLabel: String = ""
 
-    // Inline version recorder state
+    // Inline version recorder uses appState.recorder.recordingState directly (no local state)
     @State private var isInlineRecorderExpanded = false
-    @State private var inlineRecorderState: InlineRecorderState = .idle
+
+    // Overdub (Record Over Track)
+    @State private var showOverdubSession = false
+    @State private var showHeadphonesRequiredAlert = false
 
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
@@ -97,6 +105,9 @@ struct RecordingDetailView: View {
     @State private var pendingDuration: TimeInterval?  // Pending duration after edit
     @State private var hasAudioEdits = false  // Track if audio was modified
     @State private var editHistory = EditHistory()  // Undo/redo support
+    @State private var showSkipSilenceResult = false  // Toast for skip silence result
+    @State private var skipSilenceResultMessage = ""  // Message for skip silence toast
+    @State private var silenceMode: SilenceMode = .idle  // 2-step silence removal state
 
     // Pro waveform editor state
     @State private var highResWaveformData: WaveformData?
@@ -105,7 +116,7 @@ struct RecordingDetailView: View {
 
     // Waveform height constants
     private let compactWaveformHeight: CGFloat = 100
-    private let expandedWaveformHeight: CGFloat = 200
+    private let expandedWaveformHeight: CGFloat = 240  // Increased ~20% for more editing space
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
@@ -137,6 +148,11 @@ struct RecordingDetailView: View {
     // Icon color picker state
     @State private var showIconColorPicker = false
 
+    // Icon picker state
+    @State private var showIconPicker = false
+    @State private var editedIcon: PresetIcon
+    @State private var iconWasModified = false
+
     // Playback error state
     @State private var showPlaybackError = false
 
@@ -155,6 +171,7 @@ struct RecordingDetailView: View {
         _editedLocationLabel = State(initialValue: recording.locationLabel)
         _currentRecording = State(initialValue: recording)
         _editedIconColor = State(initialValue: recording.iconColor)
+        _editedIcon = State(initialValue: recording.presetIcon)
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
         _editedMarkers = State(initialValue: recording.markers)
         _selectionEnd = State(initialValue: recording.duration)
@@ -175,6 +192,9 @@ struct RecordingDetailView: View {
         if iconColorWasModified {
             snapshotRecording.iconColorHex = editedIconColor.toHex()
         }
+        if iconWasModified {
+            snapshotRecording.iconName = editedIcon.rawValue
+        }
         snapshotRecording.markers = editedMarkers
         if let pendingURL = pendingAudioEdit {
             snapshotRecording = RecordingItem(
@@ -193,6 +213,7 @@ struct RecordingDetailView: View {
                 trashedAt: snapshotRecording.trashedAt,
                 lastPlaybackPosition: 0,
                 iconColorHex: snapshotRecording.iconColorHex,
+                iconName: snapshotRecording.iconName,
                 eqSettings: snapshotRecording.eqSettings,
                 projectId: snapshotRecording.projectId,
                 parentRecordingId: snapshotRecording.parentRecordingId,
@@ -259,6 +280,16 @@ struct RecordingDetailView: View {
                         }
                         .disabled(isExporting)
 
+                        // Icon picker button
+                        Button {
+                            showIconPicker = true
+                        } label: {
+                            Image(systemName: editedIcon.systemName)
+                                .font(.system(size: 16))
+                                .foregroundColor(editedIconColor)
+                                .frame(width: 24, height: 24)
+                        }
+
                         // Icon color indicator
                         Button {
                             showIconColorPicker = true
@@ -306,6 +337,8 @@ struct RecordingDetailView: View {
                 editHistory.clear()  // Clean up undo history
             }
             .onChange(of: isEditingWaveform) { _, editing in
+                // Stop playback when switching modes to ensure only one playback context is active
+                playback.stop()
                 if editing {
                     // Load high-res waveform data when entering edit mode
                     loadHighResWaveform()
@@ -357,6 +390,29 @@ struct RecordingDetailView: View {
             .sheet(isPresented: $showCreateProject) {
                 CreateProjectSheet(recording: currentRecording)
             }
+            .confirmationDialog("Project", isPresented: $showProjectActionSheet, titleVisibility: .hidden) {
+                if currentRecording.belongsToProject {
+                    // Already in a project - show view/remove options
+                    Button("View Project") {
+                        showProjectSheet = true
+                    }
+                    Button("Remove from Project", role: .destructive) {
+                        appState.removeFromProject(recording: currentRecording)
+                        refreshRecording()
+                    }
+                } else {
+                    // Not in a project - show create/add options
+                    Button("Create Project...") {
+                        showCreateProject = true
+                    }
+                    if !appState.projects.isEmpty {
+                        Button("Add to Existing...") {
+                            showChooseProject = true
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            }
             .sheet(item: $verificationSheetItem) { item in
                 VerificationInfoSheet(
                     recordingID: item.id,
@@ -370,6 +426,13 @@ struct RecordingDetailView: View {
                     iconColorWasModified = true
                 })
                 .presentationDetents([.height(320)])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showIconPicker) {
+                IconPickerSheet(selectedIcon: $editedIcon, tintColor: editedIconColor, onIconChanged: {
+                    iconWasModified = true
+                })
+                .presentationDetents([.height(380)])
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showLocationEditor) {
@@ -386,11 +449,38 @@ struct RecordingDetailView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
+            .fullScreenCover(isPresented: $showOverdubSession) {
+                OverdubSessionView(
+                    baseRecording: currentRecording,
+                    onLayerSaved: { layer in
+                        // Refresh current recording to get updated overdub info
+                        if let updated = appState.recording(for: currentRecording.id) {
+                            currentRecording = updated
+                        }
+                    }
+                )
+            }
+            .alert("Headphones Required", isPresented: $showHeadphonesRequiredAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Recording over a track requires headphones to prevent feedback. Plug in headphones or connect a supported headset, then try again.")
+            }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {
                     versionSavedToast
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .animation(.spring(response: 0.3), value: showVersionSavedToast)
+                }
+                if showSkipSilenceResult {
+                    skipSilenceResultToast
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: showSkipSilenceResult)
+                        .onAppear {
+                            // Auto-dismiss after 3 seconds
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                withAnimation { showSkipSilenceResult = false }
+                            }
+                        }
                 }
             }
         }
@@ -414,25 +504,103 @@ struct RecordingDetailView: View {
         .padding(.bottom, 20)
     }
 
+    // MARK: - Skip Silence Result Toast
+
+    private var skipSilenceResultToast: some View {
+        HStack(spacing: 8) {
+            Image(systemName: skipSilenceResultMessage.contains("Removed") ? "checkmark.circle.fill" : "info.circle.fill")
+                .foregroundColor(skipSilenceResultMessage.contains("Removed") ? .green : .blue)
+            Text(skipSilenceResultMessage)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.85))
+        .cornerRadius(25)
+        .padding(.bottom, 100)  // Higher position so it doesn't overlap playback controls
+    }
+
     // MARK: - Playback Section
 
     private var playbackSection: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 8) {  // Reduced from 16 for tighter layout
             // Edit/Done button row (ABOVE waveform, not overlapping)
+            // When editing: Undo/Redo on left, Done on right
             if !isLoadingWaveform && !waveformSamples.isEmpty {
                 HStack {
+                    // Undo/Redo buttons (left side, only in edit mode)
+                    if isEditingWaveform {
+                        HStack(spacing: 8) {
+                            Button {
+                                performUndo()
+                            } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(editHistory.canUndo ? palette.accent : palette.textTertiary)
+                                    .frame(width: 32, height: 28)
+                                    .background(editHistory.canUndo ? palette.accent.opacity(0.15) : palette.inputBackground)
+                                    .cornerRadius(6)
+                            }
+                            .disabled(!editHistory.canUndo)
+
+                            Button {
+                                performRedo()
+                            } label: {
+                                Image(systemName: "arrow.uturn.forward")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(editHistory.canRedo ? palette.accent : palette.textTertiary)
+                                    .frame(width: 32, height: 28)
+                                    .background(editHistory.canRedo ? palette.accent.opacity(0.15) : palette.inputBackground)
+                                    .cornerRadius(6)
+                            }
+                            .disabled(!editHistory.canRedo)
+
+                            // Divider
+                            Rectangle()
+                                .fill(palette.stroke.opacity(0.3))
+                                .frame(width: 1, height: 20)
+
+                            // Skip Silence button (2-step flow)
+                            Button {
+                                switch silenceMode {
+                                case .idle:
+                                    highlightSilentParts()
+                                case .highlighted:
+                                    removeSilentParts()
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: silenceMode == .idle ? "waveform.path" : "scissors")
+                                        .font(.system(size: 12, weight: .medium))
+                                    Text(silenceMode == .idle ? "Highlight Silent Parts" : "Remove Silent Parts")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .foregroundColor(isProcessingEdit ? palette.textTertiary : (silenceMode == .idle ? palette.accent : .white))
+                                .padding(.horizontal, 8)
+                                .frame(height: 28)
+                                .background(isProcessingEdit ? palette.inputBackground : (silenceMode == .idle ? palette.accent.opacity(0.15) : Color.red))
+                                .cornerRadius(6)
+                            }
+                            .disabled(isProcessingEdit)
+                            .accessibilityLabel(silenceMode == .idle ? "Highlight Silent Parts" : "Remove Silent Parts")
+                        }
+                    }
+
                     Spacer()
+
                     Button {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                             if isEditingWaveform {
-                                // Exit edit mode - reset precision mode
+                                // Exit edit mode - stop playback and reset precision mode
+                                playback.stop()
                                 isPrecisionMode = false
+                                silenceMode = .idle  // Clear any highlighted silence
                                 isEditingWaveform = false
                             } else {
-                                // Enter edit mode - pause playback and set selection to full duration
-                                if playback.isPlaying {
-                                    playback.pause()
-                                }
+                                // Enter edit mode - stop playback and set selection to full duration
+                                playback.stop()
                                 selectionStart = 0
                                 selectionEnd = pendingDuration ?? playback.duration
                                 // Set playhead to current playback position (quantized to 0.01s)
@@ -446,10 +614,10 @@ struct RecordingDetailView: View {
                         Text(isEditingWaveform ? "Done" : "Edit")
                             .font(.caption)
                             .fontWeight(.medium)
-                            .foregroundColor(palette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(palette.accent.opacity(0.15))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(palette.accent)
                             .cornerRadius(6)
                     }
                 }
@@ -475,6 +643,7 @@ struct RecordingDetailView: View {
                         selectionEnd: $selectionEnd,
                         playheadPosition: $editPlayheadPosition,
                         markers: $editedMarkers,
+                        silenceRanges: highlightedSilenceRanges,
                         currentTime: playback.currentTime,
                         isPlaying: playback.isPlaying,
                         isPrecisionMode: $isPrecisionMode,
@@ -485,6 +654,9 @@ struct RecordingDetailView: View {
                             // Tap marker to set playhead to marker position
                             editPlayheadPosition = marker.time
                             playback.seek(to: marker.time)
+                        },
+                        onSilenceRangeTap: { id in
+                            toggleSilenceRange(id: id)
                         }
                     )
                 } else {
@@ -498,7 +670,7 @@ struct RecordingDetailView: View {
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
-            .padding(.vertical, 10)
+            .padding(.top, 8)  // Only top padding; bottom gap comes from VStack spacing
 
             // Edit mode: Selection info and actions
             if isEditingWaveform {
@@ -510,16 +682,12 @@ struct RecordingDetailView: View {
                         duration: pendingDuration ?? playback.duration
                     )
 
-                    // Edit actions with undo/redo and Hold for Precision
+                    // Edit actions: Trim, Cut, Skip Silence, Marker, Precision (Undo/Redo now in top bar)
                     WaveformEditActionsView(
-                        canUndo: editHistory.canUndo,
-                        canRedo: editHistory.canRedo,
                         canTrim: canPerformTrim,
                         canCut: canPerformCut,
                         isProcessing: isProcessingEdit,
                         isPrecisionMode: $isPrecisionMode,
-                        onUndo: performUndo,
-                        onRedo: performRedo,
                         onTrim: performTrim,
                         onCut: performCut,
                         onAddMarker: addMarkerAtPlayhead
@@ -771,6 +939,9 @@ struct RecordingDetailView: View {
         // Restore previous state
         restoreFromSnapshot(snapshot)
         hasAudioEdits = snapshot.audioFileURL != currentRecording.fileURL
+
+        // Reset silence highlight (ranges no longer valid after undo)
+        silenceMode = .idle
     }
 
     private func performRedo() {
@@ -783,10 +954,16 @@ struct RecordingDetailView: View {
         // Restore redo state
         restoreFromSnapshot(snapshot)
         hasAudioEdits = snapshot.audioFileURL != currentRecording.fileURL
+
+        // Reset silence highlight (ranges no longer valid after redo)
+        silenceMode = .idle
     }
 
     private func performTrim() {
         guard canPerformTrim else { return }
+
+        // Reset silence highlight (ranges invalidated by edit)
+        silenceMode = .idle
 
         // Push current state to undo stack before making changes
         let undoSnapshot = createUndoSnapshot(description: "Trim")
@@ -833,6 +1010,9 @@ struct RecordingDetailView: View {
     private func performCut() {
         guard canPerformCut else { return }
 
+        // Reset silence highlight (ranges invalidated by edit)
+        silenceMode = .idle
+
         // Push current state to undo stack before making changes
         let undoSnapshot = createUndoSnapshot(description: "Cut")
         editHistory.pushUndo(undoSnapshot)
@@ -875,6 +1055,129 @@ struct RecordingDetailView: View {
         }
     }
 
+    // MARK: - 2-Step Silence Removal
+
+    /// Step 1: Highlight silent parts (detect and show red overlay)
+    private func highlightSilentParts() {
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            // Detect silence ranges (minimum 0.5s, threshold -40dB)
+            let silenceRanges = try? await AudioWaveformExtractor.shared.detectSilence(
+                from: sourceURL,
+                threshold: -40.0,
+                minDuration: 0.5
+            )
+
+            await MainActor.run {
+                if let ranges = silenceRanges, !ranges.isEmpty {
+                    // Wrap ranges in SelectableSilenceRange (all selected by default)
+                    let selectableRanges = ranges.map { SelectableSilenceRange(range: $0, isSelected: true) }
+                    silenceMode = .highlighted(selectableRanges)
+
+                    // Calculate total silence duration for feedback
+                    let totalSilence = ranges.reduce(0) { $0 + $1.duration }
+                    let totalSeconds = String(format: "%.1f", totalSilence)
+                    skipSilenceResultMessage = "Found \(ranges.count) silent sections (\(totalSeconds)s) — tap to deselect"
+                    showSkipSilenceResult = true
+                } else {
+                    skipSilenceResultMessage = "No silences ≥ 0.5s found"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    /// Toggle selection of a specific silence range
+    private func toggleSilenceRange(id: UUID) {
+        guard case .highlighted(var ranges) = silenceMode else { return }
+        if let index = ranges.firstIndex(where: { $0.id == id }) {
+            ranges[index].isSelected.toggle()
+            silenceMode = .highlighted(ranges)
+        }
+    }
+
+    /// Step 2: Remove the highlighted silent parts
+    private func removeSilentParts() {
+        guard case .highlighted(let selectableRanges) = silenceMode else {
+            silenceMode = .idle
+            return
+        }
+
+        // Filter to only selected ranges
+        let selectedRanges = selectableRanges.filter { $0.isSelected }.map { $0.range }
+
+        guard !selectedRanges.isEmpty else {
+            skipSilenceResultMessage = "No silent sections selected"
+            showSkipSilenceResult = true
+            silenceMode = .idle
+            return
+        }
+
+        // Push current state to undo stack before making changes
+        let undoSnapshot = createUndoSnapshot(description: "Remove Silent Parts")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            // Remove only the selected silence ranges with padding
+            let result = await AudioEditor.shared.removeMultipleSilenceRanges(
+                sourceURL: sourceURL,
+                silenceRanges: selectedRanges,
+                padding: 0.05  // 50ms padding on each side
+            )
+
+            await MainActor.run {
+                if result.success {
+                    // Remap markers to new timeline (accounting for removed silence)
+                    editedMarkers = editedMarkers.afterRemovingSilence(ranges: selectedRanges, padding: 0.05)
+
+                    // Store pending edit
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+
+                    // Reload waveform for new file
+                    reloadWaveformForPendingEdit()
+
+                    // Reset selection to full duration
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+
+                    // Clamp playhead
+                    editPlayheadPosition = min(editPlayheadPosition, result.newDuration)
+
+                    // Reload playback
+                    playback.load(url: result.outputURL)
+
+                    // Show success message
+                    let removedSeconds = String(format: "%.1f", result.removedDuration)
+                    skipSilenceResultMessage = "Removed \(result.removedRangesCount) silent sections (\(removedSeconds)s)"
+                    showSkipSilenceResult = true
+                } else {
+                    skipSilenceResultMessage = "Failed to remove silence"
+                    showSkipSilenceResult = true
+                }
+
+                // Reset silence mode back to idle
+                silenceMode = .idle
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    /// Get currently highlighted silence ranges (for overlay rendering)
+    private var highlightedSilenceRanges: [SelectableSilenceRange] {
+        if case .highlighted(let ranges) = silenceMode {
+            return ranges
+        }
+        return []
+    }
+
     private func addMarkerAtPlayhead() {
         // Marker placement uses the edit playhead position (tap-to-set cursor)
         // The editPlayheadPosition is controlled by:
@@ -886,15 +1189,12 @@ struct RecordingDetailView: View {
         // The playhead position is already quantized to 0.01s in all input sources,
         // so we use it directly without re-quantization.
 
+        // Push current state to undo stack before adding marker
+        let undoSnapshot = createUndoSnapshot(description: "Add Marker")
+        editHistory.pushUndo(undoSnapshot)
+
         let duration = pendingDuration ?? playback.duration
         let markerTime = Swift.max(0, Swift.min(editPlayheadPosition, duration))
-
-        // DEBUG: Log marker placement values (remove after verification)
-        print("📍 ADD MARKER DEBUG:")
-        print("   playheadPosition: \(editPlayheadPosition)")
-        print("   selectionStart: \(selectionStart)")
-        print("   selectionEnd: \(selectionEnd)")
-        print("   markerTime: \(markerTime)")
 
         let newMarker = Marker(time: markerTime)
         editedMarkers.append(newMarker)
@@ -939,7 +1239,7 @@ struct RecordingDetailView: View {
 
     private var inlineVersionRecorder: some View {
         VStack(spacing: 0) {
-            if inlineRecorderState == .idle {
+            if !appState.recorder.isActive {
                 // Idle state: Compact "Record New Version" button
                 inlineRecorderIdleButton
             } else {
@@ -948,27 +1248,75 @@ struct RecordingDetailView: View {
             }
         }
         .padding(.top, 8)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: inlineRecorderState)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: appState.recorder.recordingState)
     }
 
     private var inlineRecorderIdleButton: some View {
-        Button {
-            startInlineRecording()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "mic.circle.fill")
-                    .font(.system(size: 20))
-                Text("Record New Version")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+        HStack(spacing: 12) {
+            // Record New Version button
+            Button {
+                startInlineRecording()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.circle.fill")
+                        .font(.system(size: 18))
+                    Text("New Version")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(palette.accent)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(palette.accent.opacity(0.12))
+                .cornerRadius(12)
             }
-            .foregroundColor(palette.accent)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .background(palette.accent.opacity(0.12))
-            .cornerRadius(12)
+
+            // Record Over Track button
+            Button {
+                handleRecordOverTrack()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 16))
+                    Text("Overdub")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(palette.textPrimary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(palette.surface)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
+                )
+            }
+            .disabled(!canAddOverdubLayer)
+            .opacity(canAddOverdubLayer ? 1.0 : 0.5)
         }
+    }
+
+    /// Whether we can add an overdub layer to this recording
+    private var canAddOverdubLayer: Bool {
+        appState.canAddOverdubLayer(to: currentRecording)
+    }
+
+    /// Handle Record Over Track button tap
+    private func handleRecordOverTrack() {
+        // Check headphones first
+        guard AudioSessionManager.shared.isHeadphoneMonitoringActive() else {
+            showHeadphonesRequiredAlert = true
+            return
+        }
+
+        // Stop any current playback
+        playback.stop()
+
+        // Show overdub session
+        showOverdubSession = true
     }
 
     private var inlineRecorderExpandedCard: some View {
@@ -992,10 +1340,10 @@ struct RecordingDetailView: View {
             // Compact waveform
             LiveWaveformView(
                 samples: appState.recorder.liveMeterSamples,
-                accentColor: inlineRecorderState == .paused ? palette.textSecondary : palette.accent
+                accentColor: appState.recorder.isPaused ? palette.textSecondary : palette.accent
             )
             .frame(height: 50)
-            .opacity(inlineRecorderState == .paused ? 0.5 : 1.0)
+            .opacity(appState.recorder.isPaused ? 0.5 : 1.0)
 
             // Control buttons
             HStack(spacing: 16) {
@@ -1019,7 +1367,7 @@ struct RecordingDetailView: View {
                 Button {
                     toggleInlineRecordingPause()
                 } label: {
-                    Image(systemName: inlineRecorderState == .paused ? "play.fill" : "pause.fill")
+                    Image(systemName: appState.recorder.isPaused ? "play.fill" : "pause.fill")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(width: 44, height: 44)
@@ -1060,41 +1408,27 @@ struct RecordingDetailView: View {
     private func startInlineRecording() {
         // Stop playback before recording
         playback.stop()
-        // Start recording
+        // Start recording - UI updates automatically via @Observable
         appState.recorder.startRecording()
-        // Update state
-        withAnimation {
-            inlineRecorderState = .recording
-        }
     }
 
     private func toggleInlineRecordingPause() {
-        if inlineRecorderState == .recording {
+        // Toggle based on actual recorder state - UI updates automatically
+        if appState.recorder.isRecording {
             appState.recorder.pauseRecording()
-            withAnimation {
-                inlineRecorderState = .paused
-            }
-        } else if inlineRecorderState == .paused {
+        } else if appState.recorder.isPaused {
             appState.recorder.resumeRecording()
-            withAnimation {
-                inlineRecorderState = .recording
-            }
         }
     }
 
     private func cancelInlineRecording() {
-        // Stop and discard the recording
+        // Stop and discard the recording - UI updates automatically via @Observable
         _ = appState.recorder.stopRecording()
-        withAnimation {
-            inlineRecorderState = .idle
-        }
     }
 
     private func stopAndSaveInlineRecording() {
+        // Stop recording - UI updates automatically via @Observable
         guard let rawData = appState.recorder.stopRecording() else {
-            withAnimation {
-                inlineRecorderState = .idle
-            }
             return
         }
 
@@ -1115,9 +1449,6 @@ struct RecordingDetailView: View {
 
         // The newly added recording is at index 0
         guard let newRecording = appState.recordings.first else {
-            withAnimation {
-                inlineRecorderState = .idle
-            }
             return
         }
 
@@ -1130,11 +1461,6 @@ struct RecordingDetailView: View {
         // Haptic feedback
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
-
-        // Reset state and show toast
-        withAnimation {
-            inlineRecorderState = .idle
-        }
 
         savedVersionLabel = versionLabel
         refreshRecording()
@@ -1191,88 +1517,115 @@ struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 24) {
 
             // ═══════════════════════════════════════════════════════════════
-            // DETAILS CARD - Title, Album, Project, Tags in ONE unified card
+            // DETAILS - Premium iOS Card Layout
             // ═══════════════════════════════════════════════════════════════
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Details")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(palette.textSecondary)
-                    .textCase(.uppercase)
-                    .padding(.bottom, 2)
 
-                MetadataCard {
-                    // Row 1: Title
-                    CardRow(showDivider: true) {
+            // Section Header
+            Text("DETAILS")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(palette.textSecondary.opacity(0.7))
+                .padding(.bottom, 4)
+
+            // Card 1: Title, Album, Project
+            MetadataCard {
+                // Row 1: Title
+                PickerRow(
+                    label: "TITLE",
+                    value: editedTitle.isEmpty ? "Untitled" : editedTitle,
+                    showDivider: true
+                ) {
+                    // Title editing handled by inline TextField approach
+                    // For now, we keep the title editable inline
+                }
+                .overlay(
+                    // Overlay a text field for inline editing
+                    HStack {
+                        Spacer().frame(width: CardStyle.horizontalPadding)
                         VStack(alignment: .leading, spacing: 4) {
+                            Spacer().frame(height: CardStyle.verticalPadding + 2)
                             Text("TITLE")
-                                .font(.caption2)
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(palette.textTertiary)
-                                .textCase(.uppercase)
                             TextField("Recording title", text: $editedTitle)
                                 .textFieldStyle(.plain)
-                                .font(.body)
+                                .font(.system(size: 16))
                                 .foregroundColor(palette.textPrimary)
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    // Row 2: Album
-                    CardRow(showDivider: true, action: { showChooseAlbum = true }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("ALBUM")
-                                .font(.caption2)
-                                .foregroundColor(palette.textTertiary)
-                                .textCase(.uppercase)
-                            Text(appState.album(for: currentRecording.albumID)?.name ?? "None")
-                                .font(.body)
-                                .foregroundColor(appState.album(for: currentRecording.albumID) != nil ? palette.textPrimary : palette.textSecondary)
+                            Spacer().frame(height: CardStyle.verticalPadding)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(palette.textTertiary)
                     }
+                )
 
-                    // Row 3: Project
-                    projectCardRow
+                // Row 2: Album
+                PickerRow(
+                    label: "ALBUM",
+                    value: appState.album(for: currentRecording.albumID)?.name ?? "None",
+                    valueColor: appState.album(for: currentRecording.albumID) != nil ? palette.textPrimary : palette.textSecondary,
+                    showDivider: true,
+                    action: { showChooseAlbum = true }
+                )
 
-                    // Row 4: Tags
-                    CardRow(showDivider: false) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("TAGS")
-                                    .font(.caption2)
-                                    .foregroundColor(palette.textTertiary)
-                                    .textCase(.uppercase)
-                                Spacer()
-                                Button("Manage") {
-                                    showManageTags = true
-                                }
-                                .font(.caption)
-                                .foregroundColor(palette.accent)
-                            }
+                // Row 3: Project
+                PickerRow(
+                    label: "PROJECT",
+                    value: projectDisplayValue,
+                    valueColor: currentRecording.belongsToProject ? palette.textPrimary : palette.textSecondary,
+                    accessory: projectAccessory,
+                    showDivider: false,
+                    action: { showProjectActionSheet = true }
+                )
+            }
 
-                            if appState.tags.isEmpty {
-                                Text("No tags")
-                                    .font(.subheadline)
-                                    .foregroundColor(palette.textSecondary)
-                            } else {
-                                FlowLayout(spacing: 8) {
-                                    ForEach(appState.tags) { tag in
-                                        TagChipSelectable(
-                                            tag: tag,
-                                            isSelected: currentRecording.tagIDs.contains(tag.id)
-                                        ) {
-                                            currentRecording = appState.toggleTag(tag, for: currentRecording)
-                                        }
+            // Card 2: Tags with inline chips
+            VStack(alignment: .leading, spacing: 8) {
+                // Header row: TAGS label + Manage button
+                HStack {
+                    Text("TAGS")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(palette.textSecondary.opacity(0.7))
+
+                    Spacer()
+
+                    Button("Manage") {
+                        showManageTags = true
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(palette.accent)
+                }
+
+                // Tag chips or "None"
+                MetadataCard {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if appState.tags.isEmpty {
+                            // No tags exist at all
+                            Text("None")
+                                .font(.system(size: 15))
+                                .foregroundColor(palette.textSecondary)
+                                .padding(.horizontal, CardStyle.horizontalPadding)
+                                .padding(.vertical, CardStyle.verticalPadding)
+                        } else {
+                            // Show tag chips (sorted by createdAt, limited to ~2 lines)
+                            FlowLayout(spacing: 8) {
+                                ForEach(tagsOrderedByCreation.prefix(12)) { tag in
+                                    TagChipSelectable(
+                                        tag: tag,
+                                        isSelected: currentRecording.tagIDs.contains(tag.id)
+                                    ) {
+                                        currentRecording = appState.toggleTag(tag, for: currentRecording)
                                     }
                                 }
                             }
+                            .padding(.horizontal, CardStyle.horizontalPadding)
+                            .padding(.vertical, 12)
                         }
                     }
                 }
+            }
+            .padding(.top, 12)
+
+            // Overdub Group Section (only shown if recording is part of an overdub)
+            if currentRecording.isPartOfOverdub {
+                overdubGroupSection
             }
 
             // Location Section
@@ -1289,140 +1642,113 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: - Project Card Row (inside Details card)
+    // MARK: - Details Card Computed Properties
+
+    /// Display value for Project row
+    private var projectDisplayValue: String {
+        if currentRecording.belongsToProject,
+           let project = appState.project(for: currentRecording.projectId) {
+            return project.title
+        }
+        return "None"
+    }
+
+    /// Custom accessory view for Project row (shows version badge if in project)
+    private var projectAccessory: AnyView? {
+        guard currentRecording.belongsToProject,
+              let project = appState.project(for: currentRecording.projectId) else {
+            return nil
+        }
+
+        return AnyView(
+            HStack(spacing: 8) {
+                Text(project.title)
+                    .font(.system(size: 16))
+                    .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
+
+                Text(currentRecording.versionLabel)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(palette.accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(palette.accent.opacity(0.15))
+                    .cornerRadius(4)
+
+                if project.bestTakeRecordingId == currentRecording.id {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.yellow)
+                }
+            }
+        )
+    }
+
+    /// Tags in creation order (array order - new tags are appended)
+    private var tagsOrderedByCreation: [Tag] {
+        appState.tags  // Array order reflects creation order
+    }
+
+    // MARK: - Overdub Group Section
 
     @ViewBuilder
-    private var projectCardRow: some View {
-        CardRow(showDivider: true) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("PROJECT")
-                    .font(.caption2)
-                    .foregroundColor(palette.textTertiary)
-                    .textCase(.uppercase)
+    private var overdubGroupSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Header
+            Text("OVERDUB GROUP")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(palette.textSecondary.opacity(0.7))
 
-                if currentRecording.belongsToProject {
-                    // Recording is part of a project - show project info
-                    if let project = appState.project(for: currentRecording.projectId) {
-                        Button {
-                            if isOpenedFromProject {
-                                if hasEdits { saveChanges() }
-                                dismiss()
-                            } else {
-                                showProjectSheet = true
+            // Card with all overdub members
+            MetadataCard {
+                VStack(spacing: 0) {
+                    if let group = appState.overdubGroup(for: currentRecording) {
+                        // Base recording row
+                        if let baseRecording = appState.recordings.first(where: { $0.id == group.baseRecordingId }) {
+                            OverdubMemberRow(
+                                recording: baseRecording,
+                                role: "Base",
+                                isCurrent: baseRecording.id == currentRecording.id,
+                                showDivider: !group.layerRecordingIds.isEmpty,
+                                palette: palette
+                            ) {
+                                if baseRecording.id != currentRecording.id {
+                                    navigateToRecording(baseRecording)
+                                }
                             }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "folder.fill")
-                                    .foregroundColor(palette.accent)
-                                    .frame(width: 20)
+                        }
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 6) {
-                                        Text(project.title)
-                                            .font(.subheadline)
-                                            .foregroundColor(palette.textPrimary)
-                                            .lineLimit(1)
-
-                                        Text(currentRecording.versionLabel)
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(palette.accent)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 2)
-                                            .background(palette.accent.opacity(0.15))
-                                            .cornerRadius(4)
-
-                                        if project.bestTakeRecordingId == currentRecording.id {
-                                            Image(systemName: "star.fill")
-                                                .font(.caption2)
-                                                .foregroundColor(.yellow)
-                                        }
+                        // Layer rows
+                        ForEach(Array(group.layerRecordingIds.enumerated()), id: \.element) { index, layerId in
+                            if let layerRecording = appState.recordings.first(where: { $0.id == layerId }) {
+                                OverdubMemberRow(
+                                    recording: layerRecording,
+                                    role: "Layer \(index + 1)",
+                                    isCurrent: layerRecording.id == currentRecording.id,
+                                    showDivider: index < group.layerRecordingIds.count - 1,
+                                    palette: palette
+                                ) {
+                                    if layerRecording.id != currentRecording.id {
+                                        navigateToRecording(layerRecording)
                                     }
-
-                                    Text("\(appState.recordingCount(in: project)) versions")
-                                        .font(.caption)
-                                        .foregroundColor(palette.textSecondary)
-                                }
-
-                                Spacer()
-
-                                if isOpenedFromProject {
-                                    Text("Back")
-                                        .font(.caption)
-                                        .foregroundColor(palette.accent)
-                                } else {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(palette.textTertiary)
                                 }
                             }
-                            .padding(10)
-                            .background(palette.background.opacity(0.5))
-                            .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-
-                        // Remove from project (only if not opened from project)
-                        if !isOpenedFromProject {
-                            Button(role: .destructive) {
-                                appState.removeFromProject(recording: currentRecording)
-                                refreshRecording()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "folder.badge.minus")
-                                    Text("Remove from Project")
-                                }
-                                .font(.caption)
-                                .foregroundColor(.red)
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
-                } else {
-                    // Not in a project - show action buttons
-                    HStack(spacing: 10) {
-                        Button {
-                            showCreateProject = true
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "folder.badge.plus")
-                                    .font(.subheadline)
-                                Text("Create")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                            }
-                            .foregroundColor(palette.accent)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(palette.accent.opacity(0.12))
-                            .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-
-                        if !appState.projects.isEmpty {
-                            Button {
-                                showChooseProject = true
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "folder")
-                                        .font(.subheadline)
-                                    Text("Add to...")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                }
-                                .foregroundColor(palette.textPrimary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(palette.background.opacity(0.5))
-                                .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
             }
         }
+        .padding(.top, 12)
+    }
+
+    /// Navigate to another recording in the overdub group
+    private func navigateToRecording(_ recording: RecordingItem) {
+        // Update the current recording to show the selected one
+        currentRecording = recording
+        editedTitle = recording.title
+        // Reset playback state
+        playback.stop()
+        playback.load(url: recording.fileURL)
     }
 
     // MARK: - Transcription Section
@@ -1515,33 +1841,31 @@ struct RecordingDetailView: View {
     // MARK: - Footer Section (File size + Verification)
 
     private var footerSection: some View {
-        VStack(spacing: 12) {
-            // File size (subtle, at bottom)
-            HStack {
-                Spacer()
-                Text(currentRecording.fileSizeFormatted)
-                    .font(.caption)
-                    .foregroundColor(palette.textTertiary)
-            }
+        HStack(alignment: .center, spacing: 8) {
+            // File size (LEFT)
+            Text(currentRecording.fileSizeFormatted)
+                .font(.footnote)
+                .foregroundColor(palette.textTertiary)
 
-            // Verification status row
-            HStack {
-                Spacer()
+            Spacer(minLength: 0)
 
-                Text(verificationStatusText)
-                    .font(.caption)
-                    .foregroundColor(verificationStatusColor)
+            // Verification status (RIGHT)
+            Button {
+                verificationSheetItem = IdentifiableUUID(id: currentRecording.id)
+            } label: {
+                HStack(spacing: 5) {
+                    Text(verificationStatusText)
+                        .font(.footnote)
+                        .foregroundColor(verificationStatusColor)
 
-                Button {
-                    verificationSheetItem = IdentifiableUUID(id: currentRecording.id)
-                } label: {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 16))
+                        .font(.system(size: 14))
                         .foregroundColor(palette.textTertiary)
                 }
             }
+            .buttonStyle(.plain)
         }
-        .padding(.top, 8)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Verification Status (Date-only, independent from location)
@@ -1737,6 +2061,10 @@ struct RecordingDetailView: View {
         if iconColorWasModified {
             updated.iconColorHex = editedIconColor.toHex()
         }
+        // Only update iconName if user explicitly changed it via IconPicker
+        if iconWasModified {
+            updated.iconName = editedIcon.rawValue
+        }
         // Otherwise preserve the original iconColorHex (already in currentRecording)
         updated.eqSettings = localEQSettings
         updated.markers = editedMarkers
@@ -1766,6 +2094,7 @@ struct RecordingDetailView: View {
                 trashedAt: updated.trashedAt,
                 lastPlaybackPosition: 0,  // Reset playback position after edit
                 iconColorHex: updated.iconColorHex,
+                iconName: updated.iconName,
                 eqSettings: updated.eqSettings,
                 projectId: updated.projectId,
                 parentRecordingId: updated.parentRecordingId,
@@ -2474,6 +2803,82 @@ struct IconColorPickerSheet: View {
     }
 }
 
+// MARK: - Icon Picker Sheet
+
+struct IconPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    @Binding var selectedIcon: PresetIcon
+    let tintColor: Color
+    let onIconChanged: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                VStack(spacing: 24) {
+                    // Current icon preview
+                    HStack {
+                        Text("Selected Icon")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        Image(systemName: selectedIcon.systemName)
+                            .font(.system(size: 28))
+                            .foregroundColor(tintColor)
+                            .frame(width: 44, height: 44)
+                            .background(tintColor.opacity(0.15))
+                            .cornerRadius(8)
+                    }
+                    .padding(.horizontal)
+
+                    // Icon grid (3 rows of 5)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+                        ForEach(PresetIcon.allCases, id: \.self) { icon in
+                            Button {
+                                selectedIcon = icon
+                                onIconChanged()
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(systemName: icon.systemName)
+                                        .font(.system(size: 24))
+                                        .foregroundColor(selectedIcon == icon ? .white : tintColor)
+                                        .frame(width: 48, height: 48)
+                                        .background(selectedIcon == icon ? tintColor : tintColor.opacity(0.15))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(selectedIcon == icon ? tintColor : Color.clear, lineWidth: 2)
+                                        )
+
+                                    Text(icon.displayName)
+                                        .font(.caption2)
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    Spacer()
+                }
+                .padding(.top, 24)
+            }
+            .navigationTitle("Choose Icon")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Tag Chip Selectable
 
 struct TagChipSelectable: View {
@@ -2544,12 +2949,12 @@ struct FlowLayout: Layout {
 
 /// Constants for consistent card styling
 private enum CardStyle {
-    static let cornerRadius: CGFloat = 12
+    static let cornerRadius: CGFloat = 14
     static let horizontalPadding: CGFloat = 16
     static let verticalPadding: CGFloat = 14
     static let rowSpacing: CGFloat = 0  // Rows use dividers, not spacing
-    static let dividerOpacity: Double = 0.15
-    static let headerBottomPadding: CGFloat = 6
+    static let dividerOpacity: Double = 0.12
+    static let headerBottomPadding: CGFloat = 8
 }
 
 /// A container card with rounded background - used for grouping related metadata rows
@@ -2644,6 +3049,137 @@ struct CardSectionHeader: View {
             }
         }
         .padding(.bottom, CardStyle.headerBottomPadding)
+    }
+}
+
+/// Premium iOS-style picker row - label above, value below, chevron on right
+struct PickerRow: View {
+    @Environment(\.themePalette) private var palette
+    let label: String
+    let value: String
+    var valueColor: Color?
+    var accessory: AnyView?
+    let showDivider: Bool
+    let action: (() -> Void)?
+
+    init(
+        label: String,
+        value: String,
+        valueColor: Color? = nil,
+        accessory: AnyView? = nil,
+        showDivider: Bool = true,
+        action: (() -> Void)? = nil
+    ) {
+        self.label = label
+        self.value = value
+        self.valueColor = valueColor
+        self.accessory = accessory
+        self.showDivider = showDivider
+        self.action = action
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button(action: { action?() }) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(palette.textTertiary)
+
+                        if let accessory = accessory {
+                            accessory
+                        } else {
+                            Text(value)
+                                .font(.system(size: 16))
+                                .foregroundColor(valueColor ?? palette.textPrimary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(palette.textTertiary.opacity(0.6))
+                }
+                .padding(.horizontal, CardStyle.horizontalPadding)
+                .padding(.vertical, CardStyle.verticalPadding)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showDivider {
+                Rectangle()
+                    .fill(palette.textSecondary.opacity(CardStyle.dividerOpacity))
+                    .frame(height: 0.5)
+                    .padding(.leading, CardStyle.horizontalPadding)
+            }
+        }
+    }
+}
+
+/// Row for displaying an overdub group member (base or layer)
+struct OverdubMemberRow: View {
+    let recording: RecordingItem
+    let role: String
+    let isCurrent: Bool
+    let showDivider: Bool
+    let palette: ThemePalette
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    // Role badge
+                    Text(role.uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(isCurrent ? .white : palette.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(isCurrent ? palette.accent : palette.accent.opacity(0.15))
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(recording.title.isEmpty ? "Untitled" : recording.title)
+                            .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+
+                        Text(recording.formattedDuration)
+                            .font(.system(size: 12))
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    Spacer()
+
+                    if isCurrent {
+                        Text("Current")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(palette.textSecondary)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(palette.textTertiary.opacity(0.6))
+                    }
+                }
+                .padding(.horizontal, CardStyle.horizontalPadding)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isCurrent)
+
+            if showDivider {
+                Rectangle()
+                    .fill(palette.textSecondary.opacity(CardStyle.dividerOpacity))
+                    .frame(height: 0.5)
+                    .padding(.leading, CardStyle.horizontalPadding)
+            }
+        }
     }
 }
 

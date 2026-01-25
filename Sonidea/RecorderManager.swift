@@ -5,6 +5,7 @@
 //  Created by Michael Ramos on 1/22/26.
 //
 
+import AudioToolbox
 import AVFoundation
 import CoreLocation
 import Foundation
@@ -49,6 +50,15 @@ final class RecorderManager: NSObject {
     var isPaused: Bool { recordingState == .paused }
     var isActive: Bool { recordingState.isActive }
 
+    // MARK: - AVAudioEngine-based Recording (for Gain + Limiter)
+
+    private var audioEngine: AVAudioEngine?
+    private var gainMixerNode: AVAudioMixerNode?
+    private var limiterNode: AVAudioUnitEffect?
+    private var audioFile: AVAudioFile?
+    private var isUsingEngine = false  // Track which recording method is in use
+
+    // Legacy AVAudioRecorder (fallback when no gain/limiter needed)
     private var audioRecorder: AVAudioRecorder?
     private var timer: Timer?
     private var currentFileURL: URL?
@@ -66,6 +76,52 @@ final class RecorderManager: NSObject {
 
     // Callback for when recording should be stopped and saved (from Live Activity)
     var onStopAndSaveRequested: (() -> Void)?
+
+    // MARK: - Live Gain/Limiter Control
+
+    /// Current input settings (gain + limiter) - can be updated during recording
+    var inputSettings: RecordingInputSettings {
+        get { appSettings.recordingInputSettings }
+        set {
+            appSettings.recordingInputSettings = newValue
+            applyInputSettings()
+        }
+    }
+
+    /// Apply current input settings to the audio engine (live update)
+    private func applyInputSettings() {
+        guard isUsingEngine else { return }
+
+        // Apply gain: convert dB to linear
+        // dB = 20 * log10(linear), so linear = 10^(dB/20)
+        let gainLinear = pow(10, inputSettings.gainDb / 20.0)
+        gainMixerNode?.outputVolume = gainLinear
+
+        // Apply limiter settings via AudioUnit parameters
+        if let limiter = limiterNode {
+            let audioUnit = limiter.audioUnit
+            if inputSettings.limiterEnabled {
+                // Configure dynamics processor as a limiter
+                // kDynamicsProcessorParam_Threshold: dB level above which compression starts
+                // kDynamicsProcessorParam_HeadRoom: dB above threshold before hard limiting
+                // kDynamicsProcessorParam_ExpansionRatio: 1.0 = no expansion
+                // kDynamicsProcessorParam_AttackTime: seconds
+                // kDynamicsProcessorParam_ReleaseTime: seconds
+                // kDynamicsProcessorParam_CompressionAmount: read-only output
+
+                let threshold = inputSettings.limiterCeilingDb
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, threshold, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 0.1, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ExpansionRatio, kAudioUnitScope_Global, 0, 1.0, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.001, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.05, 0)
+            } else {
+                // Bypass by setting threshold to 0 dB with large headroom
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 0, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 40, 0)
+            }
+        }
+    }
 
     override init() {
         super.init()
@@ -168,7 +224,10 @@ final class RecorderManager: NSObject {
             Task { @MainActor in
                 // Route changed - keep recording stable if possible
                 // The recording will continue with whatever input is available
-                self?.audioRecorder?.updateMeters()
+                if self?.isUsingEngine == false {
+                    self?.audioRecorder?.updateMeters()
+                }
+                // Engine-based recording handles route changes automatically
             }
         }
 
@@ -205,6 +264,20 @@ final class RecorderManager: NSObject {
         let fileURL = generateFileURL(for: qualityPreset)
         currentFileURL = fileURL
 
+        // Decide which recording method to use:
+        // Use AVAudioEngine if gain/limiter are active, otherwise use AVAudioRecorder (simpler)
+        let needsEngine = !inputSettings.isDefault
+        isUsingEngine = needsEngine
+
+        if needsEngine {
+            startEngineRecording(fileURL: fileURL)
+        } else {
+            startSimpleRecording(fileURL: fileURL)
+        }
+    }
+
+    /// Start recording using AVAudioRecorder (no gain/limiter processing)
+    private func startSimpleRecording(fileURL: URL) {
         let settings = recordingSettings(for: qualityPreset)
 
         do {
@@ -234,10 +307,189 @@ final class RecorderManager: NSObject {
         }
     }
 
+    /// Start recording using AVAudioEngine with gain and limiter nodes
+    private func startEngineRecording(fileURL: URL) {
+        do {
+            // Create audio engine
+            let engine = AVAudioEngine()
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+
+            // Create gain mixer node
+            let gainMixer = AVAudioMixerNode()
+            engine.attach(gainMixer)
+
+            // Create limiter node (dynamics processor configured as limiter)
+            let limiterDesc = AudioComponentDescription(
+                componentType: kAudioUnitType_Effect,
+                componentSubType: kAudioUnitSubType_DynamicsProcessor,
+                componentManufacturer: kAudioUnitManufacturer_Apple,
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
+            let limiter = AVAudioUnitEffect(audioComponentDescription: limiterDesc)
+            engine.attach(limiter)
+
+            // Connect: Input → Gain Mixer → Limiter
+            engine.connect(inputNode, to: gainMixer, format: inputFormat)
+            engine.connect(gainMixer, to: limiter, format: inputFormat)
+
+            // Determine output format for file
+            let outputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
+
+            // Create output audio file
+            let file = try AVAudioFile(
+                forWriting: fileURL,
+                settings: engineFileSettings(for: qualityPreset),
+                commonFormat: outputFormat.commonFormat,
+                interleaved: outputFormat.isInterleaved
+            )
+
+            // Install tap on limiter output to write to file
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: outputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+                do {
+                    try file.write(from: buffer)
+                } catch {
+                    print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                }
+
+                // Update meter samples on main thread
+                Task { @MainActor in
+                    self?.updateMeterFromBuffer(buffer)
+                }
+            }
+
+            // Store references
+            self.audioEngine = engine
+            self.gainMixerNode = gainMixer
+            self.limiterNode = limiter
+            self.audioFile = file
+
+            // Apply current input settings
+            applyInputSettings()
+
+            // Start the engine
+            try engine.start()
+
+            recordingState = .recording
+            let startDate = Date()
+            segmentStartTime = startDate
+            recordingStartDate = startDate
+            accumulatedDuration = 0
+            currentDuration = 0
+            liveMeterSamples = []
+            startTimer()
+
+            // Track in-progress recording for crash recovery
+            markRecordingInProgress(fileURL)
+
+            // Start Live Activity
+            currentRecordingId = UUID().uuidString
+            RecordingLiveActivityManager.shared.startActivity(
+                recordingId: currentRecordingId!,
+                startDate: startDate
+            )
+
+            print("🎙️ [RecorderManager] Started engine recording with gain: \(inputSettings.gainDb) dB, limiter: \(inputSettings.limiterEnabled ? "ON" : "OFF")")
+        } catch {
+            print("❌ [RecorderManager] Failed to start engine recording: \(error)")
+            // Fallback to simple recording
+            isUsingEngine = false
+            startSimpleRecording(fileURL: fileURL)
+        }
+    }
+
+    /// Get output format for engine recording
+    private func engineOutputFormat(for preset: RecordingQualityPreset, inputFormat: AVAudioFormat) -> AVAudioFormat {
+        let sampleRate = min(Double(inputFormat.sampleRate), preset.sampleRate)
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        ) ?? inputFormat
+    }
+
+    /// Get file settings for engine recording
+    private func engineFileSettings(for preset: RecordingQualityPreset) -> [String: Any] {
+        let effectiveSampleRate = AudioSessionManager.shared.actualSampleRate
+
+        switch preset {
+        case .standard:
+            return [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: min(effectiveSampleRate, 44100),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 128000,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+        case .high:
+            return [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 256000,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+        case .lossless:
+            return [
+                AVFormatIDKey: Int(kAudioFormatAppleLossless),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitDepthHintKey: 16,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+        case .wav:
+            return [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+        }
+    }
+
+    /// Update meter samples from audio buffer (for engine recording)
+    private func updateMeterFromBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData else { return }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return }
+
+        // Calculate RMS level
+        var sum: Float = 0
+        for i in 0..<frameLength {
+            let sample = channelData[0][i]
+            sum += sample * sample
+        }
+        let rms = sqrt(sum / Float(frameLength))
+
+        // Convert to dB and normalize
+        let dB = 20 * log10(max(rms, 0.000001))
+        let minDB: Float = -50
+        let maxDB: Float = 0
+        let clampedDB = max(minDB, min(maxDB, dB))
+        let normalized = (clampedDB - minDB) / (maxDB - minDB)
+
+        // Update samples on main actor
+        liveMeterSamples.append(normalized)
+        if liveMeterSamples.count > maxLiveSamples {
+            liveMeterSamples.removeFirst()
+        }
+    }
+
     /// Stop recording and return raw data for saving
     func stopRecording() -> RawRecordingData? {
-        guard recordingState.isActive, let recorder = audioRecorder, let fileURL = currentFileURL else {
+        guard recordingState.isActive, let fileURL = currentFileURL else {
             print("⚠️ [RecorderManager] stopRecording called but no active recording")
+            return nil
+        }
+
+        // Verify we have either engine or recorder
+        guard isUsingEngine ? (audioEngine != nil) : (audioRecorder != nil) else {
+            print("⚠️ [RecorderManager] stopRecording called but no recorder/engine available")
             return nil
         }
 
@@ -248,8 +500,12 @@ final class RecorderManager: NSObject {
             accumulatedDuration += Date().timeIntervalSince(startTime)
         }
 
-        // Stop the recorder - this finalizes the file
-        recorder.stop()
+        // Stop based on which method is in use
+        if isUsingEngine {
+            stopEngineRecording()
+        } else {
+            audioRecorder?.stop()
+        }
         stopTimer()
 
         // CRITICAL: Verify the file was written successfully
@@ -311,9 +567,24 @@ final class RecorderManager: NSObject {
         )
     }
 
+    /// Stop the AVAudioEngine recording
+    private func stopEngineRecording() {
+        // Remove tap from limiter
+        limiterNode?.removeTap(onBus: 0)
+
+        // Stop the engine
+        audioEngine?.stop()
+
+        // Close the audio file (implicit on dealloc, but good to be explicit)
+        audioFile = nil
+    }
+
     /// Pause recording safely - flushes audio buffer to prevent data loss
     func pauseRecording() {
-        guard recordingState == .recording, let recorder = audioRecorder else { return }
+        guard recordingState == .recording else { return }
+
+        // Verify we have either engine or recorder
+        guard isUsingEngine ? (audioEngine != nil) : (audioRecorder != nil) else { return }
 
         // Accumulate duration from this segment
         if let startTime = segmentStartTime {
@@ -321,8 +592,16 @@ final class RecorderManager: NSObject {
         }
         segmentStartTime = nil
 
-        // Pause the recorder - this flushes the audio buffer to disk
-        recorder.pause()
+        // Pause based on which method is in use
+        if isUsingEngine {
+            // AVAudioEngine doesn't have a true pause, so we stop it
+            // Note: This means pause/resume with engine creates a new segment
+            audioEngine?.pause()
+        } else {
+            // Pause the recorder - this flushes the audio buffer to disk
+            audioRecorder?.pause()
+        }
+
         stopTimer()
         recordingState = .paused
 
@@ -335,9 +614,23 @@ final class RecorderManager: NSObject {
 
     /// Resume recording after pause
     func resumeRecording() {
-        guard recordingState == .paused, let recorder = audioRecorder else { return }
+        guard recordingState == .paused else { return }
 
-        recorder.record()
+        // Verify we have either engine or recorder
+        guard isUsingEngine ? (audioEngine != nil) : (audioRecorder != nil) else { return }
+
+        // Resume based on which method is in use
+        if isUsingEngine {
+            do {
+                try audioEngine?.start()
+            } catch {
+                print("❌ [RecorderManager] Failed to resume engine: \(error)")
+                return
+            }
+        } else {
+            audioRecorder?.record()
+        }
+
         segmentStartTime = Date()
         recordingState = .recording
         startTimer()
@@ -353,7 +646,12 @@ final class RecorderManager: NSObject {
     func discardRecording() {
         guard recordingState.isActive, let fileURL = currentFileURL else { return }
 
-        audioRecorder?.stop()
+        // Stop based on which method is in use
+        if isUsingEngine {
+            stopEngineRecording()
+        } else {
+            audioRecorder?.stop()
+        }
         stopTimer()
 
         // Delete the audio file
@@ -374,7 +672,17 @@ final class RecorderManager: NSObject {
         segmentStartTime = nil
         recordingStartDate = nil
         currentRecordingId = nil
+
+        // Clear AVAudioRecorder
         audioRecorder = nil
+
+        // Clear AVAudioEngine components
+        audioEngine = nil
+        gainMixerNode = nil
+        limiterNode = nil
+        audioFile = nil
+        isUsingEngine = false
+
         currentFileURL = nil
         liveMeterSamples = []
         wasRecordingBeforeInterruption = false
@@ -496,7 +804,8 @@ final class RecorderManager: NSObject {
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        // Use .common mode so timer continues during scroll tracking
+        let newTimer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self, self.recordingState == .recording else { return }
 
@@ -507,6 +816,8 @@ final class RecorderManager: NSObject {
                 self.updateMeterSamples()
             }
         }
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
     private func stopTimer() {

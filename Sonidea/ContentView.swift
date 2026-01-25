@@ -895,7 +895,9 @@ struct RecordingHUDCard: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
+    @Environment(AppState.self) private var appState
     @State private var isPulsing = false
+    @State private var showRecordingControls = false
 
     private var formattedDuration: String {
         let minutes = Int(duration) / 60
@@ -908,9 +910,14 @@ struct RecordingHUDCard: View {
         AudioSessionManager.shared.currentInput?.portName ?? "Built-in Microphone"
     }
 
+    /// Summary of non-default input settings
+    private var inputSettingsSummary: String? {
+        appState.appSettings.recordingInputSettings.summaryString
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header: Recording/Paused status + Timer
+            // Header: Recording/Paused status + Timer + Menu button
             HStack(alignment: .center) {
                 HStack(spacing: 10) {
                     if isPaused {
@@ -936,6 +943,19 @@ struct RecordingHUDCard: View {
 
                 Spacer()
 
+                // Hamburger menu button for Recording Controls
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    showRecordingControls = true
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(palette.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
                 Text(formattedDuration)
                     .font(.system(size: 34, weight: .medium, design: .monospaced))
                     .monospacedDigit()
@@ -944,7 +964,20 @@ struct RecordingHUDCard: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
-            .padding(.bottom, 16)
+            .padding(.bottom, inputSettingsSummary != nil ? 8 : 16)
+
+            // Compact summary line for non-default settings
+            if let summary = inputSettingsSummary {
+                HStack {
+                    Text(summary)
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
 
             // Waveform
             ZStack {
@@ -1005,6 +1038,11 @@ struct RecordingHUDCard: View {
         .onChange(of: isPaused) { _, paused in
             isPulsing = !paused
         }
+        .sheet(isPresented: $showRecordingControls) {
+            RecordingControlsSheet()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: - Recording Control Buttons
@@ -1054,6 +1092,206 @@ struct RecordingHUDCard: View {
                 }
             )
         }
+    }
+}
+
+// MARK: - Recording Controls Sheet (Gain + Limiter)
+
+struct RecordingControlsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+    @Environment(AppState.self) private var appState
+
+    // Local state that syncs with appState
+    @State private var gainDb: Float = 0
+    @State private var limiterEnabled: Bool = false
+    @State private var limiterCeilingDb: Float = -1
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                // MARK: - Gain Section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Gain")
+                            .font(.headline)
+                            .foregroundColor(palette.textPrimary)
+                        Spacer()
+                        Text(gainDisplayString)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.medium)
+                            .foregroundColor(palette.accent)
+                    }
+
+                    HStack(spacing: 12) {
+                        Text("-6")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+
+                        Slider(
+                            value: Binding(
+                                get: { gainDb },
+                                set: { newValue in
+                                    // Snap to 0.5 dB steps
+                                    gainDb = (newValue * 2).rounded() / 2
+                                    updateSettings()
+                                }
+                            ),
+                            in: RecordingInputSettings.minGainDb...RecordingInputSettings.maxGainDb,
+                            step: RecordingInputSettings.gainStep
+                        )
+                        .tint(palette.accent)
+
+                        Text("+6")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    Text("Adjusts input level before recording")
+                        .font(.caption)
+                        .foregroundColor(palette.textTertiary)
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(palette.surface)
+                )
+
+                // MARK: - Limiter Section
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(isOn: Binding(
+                        get: { limiterEnabled },
+                        set: { newValue in
+                            limiterEnabled = newValue
+                            updateSettings()
+                        }
+                    )) {
+                        Text("Limiter")
+                            .font(.headline)
+                            .foregroundColor(palette.textPrimary)
+                    }
+                    .tint(palette.accent)
+
+                    if limiterEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Ceiling")
+                                    .font(.subheadline)
+                                    .foregroundColor(palette.textSecondary)
+                                Spacer()
+                                Text(ceilingDisplayString)
+                                    .font(.system(.body, design: .monospaced))
+                                    .fontWeight(.medium)
+                                    .foregroundColor(palette.accent)
+                            }
+
+                            // Discrete ceiling picker
+                            HStack(spacing: 8) {
+                                ForEach(RecordingInputSettings.ceilingOptions, id: \.self) { ceiling in
+                                    Button {
+                                        limiterCeilingDb = ceiling
+                                        updateSettings()
+                                    } label: {
+                                        Text(ceiling == 0 ? "0" : String(format: "%.0f", ceiling))
+                                            .font(.system(.caption, design: .monospaced))
+                                            .fontWeight(limiterCeilingDb == ceiling ? .bold : .regular)
+                                            .frame(width: 36, height: 32)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .fill(limiterCeilingDb == ceiling ? palette.accent : palette.background)
+                                            )
+                                            .foregroundColor(limiterCeilingDb == ceiling ? .white : palette.textPrimary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    Text(limiterEnabled ? "Prevents clipping by limiting peaks" : "Enable to prevent audio clipping")
+                        .font(.caption)
+                        .foregroundColor(palette.textTertiary)
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(palette.surface)
+                )
+                .animation(.easeInOut(duration: 0.2), value: limiterEnabled)
+
+                Spacer()
+
+                // Reset button
+                if !isDefault {
+                    Button {
+                        gainDb = 0
+                        limiterEnabled = false
+                        limiterCeilingDb = -1
+                        updateSettings()
+                    } label: {
+                        Text("Reset to Defaults")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+            .background(palette.background)
+            .navigationTitle("Recording Controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .onAppear {
+            // Load current settings
+            let settings = appState.appSettings.recordingInputSettings
+            gainDb = settings.gainDb
+            limiterEnabled = settings.limiterEnabled
+            limiterCeilingDb = settings.limiterCeilingDb
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var gainDisplayString: String {
+        if gainDb > 0 {
+            return String(format: "+%.1f dB", gainDb)
+        } else if gainDb < 0 {
+            return String(format: "%.1f dB", gainDb)
+        } else {
+            return "0 dB"
+        }
+    }
+
+    private var ceilingDisplayString: String {
+        if limiterCeilingDb == 0 {
+            return "0 dB"
+        } else {
+            return String(format: "%.0f dB", limiterCeilingDb)
+        }
+    }
+
+    private var isDefault: Bool {
+        abs(gainDb) < 0.1 && !limiterEnabled
+    }
+
+    private func updateSettings() {
+        var settings = appState.appSettings.recordingInputSettings
+        settings.gainDb = gainDb
+        settings.limiterEnabled = limiterEnabled
+        settings.limiterCeilingDb = limiterCeilingDb
+
+        // Update appState - this triggers live update in RecorderManager
+        appState.appSettings.recordingInputSettings = settings
+        appState.recorder.inputSettings = settings
     }
 }
 
@@ -3210,6 +3448,17 @@ struct GuideView: View {
                     .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
+                        OverdubInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "waveform.badge.plus",
+                            title: "Overdub",
+                            subtitle: "Layer recordings over existing tracks"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
                         MapsInfoView()
                     } label: {
                         GuideRow(
@@ -3846,6 +4095,84 @@ struct ProjectsInfoView: View {
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Projects")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Overdub Info View
+
+struct OverdubInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Record new layers over an existing track—like a one-person band.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How Overdub works")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Open any recording's Details and tap Overdub to start.")
+                        InfoBulletRow(text: "Headphones are required—this prevents audio feedback from the speaker into the mic.")
+                        InfoBulletRow(text: "You'll hear the original track (and any existing layers) while recording a new layer.")
+                        InfoBulletRow(text: "Each base track supports up to 3 layers. All layers stay linked in an Overdub Group.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Sync adjustment
+                InfoCard {
+                    Text("Fine-tuning sync")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "After recording, use the Sync Offset slider to shift your layer ±500ms.")
+                        InfoBulletRow(text: "This helps align your performance if there's any latency.")
+                        InfoBulletRow(text: "Positive values delay the layer; negative values make it play earlier.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Library badges
+                InfoCard {
+                    Text("Finding overdubs in your library")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Base tracks show an orange OVERDUB badge with layer count.")
+                        InfoBulletRow(text: "Layers show a purple LAYER 1/2/3 badge.")
+                        InfoBulletRow(text: "In any overdub recording's Details, the Overdub Group section shows all linked tracks.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "headphones")
+                            .font(.system(size: 14))
+                            .foregroundColor(.orange)
+                        Text("Tip: Wired headphones have the lowest latency. Bluetooth headphones work but may need more sync adjustment.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Overdub")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

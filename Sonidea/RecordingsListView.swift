@@ -494,6 +494,11 @@ struct RecordingRow: View {
                                 .foregroundColor(.yellow)
                         }
                     }
+
+                    // Overdub badge
+                    if recording.isPartOfOverdub {
+                        overdubBadge
+                    }
                 }
 
                 HStack(spacing: 6) {
@@ -550,6 +555,44 @@ struct RecordingRow: View {
         }
         .padding(.vertical, 12)
     }
+
+    /// Badge for overdub recordings
+    @ViewBuilder
+    private var overdubBadge: some View {
+        if recording.isOverdubBase {
+            // Base track badge with layer count
+            let layerCount = appState.overdubLayerCount(for: recording)
+            HStack(spacing: 3) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 10))
+                Text("OVERDUB")
+                    .font(.system(size: 9, weight: .bold))
+                if layerCount > 0 {
+                    Text("•\(layerCount)")
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .foregroundColor(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.orange.opacity(0.15))
+            .cornerRadius(4)
+        } else if recording.isOverdubLayer {
+            // Layer badge
+            let layerNum = recording.overdubIndex ?? 1
+            HStack(spacing: 3) {
+                Image(systemName: "waveform.badge.plus")
+                    .font(.system(size: 10))
+                Text("LAYER \(layerNum)")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundColor(.purple)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.purple.opacity(0.15))
+            .cornerRadius(4)
+        }
+    }
 }
 
 // MARK: - Recording Icon Tile (Isolated, Stable Colors)
@@ -561,7 +604,7 @@ struct RecordingIconTile: View {
     let colorScheme: ColorScheme
 
     var body: some View {
-        Image(systemName: "waveform")
+        Image(systemName: recording.presetIcon.systemName)
             .font(.system(size: 24))
             .foregroundColor(recording.iconSymbolColor(for: colorScheme))
             .frame(width: 44, height: 44)

@@ -301,11 +301,14 @@ final class PlaybackEngine {
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        // Use .common mode so timer continues during scroll tracking
+        let newTimer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.updateCurrentTime()
             }
         }
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
     private func stopTimer() {

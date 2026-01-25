@@ -9,6 +9,62 @@ import Foundation
 import SwiftUI
 import CoreLocation
 
+// MARK: - Overdub Role
+
+/// Role of a recording in an overdub group
+enum OverdubRole: String, Codable {
+    case none   // Not part of an overdub
+    case base   // The original/base track
+    case layer  // A recorded layer on top
+}
+
+// MARK: - Preset Icons for Recordings
+
+/// Preset tintable SF Symbol icons for recordings
+enum PresetIcon: String, CaseIterable, Codable {
+    case waveform = "waveform"
+    case mic = "mic.fill"
+    case musicNote = "music.note"
+    case musicMic = "music.mic"
+    case speaker = "speaker.wave.2.fill"
+    case phone = "phone.fill"
+    case video = "video.fill"
+    case person = "person.fill"
+    case people = "person.2.fill"
+    case guitar = "guitars.fill"
+    case pianokeys = "pianokeys"
+    case drum = "cylinder.fill"
+    case headphones = "headphones"
+    case brain = "brain.head.profile"
+    case sparkles = "sparkles"
+
+    /// Human-readable display name
+    var displayName: String {
+        switch self {
+        case .waveform: return "Waveform"
+        case .mic: return "Microphone"
+        case .musicNote: return "Music Note"
+        case .musicMic: return "Vocal"
+        case .speaker: return "Speaker"
+        case .phone: return "Phone Call"
+        case .video: return "Video"
+        case .person: return "Person"
+        case .people: return "People"
+        case .guitar: return "Guitar"
+        case .pianokeys: return "Piano"
+        case .drum: return "Drums"
+        case .headphones: return "Headphones"
+        case .brain: return "Idea"
+        case .sparkles: return "Creative"
+        }
+    }
+
+    /// SF Symbol name for rendering
+    var systemName: String {
+        rawValue
+    }
+}
+
 struct RecordingItem: Identifiable, Codable, Equatable {
     let id: UUID
     let fileURL: URL
@@ -34,6 +90,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     // Icon color customization (hex string, e.g. "#3A3A3C")
     var iconColorHex: String?
+
+    // Preset icon (SF Symbol name)
+    var iconName: String?
 
     // Per-recording EQ settings
     var eqSettings: EQSettings?
@@ -76,6 +135,23 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     /// Markers for this recording
     var markers: [Marker]
+
+    // MARK: - Overdub (Record Over Track)
+
+    /// ID of the overdub group this recording belongs to (nil = not part of overdub)
+    var overdubGroupId: UUID?
+
+    /// Role in overdub group: base track or layer
+    var overdubRoleRaw: String?
+
+    /// Layer index (1, 2, or 3) for layer recordings; nil for base or non-overdub
+    var overdubIndex: Int?
+
+    /// Time offset in seconds for layer alignment (default 0)
+    var overdubOffsetSeconds: Double
+
+    /// For layers: points to the base recording ID
+    var overdubSourceBaseId: UUID?
 
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
@@ -137,6 +213,38 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         proofStatus == .proven
     }
 
+    /// Overdub role enum (computed from raw string)
+    var overdubRole: OverdubRole {
+        get {
+            guard let raw = overdubRoleRaw else { return .none }
+            return OverdubRole(rawValue: raw) ?? .none
+        }
+        set {
+            overdubRoleRaw = newValue == .none ? nil : newValue.rawValue
+        }
+    }
+
+    /// Whether this recording is part of an overdub group
+    var isPartOfOverdub: Bool {
+        overdubGroupId != nil
+    }
+
+    /// Whether this is the base track in an overdub group
+    var isOverdubBase: Bool {
+        overdubRole == .base
+    }
+
+    /// Whether this is a layer in an overdub group
+    var isOverdubLayer: Bool {
+        overdubRole == .layer
+    }
+
+    /// Formatted layer label (e.g., "Layer 1")
+    var overdubLayerLabel: String? {
+        guard isOverdubLayer, let index = overdubIndex else { return nil }
+        return "Layer \(index)"
+    }
+
     /// Whether proof is pending upload
     var proofPending: Bool {
         proofStatus == .pending
@@ -148,6 +256,17 @@ struct RecordingItem: Identifiable, Codable, Equatable {
             return color
         }
         return Color(hex: Self.defaultIconColorHex) ?? Color(.systemGray4)
+    }
+
+    /// The preset icon for this recording (defaults to waveform)
+    var presetIcon: PresetIcon {
+        get {
+            guard let name = iconName else { return .waveform }
+            return PresetIcon(rawValue: name) ?? .waveform
+        }
+        set {
+            iconName = newValue.rawValue
+        }
     }
 
     // MARK: - Stable Icon Tile Colors (no automatic changes based on edits/tags/selection)
@@ -273,6 +392,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         trashedAt: Date? = nil,
         lastPlaybackPosition: TimeInterval = 0,
         iconColorHex: String? = nil,
+        iconName: String? = nil,
         eqSettings: EQSettings? = nil,
         projectId: UUID? = nil,
         parentRecordingId: UUID? = nil,
@@ -284,7 +404,13 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         locationModeRaw: String? = nil,
         locationProofHash: String? = nil,
         locationProofStatusRaw: String? = nil,
-        markers: [Marker] = []
+        markers: [Marker] = [],
+        // Overdub fields
+        overdubGroupId: UUID? = nil,
+        overdubRoleRaw: String? = nil,
+        overdubIndex: Int? = nil,
+        overdubOffsetSeconds: Double = 0,
+        overdubSourceBaseId: UUID? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -301,6 +427,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.trashedAt = trashedAt
         self.lastPlaybackPosition = lastPlaybackPosition
         self.iconColorHex = iconColorHex
+        self.iconName = iconName
         self.eqSettings = eqSettings
         self.projectId = projectId
         self.parentRecordingId = parentRecordingId
@@ -313,6 +440,12 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.locationProofHash = locationProofHash
         self.locationProofStatusRaw = locationProofStatusRaw
         self.markers = markers
+        // Overdub fields
+        self.overdubGroupId = overdubGroupId
+        self.overdubRoleRaw = overdubRoleRaw
+        self.overdubIndex = overdubIndex
+        self.overdubOffsetSeconds = overdubOffsetSeconds
+        self.overdubSourceBaseId = overdubSourceBaseId
     }
 
     // MARK: - Codable with Migration Support
@@ -320,11 +453,13 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, fileURL, createdAt, duration, title, notes, tagIDs, albumID
         case locationLabel, transcript, latitude, longitude, trashedAt
-        case lastPlaybackPosition, iconColorHex, eqSettings
+        case lastPlaybackPosition, iconColorHex, iconName, eqSettings
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
         case locationModeRaw, locationProofHash, locationProofStatusRaw
         case markers
+        // Overdub fields
+        case overdubGroupId, overdubRoleRaw, overdubIndex, overdubOffsetSeconds, overdubSourceBaseId
     }
 
     init(from decoder: Decoder) throws {
@@ -345,6 +480,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         trashedAt = try container.decodeIfPresent(Date.self, forKey: .trashedAt)
         lastPlaybackPosition = try container.decode(TimeInterval.self, forKey: .lastPlaybackPosition)
         iconColorHex = try container.decodeIfPresent(String.self, forKey: .iconColorHex)
+        iconName = try container.decodeIfPresent(String.self, forKey: .iconName)
         eqSettings = try container.decodeIfPresent(EQSettings.self, forKey: .eqSettings)
 
         // Migration: new fields with defaults for existing recordings
@@ -363,6 +499,13 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
         // Migration: markers with empty default for existing recordings
         markers = try container.decodeIfPresent([Marker].self, forKey: .markers) ?? []
+
+        // Migration: overdub fields with defaults for existing recordings
+        overdubGroupId = try container.decodeIfPresent(UUID.self, forKey: .overdubGroupId)
+        overdubRoleRaw = try container.decodeIfPresent(String.self, forKey: .overdubRoleRaw)
+        overdubIndex = try container.decodeIfPresent(Int.self, forKey: .overdubIndex)
+        overdubOffsetSeconds = try container.decodeIfPresent(Double.self, forKey: .overdubOffsetSeconds) ?? 0
+        overdubSourceBaseId = try container.decodeIfPresent(UUID.self, forKey: .overdubSourceBaseId)
     }
 }
 

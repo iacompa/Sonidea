@@ -76,12 +76,15 @@ final class PlaybackManager: NSObject {
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        // Use .common mode so timer continues during scroll tracking
+        let newTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self, let player = self.audioPlayer else { return }
                 self.currentTime = player.currentTime
             }
         }
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
     private func stopTimer() {

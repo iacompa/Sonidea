@@ -202,6 +202,77 @@ final class AudioSessionManager {
         }
     }
 
+    // MARK: - Headphone Detection (for Overdub)
+
+    /// Check if headphone monitoring is active (required for overdub to prevent feedback)
+    /// Returns true if outputs include headphones, headset, USB audio, or bluetooth audio
+    func isHeadphoneMonitoringActive() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+
+        for output in outputs {
+            switch output.portType {
+            case .headphones, .headsetMic:
+                return true
+            case .usbAudio:
+                // USB audio interface typically has headphone monitoring
+                return true
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                // Allow bluetooth headphones for overdub
+                return true
+            default:
+                continue
+            }
+        }
+
+        return false
+    }
+
+    /// Get the current output type name for display
+    func currentOutputName() -> String {
+        let session = AVAudioSession.sharedInstance()
+        if let output = session.currentRoute.outputs.first {
+            return output.portName
+        }
+        return "Speaker"
+    }
+
+    /// Configure audio session specifically for overdub (playback + recording simultaneously)
+    /// Uses lower latency settings than standard recording
+    func configureForOverdub(quality: RecordingQualityPreset, settings: AppSettings) throws {
+        let session = AVAudioSession.sharedInstance()
+
+        // Category options for overdub: allow bluetooth but NOT default to speaker
+        var options: AVAudioSession.CategoryOptions = [
+            .allowBluetooth,
+            .allowBluetoothA2DP
+        ]
+        // Note: We specifically do NOT include .defaultToSpeaker for overdub
+
+        // Use playAndRecord for simultaneous playback and recording
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
+
+        // Request lower latency for overdub
+        let requestedSampleRate = quality.sampleRate
+        try? session.setPreferredSampleRate(requestedSampleRate)
+        try? session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
+
+        // Activate the session
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+        // Store actual sample rate
+        actualSampleRate = session.sampleRate
+
+        // Apply preferred input (prefer built-in mic for overdub unless user has external)
+        applyPreferredInput(from: settings)
+
+        // Refresh inputs after activation
+        refreshAvailableInputs()
+
+        isRecordingActive = true
+        isPlaybackActive = true
+    }
+
     // MARK: - Notifications
 
     private func setupNotifications() {
