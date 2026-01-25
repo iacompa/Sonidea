@@ -828,13 +828,14 @@ struct RecordingDetailView: View {
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
 
-            // Inline Version Recorder
-            inlineVersionRecorder
-
-            // Collapsible EQ Panel
+            // Collapsible EQ Panel (between date and New Version/Overdub buttons)
             if showEQPanel {
                 eqPanel
+                    .padding(.top, 4)
             }
+
+            // Inline Version Recorder (New Version / Overdub buttons)
+            inlineVersionRecorder
         }
     }
 
