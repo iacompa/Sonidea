@@ -220,14 +220,28 @@ final class RecorderManager: NSObject {
             }
         }
 
-        AudioSessionManager.shared.onRouteChange = { [weak self] in
+        AudioSessionManager.shared.onRouteChange = { [weak self] reason in
             Task { @MainActor in
-                // Route changed - keep recording stable if possible
-                // The recording will continue with whatever input is available
-                if self?.isUsingEngine == false {
-                    self?.audioRecorder?.updateMeters()
+                guard let self = self else { return }
+
+                print("🔄 [RecorderManager] Route change detected, recording: \(self.recordingState.isActive), engine: \(self.isUsingEngine)")
+
+                // If we're recording with the engine and a device changed, we need to restart
+                if self.recordingState.isActive && self.isUsingEngine {
+                    if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
+                        print("🔄 [RecorderManager] Bluetooth device changed - restarting engine...")
+                        self.handleEngineRouteChange()
+                    }
+                } else if self.recordingState.isActive && !self.isUsingEngine {
+                    // AVAudioRecorder may also need attention on route changes
+                    // Force a reconfiguration of the audio session to ensure input is valid
+                    if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
+                        print("🔄 [RecorderManager] Bluetooth device changed - reconfiguring session...")
+                        self.handleRecorderRouteChange()
+                    }
                 }
-                // Engine-based recording handles route changes automatically
+
+                AudioSessionManager.shared.clearEngineRestartFlag()
             }
         }
 
@@ -314,6 +328,17 @@ final class RecorderManager: NSObject {
             let engine = AVAudioEngine()
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
+
+            // Log input format for debugging
+            print("🎙️ [RecorderManager] Engine input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch, \(inputFormat.commonFormat.rawValue)")
+
+            // Verify input format is valid
+            guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+                print("❌ [RecorderManager] Invalid input format - falling back to simple recording")
+                isUsingEngine = false
+                startSimpleRecording(fileURL: fileURL)
+                return
+            }
 
             // Create gain mixer node
             let gainMixer = AVAudioMixerNode()
@@ -452,6 +477,10 @@ final class RecorderManager: NSObject {
         }
     }
 
+    /// Track consecutive silent buffers for debugging
+    private var consecutiveSilentBuffers = 0
+    private let silentBufferWarningThreshold = 20
+
     /// Update meter samples from audio buffer (for engine recording)
     private func updateMeterFromBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
@@ -465,6 +494,20 @@ final class RecorderManager: NSObject {
             sum += sample * sample
         }
         let rms = sqrt(sum / Float(frameLength))
+
+        // Detect if we're getting silence (potential Bluetooth routing issue)
+        if rms < 0.0001 {
+            consecutiveSilentBuffers += 1
+            if consecutiveSilentBuffers == silentBufferWarningThreshold {
+                print("⚠️ [RecorderManager] WARNING: \(silentBufferWarningThreshold) consecutive silent buffers detected - possible input routing issue!")
+                AudioSessionManager.shared.logCurrentRoute(context: "silent buffer warning")
+            }
+        } else {
+            if consecutiveSilentBuffers >= silentBufferWarningThreshold {
+                print("✅ [RecorderManager] Audio input recovered after \(consecutiveSilentBuffers) silent buffers")
+            }
+            consecutiveSilentBuffers = 0
+        }
 
         // Convert to dB and normalize
         let dB = 20 * log10(max(rms, 0.000001))
@@ -642,6 +685,127 @@ final class RecorderManager: NSObject {
         )
     }
 
+    // MARK: - Route Change Handling
+
+    /// Handle route change when using AVAudioEngine (Bluetooth connect/disconnect)
+    /// This restarts the engine with the new input configuration
+    private func handleEngineRouteChange() {
+        guard let engine = audioEngine,
+              let fileURL = currentFileURL,
+              recordingState == .recording else {
+            print("⚠️ [RecorderManager] Cannot handle route change - invalid state")
+            return
+        }
+
+        // Save current accumulated duration
+        if let startTime = segmentStartTime {
+            accumulatedDuration += Date().timeIntervalSince(startTime)
+        }
+
+        print("🔄 [RecorderManager] Stopping engine for route change...")
+
+        // Stop the current engine (but keep the file open)
+        limiterNode?.removeTap(onBus: 0)
+        engine.stop()
+
+        // Small delay to let the audio system settle after route change
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.restartEngineAfterRouteChange()
+        }
+    }
+
+    /// Restart the engine after a route change
+    private func restartEngineAfterRouteChange() {
+        guard let engine = audioEngine,
+              let gainMixer = gainMixerNode,
+              let limiter = limiterNode,
+              let file = audioFile else {
+            print("❌ [RecorderManager] Cannot restart engine - missing components")
+            return
+        }
+
+        do {
+            // Reconfigure audio session to ensure correct input
+            try AudioSessionManager.shared.configureForRecording(
+                quality: qualityPreset,
+                settings: appSettings
+            )
+
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+
+            print("🔄 [RecorderManager] New input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
+
+            // Verify input format is valid (non-zero sample rate)
+            guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+                print("❌ [RecorderManager] Invalid input format after route change")
+                return
+            }
+
+            // Reconnect nodes with new format
+            engine.disconnectNodeInput(gainMixer)
+            engine.connect(inputNode, to: gainMixer, format: inputFormat)
+
+            // Reinstall tap on limiter
+            let outputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: outputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+                do {
+                    try file.write(from: buffer)
+                } catch {
+                    print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                }
+
+                Task { @MainActor in
+                    self?.updateMeterFromBuffer(buffer)
+                }
+            }
+
+            // Restart the engine
+            try engine.start()
+
+            // Resume timing
+            segmentStartTime = Date()
+            print("✅ [RecorderManager] Engine restarted successfully after route change")
+
+        } catch {
+            print("❌ [RecorderManager] Failed to restart engine: \(error)")
+        }
+    }
+
+    /// Handle route change when using AVAudioRecorder
+    private func handleRecorderRouteChange() {
+        guard let recorder = audioRecorder, recordingState == .recording else {
+            return
+        }
+
+        // AVAudioRecorder is more resilient to route changes, but we should
+        // reconfigure the session to ensure the correct input is used
+
+        // Save current duration
+        if let startTime = segmentStartTime {
+            accumulatedDuration += Date().timeIntervalSince(startTime)
+        }
+
+        // Pause briefly
+        recorder.pause()
+
+        // Reconfigure session
+        do {
+            try AudioSessionManager.shared.configureForRecording(
+                quality: qualityPreset,
+                settings: appSettings
+            )
+        } catch {
+            print("⚠️ [RecorderManager] Failed to reconfigure session: \(error)")
+        }
+
+        // Resume recording
+        recorder.record()
+        segmentStartTime = Date()
+
+        print("✅ [RecorderManager] Recorder resumed after route change")
+    }
+
     /// Discard the current recording without saving
     func discardRecording() {
         guard recordingState.isActive, let fileURL = currentFileURL else { return }
@@ -686,6 +850,7 @@ final class RecorderManager: NSObject {
         currentFileURL = nil
         liveMeterSamples = []
         wasRecordingBeforeInterruption = false
+        consecutiveSilentBuffers = 0
         currentLocation = nil
         currentLocationLabel = ""
     }

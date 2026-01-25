@@ -59,6 +59,8 @@ struct ContentView: View {
     @State private var showAskPromptFromMain = false
     @State private var showThankYouToast = false
     @State private var showRecoveryAlert = false
+    @State private var showSaveErrorAlert = false
+    @State private var saveErrorMessage = ""
 
     // Drag state for record button
     @State private var dragStartPosition: CGPoint = .zero
@@ -263,6 +265,11 @@ struct ContentView: View {
             }
         } message: {
             Text("A recording was interrupted. Would you like to recover it?")
+        }
+        .alert("Recording Failed", isPresented: $showSaveErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
         }
         .overlay(alignment: .top) {
             if showThankYouToast {
@@ -723,10 +730,28 @@ struct ContentView: View {
     // MARK: - Save Recording
 
     private func saveRecording() {
-        if let rawData = appState.recorder.stopRecording() {
-            appState.addRecording(from: rawData)
+        print("🎙️ [ContentView] saveRecording() called")
+
+        guard let rawData = appState.recorder.stopRecording() else {
+            print("❌ [ContentView] stopRecording() returned nil - no data to save")
+            saveErrorMessage = "Recording failed: No audio data was captured. Please check your microphone permissions and try again."
+            showSaveErrorAlert = true
+            return
+        }
+
+        print("🎙️ [ContentView] Got raw data, file: \(rawData.fileURL.lastPathComponent), duration: \(rawData.duration)s")
+
+        let result = appState.addRecording(from: rawData)
+
+        switch result {
+        case .success(let recording):
+            print("✅ [ContentView] Recording saved successfully: \(recording.title)")
             appState.onRecordingSaved()
             currentRoute = .recordings
+        case .failure(let errorMessage):
+            print("❌ [ContentView] Failed to save recording: \(errorMessage)")
+            saveErrorMessage = "Recording could not be saved: \(errorMessage)"
+            showSaveErrorAlert = true
         }
     }
 }

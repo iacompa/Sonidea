@@ -248,13 +248,25 @@ final class AppState {
 
     // MARK: - Recording Management
 
-    func addRecording(from rawData: RawRecordingData) {
+    /// Result of attempting to add a recording
+    enum AddRecordingResult {
+        case success(RecordingItem)
+        case failure(String)
+    }
+
+    /// Add a recording from raw data, returns success/failure result
+    @discardableResult
+    func addRecording(from rawData: RawRecordingData) -> AddRecordingResult {
+        print("🎙️ [AppState] Attempting to add recording from: \(rawData.fileURL.lastPathComponent)")
+        print("   Duration: \(rawData.duration)s, Created: \(rawData.createdAt)")
+
         // Verify the file exists and is valid before adding
         let fileStatus = AudioDebug.verifyAudioFile(url: rawData.fileURL)
         guard fileStatus.isValid else {
-            print("❌ [AppState] Cannot add recording - file verification failed: \(fileStatus.errorMessage ?? "unknown error")")
+            let errorMsg = fileStatus.errorMessage ?? "Unknown verification error"
+            print("❌ [AppState] Cannot add recording - file verification failed: \(errorMsg)")
             AudioDebug.logFileInfo(url: rawData.fileURL, context: "AppState.addRecording - failed verification")
-            return
+            return .failure(errorMsg)
         }
 
         print("✅ [AppState] File verified, adding recording: \(rawData.fileURL.lastPathComponent)")
@@ -277,12 +289,16 @@ final class AppState {
         recordings.insert(recording, at: 0)
         saveRecordings()
 
+        print("✅ [AppState] Recording added successfully: \(title)")
+
         // Auto-transcribe if enabled
         if appSettings.autoTranscribe {
             Task {
                 await autoTranscribe(recording: recording)
             }
         }
+
+        return .success(recording)
     }
 
     private func autoTranscribe(recording: RecordingItem) async {

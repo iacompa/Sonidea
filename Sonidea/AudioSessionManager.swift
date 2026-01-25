@@ -34,12 +34,56 @@ final class AudioSessionManager {
 
     var onInterruptionBegan: (() -> Void)?
     var onInterruptionEnded: ((Bool) -> Void)? // Bool = shouldResume
-    var onRouteChange: (() -> Void)?
+    var onRouteChange: ((AVAudioSession.RouteChangeReason) -> Void)?
     var onMediaServicesReset: (() -> Void)?
+
+    /// Whether a significant route change occurred that requires engine restart
+    private(set) var requiresEngineRestart = false
 
     private init() {
         refreshAvailableInputs()
         setupNotifications()
+    }
+
+    // MARK: - Logging & Diagnostics
+
+    /// Log current audio route for debugging
+    func logCurrentRoute(context: String = "") {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+
+        print("🔊 [AudioSession] Route (\(context)):")
+        print("   Inputs:")
+        for input in route.inputs {
+            print("      - \(input.portName) (\(input.portType.rawValue)) UID: \(input.uid)")
+        }
+        print("   Outputs:")
+        for output in route.outputs {
+            print("      - \(output.portName) (\(output.portType.rawValue))")
+        }
+        print("   Preferred Input: \(session.preferredInput?.portName ?? "None")")
+        print("   Available Inputs: \(availableInputs.map { "\($0.portName) (\($0.portType.rawValue))" }.joined(separator: ", "))")
+        print("   Sample Rate: \(session.sampleRate) Hz")
+    }
+
+    /// Get the built-in microphone port from available inputs
+    func builtInMicPort() -> AVAudioSessionPortDescription? {
+        availableInputs.first { $0.portType == .builtInMic }
+    }
+
+    /// Get any Bluetooth HFP input port (for AirPods mic)
+    func bluetoothHFPPort() -> AVAudioSessionPortDescription? {
+        availableInputs.first { $0.portType == .bluetoothHFP }
+    }
+
+    /// Force built-in mic even when Bluetooth is connected
+    func forceBuiltInMic() throws {
+        guard let builtIn = builtInMicPort() else {
+            print("⚠️ [AudioSession] Built-in mic not available")
+            return
+        }
+        try AVAudioSession.sharedInstance().setPreferredInput(builtIn)
+        print("🎤 [AudioSession] Forced built-in mic: \(builtIn.portName)")
     }
 
     // MARK: - Input Management
@@ -73,17 +117,34 @@ final class AudioSessionManager {
 
     /// Apply preferred input from settings (if available)
     func applyPreferredInput(from settings: AppSettings) {
+        let session = AVAudioSession.sharedInstance()
+
         guard let preferredUID = settings.preferredInputUID else {
-            // Automatic - clear any preferred input
-            try? AVAudioSession.sharedInstance().setPreferredInput(nil)
+            // Automatic mode - but if Bluetooth is connected and causing issues,
+            // we may want to prefer the built-in mic for reliability
+            // For now, just clear preferred input and let iOS choose
+            try? session.setPreferredInput(nil)
+            print("🎤 [AudioSession] Input set to Automatic")
             return
         }
 
         if let matchingInput = input(for: preferredUID) {
-            try? AVAudioSession.sharedInstance().setPreferredInput(matchingInput)
+            do {
+                try session.setPreferredInput(matchingInput)
+                print("🎤 [AudioSession] Preferred input set to: \(matchingInput.portName) (\(matchingInput.portType.rawValue))")
+            } catch {
+                print("⚠️ [AudioSession] Failed to set preferred input: \(error)")
+            }
         } else {
-            // Preferred input not available - fall back to automatic
-            try? AVAudioSession.sharedInstance().setPreferredInput(nil)
+            // Preferred input not available
+            // If it was built-in mic and we have Bluetooth, try to force built-in
+            if let builtIn = builtInMicPort() {
+                try? session.setPreferredInput(builtIn)
+                print("🎤 [AudioSession] Fallback to built-in mic: \(builtIn.portName)")
+            } else {
+                try? session.setPreferredInput(nil)
+                print("🎤 [AudioSession] Preferred input not available, using automatic")
+            }
         }
     }
 
@@ -122,6 +183,9 @@ final class AudioSessionManager {
 
         // Refresh inputs after activation
         refreshAvailableInputs()
+
+        // Log the configured route for debugging
+        logCurrentRoute(context: "configureForRecording")
 
         isRecordingActive = true
     }
@@ -348,12 +412,38 @@ final class AudioSessionManager {
             // Always refresh available inputs on route change
             refreshAvailableInputs()
 
+            // Log route change for debugging
+            let reasonStr: String
             switch reason {
-            case .oldDeviceUnavailable, .newDeviceAvailable, .categoryChange, .override:
-                onRouteChange?()
+            case .unknown: reasonStr = "unknown"
+            case .newDeviceAvailable: reasonStr = "newDeviceAvailable"
+            case .oldDeviceUnavailable: reasonStr = "oldDeviceUnavailable"
+            case .categoryChange: reasonStr = "categoryChange"
+            case .override: reasonStr = "override"
+            case .wakeFromSleep: reasonStr = "wakeFromSleep"
+            case .noSuitableRouteForCategory: reasonStr = "noSuitableRouteForCategory"
+            case .routeConfigurationChange: reasonStr = "routeConfigurationChange"
+            @unknown default: reasonStr = "unknown(\(reasonValue))"
+            }
+            print("🔄 [AudioSession] Route changed: \(reasonStr)")
+            logCurrentRoute(context: "after route change")
+
+            // Determine if this requires engine restart (Bluetooth changes typically do)
+            switch reason {
+            case .newDeviceAvailable, .oldDeviceUnavailable:
+                // Bluetooth device connected/disconnected - engine input may be invalid
+                requiresEngineRestart = true
+                onRouteChange?(reason)
+            case .categoryChange, .override, .routeConfigurationChange:
+                onRouteChange?(reason)
             default:
                 break
             }
         }
+    }
+
+    /// Clear the engine restart flag after handling
+    func clearEngineRestartFlag() {
+        requiresEngineRestart = false
     }
 }

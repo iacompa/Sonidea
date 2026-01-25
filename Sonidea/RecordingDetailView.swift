@@ -1488,33 +1488,32 @@ struct RecordingDetailView: View {
 
             // Card 1: Title, Album, Project
             MetadataCard {
-                // Row 1: Title
-                PickerRow(
-                    label: "TITLE",
-                    value: editedTitle.isEmpty ? "Untitled" : editedTitle,
-                    showDivider: true
-                ) {
-                    // Title editing handled by inline TextField approach
-                    // For now, we keep the title editable inline
-                }
-                .overlay(
-                    // Overlay a text field for inline editing
-                    HStack {
-                        Spacer().frame(width: CardStyle.horizontalPadding)
+                // Row 1: Title (editable inline - single render, no overlay)
+                VStack(spacing: 0) {
+                    HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Spacer().frame(height: CardStyle.verticalPadding + 2)
                             Text("TITLE")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(palette.textTertiary)
+
                             TextField("Recording title", text: $editedTitle)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 16))
                                 .foregroundColor(palette.textPrimary)
-                            Spacer().frame(height: CardStyle.verticalPadding)
                         }
+
                         Spacer()
+
+                        // No chevron for editable field
                     }
-                )
+                    .padding(.horizontal, CardStyle.horizontalPadding)
+                    .padding(.vertical, CardStyle.verticalPadding)
+
+                    Rectangle()
+                        .fill(palette.textSecondary.opacity(CardStyle.dividerOpacity))
+                        .frame(height: 0.5)
+                        .padding(.leading, CardStyle.horizontalPadding)
+                }
 
                 // Row 2: Album
                 PickerRow(
