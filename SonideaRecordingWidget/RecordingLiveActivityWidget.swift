@@ -3,7 +3,7 @@
 //  SonideaRecordingWidget
 //
 //  Live Activity widget for Dynamic Island and Lock Screen during recording.
-//  Designed with Apple-like minimal aesthetics.
+//  Voice Memos-style minimal design.
 //
 
 import ActivityKit
@@ -21,92 +21,81 @@ struct RecordingLiveActivityWidget: Widget {
                 // Expanded Dynamic Island
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 6) {
-                        // Animated recording indicator
-                        RecordingPulse(isRecording: context.state.isRecording)
+                        // Simple red dot indicator
+                        Circle()
+                            .fill(context.state.isRecording ? Color.red : Color.orange)
+                            .frame(width: 8, height: 8)
 
                         Text(context.state.isRecording ? "Recording" : "Paused")
                             .font(.caption)
-                            .fontWeight(.medium)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
-                    // Elapsed time - prominent
                     ElapsedTimeView(
                         startDate: context.attributes.startDate,
                         isRecording: context.state.isRecording,
                         pausedDuration: context.state.pausedDuration
                     )
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                    .font(.title3)
+                    .fontWeight(.medium)
                     .fontDesign(.rounded)
                     .monospacedDigit()
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    // Action buttons - minimal, icon-focused
-                    HStack(spacing: 20) {
-                        // Pause/Resume button
+                    HStack(spacing: 24) {
                         if context.state.isRecording {
                             Button(intent: PauseRecordingIntent()) {
-                                Label("Pause", systemImage: "pause.fill")
-                                    .labelStyle(.iconOnly)
-                                    .font(.title3)
+                                Image(systemName: "pause.fill")
+                                    .font(.body)
                                     .foregroundStyle(.primary)
-                                    .frame(width: 44, height: 36)
-                                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                                    .frame(width: 40, height: 32)
+                                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                             }
                             .buttonStyle(.plain)
                         } else {
                             Button(intent: ResumeRecordingIntent()) {
-                                Label("Resume", systemImage: "play.fill")
-                                    .labelStyle(.iconOnly)
-                                    .font(.title3)
+                                Image(systemName: "play.fill")
+                                    .font(.body)
                                     .foregroundStyle(.green)
-                                    .frame(width: 44, height: 36)
-                                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                                    .frame(width: 40, height: 32)
+                                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                             }
                             .buttonStyle(.plain)
                         }
 
-                        // Stop button
                         Button(intent: StopRecordingIntent()) {
-                            Label("Stop", systemImage: "stop.fill")
-                                .labelStyle(.iconOnly)
-                                .font(.title3)
+                            Image(systemName: "stop.fill")
+                                .font(.body)
                                 .foregroundStyle(.red)
-                                .frame(width: 44, height: 36)
-                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                                .frame(width: 40, height: 32)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.top, 4)
                 }
             } compactLeading: {
-                // Compact leading - mic with subtle animation
-                Image(systemName: context.state.isRecording ? "mic.fill" : "mic.slash.fill")
-                    .font(.body)
+                // Voice Memos style: tiny red dot or mic
+                Image(systemName: "waveform")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(context.state.isRecording ? .red : .orange)
-                    .symbolEffect(.pulse, options: .repeating, isActive: context.state.isRecording)
             } compactTrailing: {
-                // Compact trailing - timer
+                // Just the time, minimal
                 ElapsedTimeView(
                     startDate: context.attributes.startDate,
                     isRecording: context.state.isRecording,
                     pausedDuration: context.state.pausedDuration
                 )
-                .font(.caption)
-                .fontWeight(.medium)
-                .fontDesign(.rounded)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(context.state.isRecording ? .red : .orange)
             } minimal: {
-                // Minimal - just a recording indicator
-                Image(systemName: "mic.fill")
-                    .font(.caption)
-                    .foregroundStyle(context.state.isRecording ? .red : .orange)
-                    .symbolEffect(.pulse, options: .repeating, isActive: context.state.isRecording)
+                // Single waveform icon
+                Image(systemName: "waveform")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
             }
         }
     }
@@ -119,16 +108,16 @@ struct LockScreenLiveActivityView: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // Left side: Recording indicator and status
-            HStack(spacing: 10) {
-                // Animated pulse indicator
-                RecordingPulse(isRecording: context.state.isRecording)
+            // Recording indicator
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(context.state.isRecording ? Color.red : Color.orange)
+                    .frame(width: 10, height: 10)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(context.state.isRecording ? "Recording" : "Paused")
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
 
                     Text("Sonidea")
                         .font(.caption2)
@@ -138,48 +127,34 @@ struct LockScreenLiveActivityView: View {
 
             Spacer()
 
-            // Center: Elapsed time
+            // Timer
             ElapsedTimeView(
                 startDate: context.attributes.startDate,
                 isRecording: context.state.isRecording,
                 pausedDuration: context.state.pausedDuration
             )
-            .font(.title)
+            .font(.title2)
             .fontWeight(.semibold)
             .fontDesign(.rounded)
             .monospacedDigit()
-            .foregroundStyle(.primary)
 
             Spacer()
 
-            // Right side: Stop button
+            // Stop button
             Button(intent: StopRecordingIntent()) {
                 Image(systemName: "stop.fill")
-                    .font(.body)
+                    .font(.footnote)
                     .fontWeight(.semibold)
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 36, height: 36)
                     .background(.red, in: Circle())
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.vertical, 14)
         .activityBackgroundTint(.black.opacity(0.85))
         .activitySystemActionForegroundColor(.white)
-    }
-}
-
-// MARK: - Recording Pulse Indicator
-
-struct RecordingPulse: View {
-    let isRecording: Bool
-
-    var body: some View {
-        Circle()
-            .fill(isRecording ? Color.red : Color.orange)
-            .frame(width: 10, height: 10)
-            .shadow(color: isRecording ? .red.opacity(0.5) : .clear, radius: 4)
     }
 }
 
@@ -192,28 +167,18 @@ struct ElapsedTimeView: View {
 
     var body: some View {
         if isRecording {
-            // Live timer when recording
             Text(startDate, style: .timer)
-                .contentTransition(.numericText())
         } else if let duration = pausedDuration {
-            // Static duration when paused
             Text(formatDuration(duration))
         } else {
-            // Fallback
             Text(startDate, style: .timer)
         }
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = (Int(duration) % 3600) / 60
+        let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
-
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            return String(format: "%d:%02d", minutes, seconds)
-        }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
