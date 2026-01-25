@@ -2495,23 +2495,11 @@ struct SettingsSheetView: View {
 
                 // MARK: Recording Section
                 Section {
-                    // Recording Quality with info button
-                    HStack(spacing: 0) {
-                        Picker("Quality", selection: $appState.appSettings.recordingQuality) {
-                            ForEach(RecordingQualityPreset.allCases) { preset in
-                                Text(preset.displayName).tag(preset)
-                            }
+                    // Recording Quality
+                    Picker("Quality", selection: $appState.appSettings.recordingQuality) {
+                        ForEach(RecordingQualityPreset.allCases) { preset in
+                            Text(preset.displayName).tag(preset)
                         }
-                        .frame(maxWidth: .infinity)
-
-                        Button {
-                            showStorageEstimateSheet = true
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.body)
-                                .foregroundStyle(palette.accent)
-                        }
-                        .buttonStyle(.plain)
                     }
                     .listRowBackground(palette.cardBackground)
 
@@ -2532,8 +2520,19 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Recording")
-                        .foregroundColor(palette.textSecondary)
+                    HStack {
+                        Text("Recording")
+                        Spacer()
+                        Button {
+                            showStorageEstimateSheet = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(palette.textSecondary)
+                    }
+                    .textCase(nil)
                 } footer: {
                     Text(appState.appSettings.recordingQuality.description)
                         .foregroundColor(palette.textSecondary)
