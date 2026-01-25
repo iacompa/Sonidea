@@ -9,6 +9,13 @@ import SwiftUI
 import MapKit
 import UIKit
 
+// MARK: - Identifiable UUID Wrapper for sheet(item:)
+
+/// Wrapper to make UUID Identifiable for use with sheet(item:) pattern
+private struct IdentifiableUUID: Identifiable {
+    let id: UUID
+}
+
 // MARK: - Inline Recorder State
 
 private enum InlineRecorderState: Equatable {
@@ -119,14 +126,17 @@ struct RecordingDetailView: View {
     // Location editing state
     @State private var showLocationEditor = false
 
-    // Verification info sheet state
-    @State private var showVerificationInfo = false
+    // Verification info sheet state - using Identifiable wrapper for safe sheet(item:) pattern
+    @State private var verificationSheetItem: IdentifiableUUID?
 
     // Icon color picker state
     @State private var showIconColorPicker = false
 
     // Playback error state
     @State private var showPlaybackError = false
+
+    // Focus state for keyboard dismissal
+    @FocusState private var isNotesFocused: Bool
 
     // Original state snapshot for Done/Save logic
     private let originalSnapshot: RecordingSnapshot
@@ -218,6 +228,11 @@ struct RecordingDetailView: View {
                     }
                     .padding()
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    // Tap outside to dismiss keyboard
+                    isNotesFocused = false
+                }
             }
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
@@ -261,6 +276,12 @@ struct RecordingDetailView: View {
                         savePlaybackPosition()
                         playback.stop()
                         dismiss()
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isNotesFocused = false
                     }
                 }
             }
@@ -311,12 +332,12 @@ struct RecordingDetailView: View {
             .sheet(isPresented: $showCreateProject) {
                 CreateProjectSheet(recording: currentRecording)
             }
-            .sheet(isPresented: $showVerificationInfo) {
+            .sheet(item: $verificationSheetItem) { item in
                 VerificationInfoSheet(
-                    recording: $currentRecording,
+                    recordingID: item.id,
                     onVerifyRequested: createProofUserInitiated
                 )
-                .presentationDetents([.height(220)])
+                .presentationDetents([.height(260)])
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showIconColorPicker) {
@@ -1263,6 +1284,7 @@ struct RecordingDetailView: View {
                     .frame(minHeight: 100)
                     .background(palette.inputBackground)
                     .cornerRadius(8)
+                    .focused($isNotesFocused)
             }
 
             // Footer: File size + Verification status
@@ -1291,7 +1313,7 @@ struct RecordingDetailView: View {
                     .foregroundColor(verificationStatusColor)
 
                 Button {
-                    showVerificationInfo = true
+                    verificationSheetItem = IdentifiableUUID(id: currentRecording.id)
                 } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 16))
@@ -1766,11 +1788,17 @@ struct VerificationInfoSheet: View {
     @Environment(\.themePalette) private var palette
     @Environment(AppState.self) private var appState
 
-    @Binding var recording: RecordingItem
+    /// Recording ID to look up - uses safe sheet(item:) pattern
+    let recordingID: UUID
     let onVerifyRequested: () -> Void
 
+    /// Safely fetch the recording from AppState - returns nil if not found
+    private var recording: RecordingItem? {
+        appState.recordings.first { $0.id == recordingID }
+    }
+
     // Date verification status
-    private var dateVerificationStatus: (text: String, verified: Bool) {
+    private func dateVerificationStatus(for recording: RecordingItem) -> (text: String, verified: Bool) {
         switch recording.proofStatus {
         case .proven:
             return ("Verified", true)
@@ -1782,7 +1810,7 @@ struct VerificationInfoSheet: View {
     }
 
     // Location verification status
-    private var locationVerificationStatus: (text: String, verified: Bool) {
+    private func locationVerificationStatus(for recording: RecordingItem) -> (text: String, verified: Bool) {
         switch recording.locationProofStatus {
         case .verified:
             return ("Verified", true)
@@ -1796,13 +1824,8 @@ struct VerificationInfoSheet: View {
     }
 
     // Whether we can attempt verification
-    private var canVerify: Bool {
+    private func canVerify(for recording: RecordingItem) -> Bool {
         recording.proofStatus != .proven && !appState.proofManager.isProcessing
-    }
-
-    // CloudKit availability message
-    private var cloudKitMessage: String {
-        appState.proofManager.cloudKitAvailability.displayMessage
     }
 
     var body: some View {
@@ -1810,104 +1833,13 @@ struct VerificationInfoSheet: View {
             ZStack {
                 palette.background.ignoresSafeArea()
 
-                VStack(spacing: 20) {
-                    VStack(spacing: 12) {
-                        // Date verification row
-                        HStack {
-                            Text("Date")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textSecondary)
-                            Spacer()
-                            HStack(spacing: 6) {
-                                Text(dateVerificationStatus.text)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(dateVerificationStatus.verified ? palette.textPrimary : palette.textSecondary)
-                                if dateVerificationStatus.verified {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(palette.inputBackground)
-                        .cornerRadius(10)
-
-                        // Location verification row
-                        HStack {
-                            Text("Location")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textSecondary)
-                            Spacer()
-                            HStack(spacing: 6) {
-                                Text(locationVerificationStatus.text)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(locationVerificationStatus.verified ? palette.textPrimary : palette.textSecondary)
-                                if locationVerificationStatus.verified {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(palette.inputBackground)
-                        .cornerRadius(10)
-                    }
-                    .padding(.horizontal)
-
-                    // Verify button (only show if not already verified)
-                    if recording.proofStatus != .proven {
-                        VStack(spacing: 12) {
-                            Button {
-                                onVerifyRequested()
-                            } label: {
-                                HStack(spacing: 8) {
-                                    if appState.proofManager.isProcessing {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                            .scaleEffect(0.8)
-                                    } else {
-                                        Image(systemName: "icloud.fill")
-                                    }
-                                    Text(appState.proofManager.isProcessing ? "Verifying..." : "Verify with iCloud")
-                                }
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(canVerify ? Color.blue : Color.gray)
-                                .cornerRadius(12)
-                            }
-                            .disabled(!canVerify)
-                            .padding(.horizontal)
-
-                            // Error message if verification failed
-                            if let error = appState.proofManager.lastError {
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 32)
-                            }
-                        }
-                    }
-
-                    // Footnote
-                    Text("Verified using iCloud server timestamp + file fingerprint.")
-                        .font(.caption)
-                        .foregroundColor(palette.textTertiary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-
-                    Spacer()
+                if let recording = recording {
+                    // Recording found - show verification info
+                    verificationContent(for: recording)
+                } else {
+                    // Recording not found - show fallback
+                    unavailableContent
                 }
-                .padding(.top, 24)
             }
             .navigationTitle("Verification")
             .navigationBarTitleDisplayMode(.inline)
@@ -1921,6 +1853,138 @@ struct VerificationInfoSheet: View {
                 // Check CloudKit availability when sheet opens
                 await appState.proofManager.checkCloudKitAvailability()
             }
+        }
+    }
+
+    // MARK: - Verification Content
+
+    @ViewBuilder
+    private func verificationContent(for recording: RecordingItem) -> some View {
+        let dateStatus = dateVerificationStatus(for: recording)
+        let locationStatus = locationVerificationStatus(for: recording)
+        let canVerifyNow = canVerify(for: recording)
+
+        VStack(spacing: 20) {
+            VStack(spacing: 12) {
+                // Date verification row
+                HStack {
+                    Text("Date")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(dateStatus.text)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(dateStatus.verified ? palette.textPrimary : palette.textSecondary)
+                        if dateStatus.verified {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(palette.inputBackground)
+                .cornerRadius(10)
+
+                // Location verification row
+                HStack {
+                    Text("Location")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(locationStatus.text)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(locationStatus.verified ? palette.textPrimary : palette.textSecondary)
+                        if locationStatus.verified {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(palette.inputBackground)
+                .cornerRadius(10)
+            }
+            .padding(.horizontal)
+
+            // Verify button (only show if not already verified)
+            if recording.proofStatus != .proven {
+                VStack(spacing: 12) {
+                    Button {
+                        onVerifyRequested()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if appState.proofManager.isProcessing {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "icloud.fill")
+                            }
+                            Text(appState.proofManager.isProcessing ? "Verifying..." : "Verify with iCloud")
+                        }
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(canVerifyNow ? Color.blue : Color.gray)
+                        .cornerRadius(12)
+                    }
+                    .disabled(!canVerifyNow)
+                    .padding(.horizontal)
+
+                    // Error message if verification failed
+                    if let error = appState.proofManager.lastError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+                }
+            }
+
+            // Footnote
+            Text("Verified using iCloud server timestamp + file fingerprint.")
+                .font(.caption)
+                .foregroundColor(palette.textTertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Spacer()
+        }
+        .padding(.top, 24)
+    }
+
+    // MARK: - Unavailable Content (fallback if recording not found)
+
+    private var unavailableContent: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundColor(palette.textTertiary)
+
+            Text("Verification Unavailable")
+                .font(.headline)
+                .foregroundColor(palette.textPrimary)
+
+            Text("The recording information could not be loaded.")
+                .font(.subheadline)
+                .foregroundColor(palette.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Spacer()
         }
     }
 }
