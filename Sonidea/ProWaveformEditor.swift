@@ -18,17 +18,12 @@ final class WaveformTimeline {
     let duration: TimeInterval
 
     /// Current zoom level (1.0 = full width, higher = more zoomed in)
-    var zoomScale: CGFloat = 1.0 {
-        didSet {
-            zoomScale = max(Self.minZoom, min(zoomScale, Self.maxZoom))
-            clampVisibleRange()
-        }
-    }
+    /// NOTE: No didSet - clamping happens at call sites to avoid recursion with @Observable
+    var zoomScale: CGFloat = 1.0
 
     /// Start time of the visible window
-    var visibleStartTime: TimeInterval = 0 {
-        didSet { clampVisibleRange() }
-    }
+    /// NOTE: No didSet - clamping happens at call sites to avoid recursion with @Observable
+    var visibleStartTime: TimeInterval = 0
 
     /// Computed end time of the visible window
     var visibleEndTime: TimeInterval {
@@ -48,39 +43,54 @@ final class WaveformTimeline {
     }
 
     /// Zoom centered on a specific time
+    /// Clamps zoom to valid range and prevents redundant updates
     func zoom(to newScale: CGFloat, centeredOn centerTime: TimeInterval) {
+        // Clamp the new scale to valid range
+        let clampedScale = max(Self.minZoom, min(newScale, Self.maxZoom))
+
+        // Skip if no meaningful change (prevents redundant updates)
+        guard abs(clampedScale - zoomScale) > 0.0001 else { return }
+
         let oldVisibleDuration = visibleDuration
-        zoomScale = newScale
+        zoomScale = clampedScale
         let newVisibleDuration = visibleDuration
 
         // Adjust start time to keep center point stable
         let centerProgress = (centerTime - visibleStartTime) / oldVisibleDuration
-        visibleStartTime = centerTime - (centerProgress * newVisibleDuration)
+        let newStartTime = centerTime - (centerProgress * newVisibleDuration)
+
+        // Clamp visibleStartTime inline (no separate call to avoid re-entrancy)
+        visibleStartTime = max(0, min(newStartTime, duration - newVisibleDuration))
     }
 
     /// Pan by a time delta
     func pan(by timeDelta: TimeInterval) {
-        visibleStartTime += timeDelta
+        let newStartTime = visibleStartTime + timeDelta
+        // Clamp inline
+        visibleStartTime = max(0, min(newStartTime, duration - visibleDuration))
     }
 
     /// Ensure a time is visible
     func ensureVisible(_ time: TimeInterval, padding: TimeInterval = 0) {
         let paddedPadding = min(padding, visibleDuration * 0.1)
+        var newStartTime = visibleStartTime
+
         if time < visibleStartTime + paddedPadding {
-            visibleStartTime = max(0, time - paddedPadding)
+            newStartTime = max(0, time - paddedPadding)
         } else if time > visibleEndTime - paddedPadding {
-            visibleStartTime = min(duration - visibleDuration, time - visibleDuration + paddedPadding)
+            newStartTime = min(duration - visibleDuration, time - visibleDuration + paddedPadding)
+        }
+
+        // Only assign if changed
+        if abs(newStartTime - visibleStartTime) > 0.0001 {
+            visibleStartTime = newStartTime
         }
     }
 
     /// Reset to full view
     func reset() {
-        zoomScale = 1.0
+        zoomScale = Self.minZoom
         visibleStartTime = 0
-    }
-
-    private func clampVisibleRange() {
-        visibleStartTime = max(0, min(visibleStartTime, duration - visibleDuration))
     }
 
     // MARK: - Coordinate Conversion
