@@ -5,10 +5,14 @@
 //  CloudKit-based proof receipt manager.
 //  Handles creating tamper-evident timestamps with offline queue support.
 //
+//  IMPORTANT: All CloudKit operations are BEST-EFFORT and never crash.
+//  Recordings must open/play regardless of CloudKit availability.
+//
 
 import Foundation
 import CloudKit
 import Network
+import OSLog
 
 // MARK: - Proof Manager
 
@@ -24,6 +28,9 @@ final class ProofManager {
     /// Last error message (cleared on successful operation)
     var lastError: String?
 
+    /// Whether CloudKit is available and properly configured
+    private(set) var cloudKitAvailability: CloudKitAvailability = .unknown
+
     /// Pending queue for offline proofs
     private(set) var pendingQueue: [PendingProofItem] = []
 
@@ -31,24 +38,15 @@ final class ProofManager {
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
 
-    /// CloudKit container (lazy to avoid crash if entitlements not configured)
-    private var _container: CKContainer?
-    private var container: CKContainer? {
-        if _container == nil {
-            // Check if CloudKit is available before accessing
-            if isCloudKitAvailable {
-                _container = CKContainer.default()
-            }
-        }
-        return _container
-    }
-    private var privateDatabase: CKDatabase? { container?.privateCloudDatabase }
+    /// Logger for diagnostics
+    private let logger = Logger(subsystem: "com.iacompa.sonidea", category: "ProofManager")
 
-    /// Whether CloudKit is available (entitlements configured)
-    var isCloudKitAvailable: Bool {
-        // Check if iCloud is available on the device
-        FileManager.default.ubiquityIdentityToken != nil
-    }
+    /// CloudKit container - lazily initialized only when safe
+    private var _container: CKContainer?
+
+    /// CloudKit container identifier (explicit, not default)
+    /// This should match the container in your entitlements
+    private static let containerIdentifier = "iCloud.com.iacompa.sonidea"
 
     /// Record type for proof receipts
     private static let recordType = "ProofReceipt"
@@ -59,15 +57,115 @@ final class ProofManager {
         return documentsPath.appendingPathComponent("pending_proofs.json")
     }
 
+    // MARK: - CloudKit Availability
+
+    /// Detailed CloudKit availability status
+    enum CloudKitAvailability: Equatable {
+        case unknown
+        case available
+        case notSignedIn
+        case restricted
+        case noAccount
+        case couldNotDetermine
+        case unavailable(reason: String)
+
+        var isAvailable: Bool {
+            self == .available
+        }
+
+        var displayMessage: String {
+            switch self {
+            case .unknown:
+                return "Checking iCloud status..."
+            case .available:
+                return "iCloud verification available"
+            case .notSignedIn:
+                return "Sign in to iCloud in Settings to enable verification"
+            case .restricted:
+                return "iCloud is restricted on this device"
+            case .noAccount:
+                return "No iCloud account configured"
+            case .couldNotDetermine:
+                return "Could not determine iCloud status"
+            case .unavailable(let reason):
+                return reason
+            }
+        }
+    }
+
     // MARK: - Initialization
 
     init() {
         loadPendingQueue()
         startNetworkMonitoring()
+        // Don't check CloudKit availability on init - do it lazily when needed
     }
 
     deinit {
         networkMonitor.cancel()
+    }
+
+    // MARK: - Safe Container Access
+
+    /// Safely get the CloudKit container, or nil if unavailable
+    /// This NEVER calls CKContainer.default() - always uses explicit identifier
+    private func getContainerSafely() -> CKContainer? {
+        // Return cached container if we have one
+        if let container = _container {
+            return container
+        }
+
+        // First check if iCloud is available at all
+        guard FileManager.default.ubiquityIdentityToken != nil else {
+            logger.warning("iCloud not available - ubiquityIdentityToken is nil")
+            cloudKitAvailability = .notSignedIn
+            return nil
+        }
+
+        // Use explicit container identifier - NEVER use CKContainer.default()
+        // CKContainer.default() can SIGTRAP if entitlements are misconfigured
+        let container = CKContainer(identifier: Self.containerIdentifier)
+        _container = container
+
+        logger.info("CloudKit container initialized: \(Self.containerIdentifier)")
+        return container
+    }
+
+    /// Check CloudKit account status asynchronously
+    /// Call this before attempting any CloudKit operations
+    func checkCloudKitAvailability() async {
+        guard let container = getContainerSafely() else {
+            cloudKitAvailability = .notSignedIn
+            return
+        }
+
+        do {
+            let status = try await container.accountStatus()
+
+            switch status {
+            case .available:
+                cloudKitAvailability = .available
+                logger.info("CloudKit account available")
+            case .noAccount:
+                cloudKitAvailability = .noAccount
+                logger.warning("No iCloud account")
+            case .restricted:
+                cloudKitAvailability = .restricted
+                logger.warning("iCloud restricted")
+            case .couldNotDetermine:
+                cloudKitAvailability = .couldNotDetermine
+                logger.warning("Could not determine iCloud status")
+            case .temporarilyUnavailable:
+                cloudKitAvailability = .unavailable(reason: "iCloud temporarily unavailable")
+                logger.warning("iCloud temporarily unavailable")
+            @unknown default:
+                cloudKitAvailability = .unavailable(reason: "Unknown iCloud status")
+                logger.warning("Unknown iCloud status")
+            }
+        } catch {
+            cloudKitAvailability = .unavailable(reason: error.localizedDescription)
+            logger.error("CloudKit account check failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Network Monitoring
@@ -90,6 +188,7 @@ final class ProofManager {
     // MARK: - Create Proof
 
     /// Create a proof receipt for a recording
+    /// This is BEST-EFFORT - failures are logged but never crash
     /// - Parameters:
     ///   - recording: The recording to create proof for
     ///   - locationPayload: Optional location data
@@ -104,10 +203,12 @@ final class ProofManager {
         lastError = nil
 
         var updatedRecording = recording
+        logger.info("Creating proof for recording: \(recording.id)")
 
         do {
             // Step 1: Compute SHA-256 hash of the audio file
             let sha256 = try await FileHasher.sha256Hash(of: recording.fileURL)
+            logger.debug("Computed SHA-256: \(sha256.prefix(16))...")
 
             // Step 2: Compute location proof hash if location provided
             var locationProofHash: String? = nil
@@ -115,7 +216,38 @@ final class ProofManager {
                 locationProofHash = FileHasher.sha256Hash(of: jsonData)
             }
 
-            // Step 3: Try to upload to CloudKit
+            // Step 3: Check CloudKit availability
+            await checkCloudKitAvailability()
+
+            guard cloudKitAvailability.isAvailable else {
+                // CloudKit not available - set to pending or unavailable
+                logger.warning("CloudKit not available: \(self.cloudKitAvailability.displayMessage)")
+
+                if isNetworkAvailable {
+                    // Online but CloudKit not available - mark as error
+                    lastError = cloudKitAvailability.displayMessage
+                    updatedRecording.proofStatusRaw = ProofStatus.error.rawValue
+                } else {
+                    // Offline - add to pending queue
+                    addToPendingQueue(
+                        recordingID: recording.id,
+                        sha256: sha256,
+                        locationPayload: locationPayload,
+                        locationMode: locationMode
+                    )
+                    updatedRecording.proofStatusRaw = ProofStatus.pending.rawValue
+                }
+
+                updatedRecording.proofSHA256 = sha256
+                updatedRecording.locationModeRaw = locationMode.rawValue
+                updatedRecording.locationProofHash = locationProofHash
+                setLocationProofStatus(&updatedRecording, locationProofHash: locationProofHash, status: .pending)
+
+                isProcessing = false
+                return updatedRecording
+            }
+
+            // Step 4: Try to upload to CloudKit
             if isNetworkAvailable {
                 do {
                     let (recordName, serverDate) = try await uploadToCloudKit(
@@ -127,21 +259,18 @@ final class ProofManager {
                     )
 
                     // Success - update recording with proven status
+                    logger.info("Proof created successfully: \(recordName)")
                     updatedRecording.proofStatusRaw = ProofStatus.proven.rawValue
                     updatedRecording.proofSHA256 = sha256
                     updatedRecording.proofCloudCreatedAt = serverDate
                     updatedRecording.proofCloudRecordName = recordName
                     updatedRecording.locationModeRaw = locationMode.rawValue
                     updatedRecording.locationProofHash = locationProofHash
-                    // Set location proof status independently (verified if we have location data)
-                    if locationProofHash != nil {
-                        updatedRecording.locationProofStatusRaw = LocationProofStatus.verified.rawValue
-                    } else {
-                        updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
-                    }
+                    setLocationProofStatus(&updatedRecording, locationProofHash: locationProofHash, status: .verified)
 
                 } catch {
                     // CloudKit error - add to pending queue
+                    logger.error("CloudKit upload failed: \(error.localizedDescription)")
                     lastError = error.localizedDescription
                     addToPendingQueue(
                         recordingID: recording.id,
@@ -154,15 +283,11 @@ final class ProofManager {
                     updatedRecording.proofSHA256 = sha256
                     updatedRecording.locationModeRaw = locationMode.rawValue
                     updatedRecording.locationProofHash = locationProofHash
-                    // Set location proof status to pending if we have location data
-                    if locationProofHash != nil {
-                        updatedRecording.locationProofStatusRaw = LocationProofStatus.pending.rawValue
-                    } else {
-                        updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
-                    }
+                    setLocationProofStatus(&updatedRecording, locationProofHash: locationProofHash, status: .pending)
                 }
             } else {
                 // Offline - add to pending queue
+                logger.info("Offline - adding to pending queue")
                 addToPendingQueue(
                     recordingID: recording.id,
                     sha256: sha256,
@@ -174,21 +299,26 @@ final class ProofManager {
                 updatedRecording.proofSHA256 = sha256
                 updatedRecording.locationModeRaw = locationMode.rawValue
                 updatedRecording.locationProofHash = locationProofHash
-                // Set location proof status to pending if we have location data
-                if locationProofHash != nil {
-                    updatedRecording.locationProofStatusRaw = LocationProofStatus.pending.rawValue
-                } else {
-                    updatedRecording.locationProofStatusRaw = LocationProofStatus.none.rawValue
-                }
+                setLocationProofStatus(&updatedRecording, locationProofHash: locationProofHash, status: .pending)
             }
 
         } catch {
+            logger.error("Proof creation failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
             updatedRecording.proofStatusRaw = ProofStatus.error.rawValue
         }
 
         isProcessing = false
         return updatedRecording
+    }
+
+    /// Helper to set location proof status
+    private func setLocationProofStatus(_ recording: inout RecordingItem, locationProofHash: String?, status: LocationProofStatus) {
+        if locationProofHash != nil {
+            recording.locationProofStatusRaw = status.rawValue
+        } else {
+            recording.locationProofStatusRaw = LocationProofStatus.none.rawValue
+        }
     }
 
     // MARK: - Verify Proof
@@ -209,15 +339,15 @@ final class ProofManager {
 
             if currentHash == storedHash {
                 // Hash matches - file unchanged
-                if recording.proofStatus == .proven {
-                    // Already proven, nothing to update
-                }
+                logger.info("Proof verified - hash matches")
             } else {
                 // Hash mismatch - file was modified
+                logger.warning("Proof mismatch - file was modified")
                 updatedRecording.proofStatusRaw = ProofStatus.mismatch.rawValue
             }
 
         } catch {
+            logger.error("Proof verification failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
             updatedRecording.proofStatusRaw = ProofStatus.error.rawValue
         }
@@ -236,9 +366,11 @@ final class ProofManager {
         locationProofHash: String?
     ) async throws -> (recordName: String, serverDate: Date) {
 
-        guard let database = privateDatabase else {
+        guard let container = getContainerSafely() else {
             throw ProofManagerError.cloudKitNotConfigured
         }
+
+        let database = container.privateCloudDatabase
 
         let recordID = CKRecord.ID(recordName: UUID().uuidString)
         let record = CKRecord(recordType: Self.recordType, recordID: recordID)
@@ -283,6 +415,11 @@ final class ProofManager {
         locationPayload: LocationPayload?,
         locationMode: LocationMode
     ) {
+        // Don't add duplicates
+        guard !pendingQueue.contains(where: { $0.recordingID == recordingID }) else {
+            return
+        }
+
         let item = PendingProofItem(
             recordingID: recordingID,
             sha256Hash: sha256,
@@ -291,12 +428,20 @@ final class ProofManager {
         )
         pendingQueue.append(item)
         savePendingQueue()
+        logger.info("Added to pending queue: \(recordingID)")
     }
 
     /// Process the pending queue when network is available
     func processPendingQueue() async {
         guard isNetworkAvailable else { return }
         guard !pendingQueue.isEmpty else { return }
+
+        // Check CloudKit availability first
+        await checkCloudKitAvailability()
+        guard cloudKitAvailability.isAvailable else {
+            logger.warning("Skipping pending queue - CloudKit unavailable")
+            return
+        }
 
         var updatedQueue: [PendingProofItem] = []
         var completedItems: [(UUID, String, Date)] = [] // (recordingID, recordName, serverDate)
@@ -317,16 +462,19 @@ final class ProofManager {
                 )
 
                 completedItems.append((item.recordingID, recordName, serverDate))
+                logger.info("Pending proof completed: \(item.recordingID)")
 
             } catch {
                 // Increment retry count
                 item.retryCount += 1
                 item.lastRetryAt = Date()
+                logger.warning("Pending proof retry \(item.retryCount) failed: \(error.localizedDescription)")
 
                 if item.shouldRetry {
                     updatedQueue.append(item)
+                } else {
+                    logger.error("Pending proof dropped after max retries: \(item.recordingID)")
                 }
-                // If max retries reached, item is dropped
             }
         }
 
@@ -356,8 +504,9 @@ final class ProofManager {
         do {
             let data = try Data(contentsOf: pendingQueueURL)
             pendingQueue = try JSONDecoder().decode([PendingProofItem].self, from: data)
+            logger.info("Loaded \(self.pendingQueue.count) pending proofs")
         } catch {
-            print("Failed to load pending proof queue: \(error)")
+            logger.error("Failed to load pending proof queue: \(error.localizedDescription)")
         }
     }
 
@@ -366,7 +515,7 @@ final class ProofManager {
             let data = try JSONEncoder().encode(pendingQueue)
             try data.write(to: pendingQueueURL)
         } catch {
-            print("Failed to save pending proof queue: \(error)")
+            logger.error("Failed to save pending proof queue: \(error.localizedDescription)")
         }
     }
 }
@@ -385,7 +534,7 @@ enum ProofManagerError: LocalizedError {
         case .networkUnavailable:
             return "Network unavailable"
         case .cloudKitNotConfigured:
-            return "iCloud is not available. Sign in to iCloud in Settings."
+            return "iCloud verification is not available. Please sign in to iCloud in Settings."
         }
     }
 }

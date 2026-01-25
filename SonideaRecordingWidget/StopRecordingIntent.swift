@@ -1,13 +1,17 @@
 //
 //  StopRecordingIntent.swift
-//  Sonidea
+//  SonideaRecordingWidget
 //
-//  AppIntent for stopping a recording via Dynamic Island, Lock Screen, or Shortcuts.
-//  This intent can run in the background without opening the app.
+//  AppIntent for controlling recording via Dynamic Island, Lock Screen, or Shortcuts.
+//  These intents can run in the background without opening the app.
+//  This file is duplicated in the widget extension (widgets can't import main app code).
 //
 
+import ActivityKit
 import AppIntents
 import Foundation
+
+// MARK: - Stop Recording Intent
 
 /// AppIntent for stopping and saving the current recording
 /// Used by Dynamic Island Live Activity and Lock Screen widget
@@ -33,14 +37,25 @@ struct StopRecordingIntent: LiveActivityIntent {
             object: nil
         )
 
+        // CRITICAL: End all Live Activities immediately
+        // This ensures the Dynamic Island disappears even if the app doesn't respond
+        if #available(iOS 16.1, *) {
+            for activity in Activity<RecordingActivityAttributes>.activities {
+                await activity.end(
+                    .init(
+                        state: RecordingActivityAttributes.ContentState(
+                            isRecording: false,
+                            pausedDuration: nil
+                        ),
+                        staleDate: nil
+                    ),
+                    dismissalPolicy: .immediate
+                )
+            }
+        }
+
         return .result()
     }
-}
-
-// MARK: - Notification Extension
-
-extension Notification.Name {
-    static let stopRecordingRequested = Notification.Name("stopRecordingRequested")
 }
 
 // MARK: - Pause Recording Intent
@@ -58,9 +73,30 @@ struct PauseRecordingIntent: LiveActivityIntent {
             name: .pauseRecordingRequested,
             object: nil
         )
+
+        // Update the Live Activity to show paused state
+        // The main app will also update it, but this provides immediate feedback
+        if #available(iOS 16.1, *) {
+            for activity in Activity<RecordingActivityAttributes>.activities {
+                // Calculate approximate duration based on start date
+                let duration = Date().timeIntervalSince(activity.attributes.startDate)
+                await activity.update(
+                    .init(
+                        state: RecordingActivityAttributes.ContentState(
+                            isRecording: false,
+                            pausedDuration: duration
+                        ),
+                        staleDate: nil
+                    )
+                )
+            }
+        }
+
         return .result()
     }
 }
+
+// MARK: - Resume Recording Intent
 
 /// AppIntent for resuming a paused recording
 struct ResumeRecordingIntent: LiveActivityIntent {
@@ -75,11 +111,30 @@ struct ResumeRecordingIntent: LiveActivityIntent {
             name: .resumeRecordingRequested,
             object: nil
         )
+
+        // Update the Live Activity to show recording state
+        if #available(iOS 16.1, *) {
+            for activity in Activity<RecordingActivityAttributes>.activities {
+                await activity.update(
+                    .init(
+                        state: RecordingActivityAttributes.ContentState(
+                            isRecording: true,
+                            pausedDuration: nil
+                        ),
+                        staleDate: nil
+                    )
+                )
+            }
+        }
+
         return .result()
     }
 }
 
+// MARK: - Notification Names
+
 extension Notification.Name {
+    static let stopRecordingRequested = Notification.Name("stopRecordingRequested")
     static let pauseRecordingRequested = Notification.Name("pauseRecordingRequested")
     static let resumeRecordingRequested = Notification.Name("resumeRecordingRequested")
 }

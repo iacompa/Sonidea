@@ -17,6 +17,10 @@ struct SonideaApp: App {
         WindowGroup {
             ThemedAppContainer(appState: appState)
                 .onAppear {
+                    // CRITICAL: Clean up any stuck Live Activities on app launch
+                    // This prevents the Dynamic Island from showing when not recording
+                    cleanupStaleActivities()
+
                     // Check for pending actions on app launch
                     appState.consumePendingStartRecording()
                 }
@@ -24,6 +28,21 @@ struct SonideaApp: App {
                     if newPhase == .active {
                         // Check for pending actions when app becomes active
                         appState.consumePendingStartRecording()
+
+                        // Also check for pending stop request from Live Activity
+                        if appState.recorder.consumePendingStopRequest() {
+                            // User tapped stop in Live Activity while app was backgrounded
+                            appState.recorder.onStopAndSaveRequested?()
+                        }
+
+                        // Clean up Live Activities if not recording
+                        // This handles the case where app was killed while recording
+                        cleanupStaleActivities()
+                    } else if newPhase == .background {
+                        // When going to background, verify Live Activity state matches recording state
+                        if !appState.recorder.isActive {
+                            RecordingLiveActivityManager.shared.endAllActivities()
+                        }
                     }
                 }
                 .onOpenURL { url in
@@ -32,6 +51,13 @@ struct SonideaApp: App {
                 }
         }
         .handlesExternalEvents(matching: Set(arrayLiteral: "*"))
+    }
+
+    /// Clean up any stale Live Activities that don't correspond to an active recording
+    private func cleanupStaleActivities() {
+        // If there's no active recording session, end all Live Activities
+        let isRecording = appState.recorder.isActive
+        RecordingLiveActivityManager.shared.cleanupIfNotRecording(isCurrentlyRecording: isRecording)
     }
 
     private func handleDeepLink(_ url: URL) {
@@ -77,6 +103,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         )
         configuration.delegateClass = SceneDelegate.self
         return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Clean up any stuck Live Activities from previous app sessions
+        // This runs before any UI appears
+        Task { @MainActor in
+            RecordingLiveActivityManager.shared.endAllActivities()
+        }
+        return true
     }
 }
 

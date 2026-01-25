@@ -125,10 +125,6 @@ struct RecordingDetailView: View {
     // Icon color picker state
     @State private var showIconColorPicker = false
 
-    // Verification timeout state
-    @State private var verificationTimedOut = false
-    @State private var verificationTimeoutTask: Task<Void, Never>?
-
     // Playback error state
     @State private var showPlaybackError = false
 
@@ -275,13 +271,12 @@ struct RecordingDetailView: View {
                     showPlaybackError = true
                 }
                 loadReverseGeocodedName()
-                createProofSilently()
-                startVerificationTimeout()
+                // NOTE: Proof creation is now USER-DRIVEN via the Verification sheet
+                // This prevents CloudKit crashes from blocking recording playback
             }
             .onDisappear {
                 savePlaybackPosition()
                 playback.stop()
-                verificationTimeoutTask?.cancel()
                 editHistory.clear()  // Clean up undo history
             }
             .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
@@ -318,8 +313,8 @@ struct RecordingDetailView: View {
             }
             .sheet(isPresented: $showVerificationInfo) {
                 VerificationInfoSheet(
-                    recording: currentRecording,
-                    timedOut: verificationTimedOut
+                    recording: $currentRecording,
+                    onVerifyRequested: createProofUserInitiated
                 )
                 .presentationDetents([.height(220)])
                 .presentationDragIndicator(.visible)
@@ -350,25 +345,6 @@ struct RecordingDetailView: View {
                     versionSavedToast
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .animation(.spring(response: 0.3), value: showVersionSavedToast)
-                }
-            }
-        }
-    }
-
-    // MARK: - Verification Timeout
-
-    private func startVerificationTimeout() {
-        // Only start timeout if status is pending
-        guard currentRecording.proofStatus == .pending else { return }
-
-        verificationTimeoutTask = Task {
-            try? await Task.sleep(nanoseconds: 12_000_000_000) // 12 seconds
-            if !Task.isCancelled {
-                await MainActor.run {
-                    // If still pending after timeout, mark as timed out
-                    if currentRecording.proofStatus == .pending {
-                        verificationTimedOut = true
-                    }
                 }
             }
         }
@@ -1329,9 +1305,6 @@ struct RecordingDetailView: View {
     // MARK: - Verification Status (Date-only, independent from location)
 
     private var verificationStatusText: String {
-        if verificationTimedOut && currentRecording.proofStatus == .pending {
-            return "Not verified"
-        }
         switch currentRecording.proofStatus {
         case .proven: return "Verified"
         case .pending: return "Pending"
@@ -1340,9 +1313,6 @@ struct RecordingDetailView: View {
     }
 
     private var verificationStatusColor: Color {
-        if verificationTimedOut && currentRecording.proofStatus == .pending {
-            return palette.textTertiary
-        }
         switch currentRecording.proofStatus {
         case .proven: return .green
         case .pending: return .orange
@@ -1577,11 +1547,13 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: - Proof Silent Creation
+    // MARK: - User-Initiated Proof Creation
 
-    private func createProofSilently() {
-        // Only create if not already proven or pending
-        guard currentRecording.proofStatus == .none || currentRecording.proofStatus == .error else { return }
+    /// Create proof when user explicitly requests it (from Verification sheet)
+    /// This is the ONLY way proofs are created - never automatic on view load
+    private func createProofUserInitiated() {
+        // Only create if not already proven
+        guard currentRecording.proofStatus != .proven else { return }
 
         Task {
             var locationPayload: LocationPayload? = nil
@@ -1792,15 +1764,13 @@ struct RecordingDetailView: View {
 struct VerificationInfoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
+    @Environment(AppState.self) private var appState
 
-    let recording: RecordingItem
-    let timedOut: Bool
+    @Binding var recording: RecordingItem
+    let onVerifyRequested: () -> Void
 
-    // Date verification is independent - based only on proofStatus (CloudKit + SHA-256)
+    // Date verification status
     private var dateVerificationStatus: (text: String, verified: Bool) {
-        if timedOut && recording.proofStatus == .pending {
-            return ("Not verified", false)
-        }
         switch recording.proofStatus {
         case .proven:
             return ("Verified", true)
@@ -1811,9 +1781,8 @@ struct VerificationInfoSheet: View {
         }
     }
 
-    // Location verification is independent - based on locationProofStatus
+    // Location verification status
     private var locationVerificationStatus: (text: String, verified: Bool) {
-        // Use the independent location proof status
         switch recording.locationProofStatus {
         case .verified:
             return ("Verified", true)
@@ -1824,6 +1793,16 @@ struct VerificationInfoSheet: View {
         case .none, .error:
             return ("Not verified", false)
         }
+    }
+
+    // Whether we can attempt verification
+    private var canVerify: Bool {
+        recording.proofStatus != .proven && !appState.proofManager.isProcessing
+    }
+
+    // CloudKit availability message
+    private var cloudKitMessage: String {
+        appState.proofManager.cloudKitAvailability.displayMessage
     }
 
     var body: some View {
@@ -1881,6 +1860,44 @@ struct VerificationInfoSheet: View {
                     }
                     .padding(.horizontal)
 
+                    // Verify button (only show if not already verified)
+                    if recording.proofStatus != .proven {
+                        VStack(spacing: 12) {
+                            Button {
+                                onVerifyRequested()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if appState.proofManager.isProcessing {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "icloud.fill")
+                                    }
+                                    Text(appState.proofManager.isProcessing ? "Verifying..." : "Verify with iCloud")
+                                }
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(canVerify ? Color.blue : Color.gray)
+                                .cornerRadius(12)
+                            }
+                            .disabled(!canVerify)
+                            .padding(.horizontal)
+
+                            // Error message if verification failed
+                            if let error = appState.proofManager.lastError {
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32)
+                            }
+                        }
+                    }
+
                     // Footnote
                     Text("Verified using iCloud server timestamp + file fingerprint.")
                         .font(.caption)
@@ -1899,6 +1916,10 @@ struct VerificationInfoSheet: View {
                     Button("Done") { dismiss() }
                         .foregroundColor(palette.accent)
                 }
+            }
+            .task {
+                // Check CloudKit availability when sheet opens
+                await appState.proofManager.checkCloudKitAvailability()
             }
         }
     }
