@@ -7,6 +7,7 @@
 
 import SwiftUI
 import MapKit
+import UIKit
 
 // MARK: - Inline Recorder State
 
@@ -28,6 +29,9 @@ private struct RecordingSnapshot: Equatable {
     let latitude: Double?
     let longitude: Double?
     let iconColorHex: String?
+    let fileURL: URL
+    let duration: TimeInterval
+    let markers: [Marker]
 
     init(from recording: RecordingItem) {
         self.title = recording.title
@@ -39,6 +43,9 @@ private struct RecordingSnapshot: Equatable {
         self.latitude = recording.latitude
         self.longitude = recording.longitude
         self.iconColorHex = recording.iconColorHex
+        self.fileURL = recording.fileURL
+        self.duration = recording.duration
+        self.markers = recording.markers
     }
 }
 
@@ -70,6 +77,23 @@ struct RecordingDetailView: View {
     @State private var waveformSamples: [Float] = []
     @State private var zoomScale: CGFloat = 1.0
     @State private var isLoadingWaveform = true
+
+    // MARK: - Waveform Editing State
+    @State private var isEditingWaveform = false
+    @State private var selectionStart: TimeInterval = 0
+    @State private var selectionEnd: TimeInterval = 0
+    @State private var editPlayheadPosition: TimeInterval = 0  // Tap-to-set playhead for marker placement
+    @State private var isPrecisionMode = false  // "Hold for Precision" button state
+    @State private var editedMarkers: [Marker] = []
+    @State private var isProcessingEdit = false
+    @State private var pendingAudioEdit: URL?  // Pending edited file URL before save
+    @State private var pendingDuration: TimeInterval?  // Pending duration after edit
+    @State private var hasAudioEdits = false  // Track if audio was modified
+    @State private var editHistory = EditHistory()  // Undo/redo support
+
+    // Waveform height constants
+    private let compactWaveformHeight: CGFloat = 100
+    private let expandedWaveformHeight: CGFloat = 200
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
@@ -118,6 +142,8 @@ struct RecordingDetailView: View {
         _currentRecording = State(initialValue: recording)
         _editedIconColor = State(initialValue: recording.iconColor)
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
+        _editedMarkers = State(initialValue: recording.markers)
+        _selectionEnd = State(initialValue: recording.duration)
         // Store original hex to avoid overwriting with lossy Color -> hex conversion
         self.originalIconColorHex = recording.iconColorHex
         self.isOpenedFromProject = isOpenedFromProject
@@ -135,11 +161,43 @@ struct RecordingDetailView: View {
         if iconColorWasModified {
             snapshotRecording.iconColorHex = editedIconColor.toHex()
         }
+        snapshotRecording.markers = editedMarkers
+        if let pendingURL = pendingAudioEdit {
+            snapshotRecording = RecordingItem(
+                id: snapshotRecording.id,
+                fileURL: pendingURL,
+                createdAt: snapshotRecording.createdAt,
+                duration: pendingDuration ?? snapshotRecording.duration,
+                title: snapshotRecording.title,
+                notes: snapshotRecording.notes,
+                tagIDs: snapshotRecording.tagIDs,
+                albumID: snapshotRecording.albumID,
+                locationLabel: snapshotRecording.locationLabel,
+                transcript: snapshotRecording.transcript,
+                latitude: snapshotRecording.latitude,
+                longitude: snapshotRecording.longitude,
+                trashedAt: snapshotRecording.trashedAt,
+                lastPlaybackPosition: 0,
+                iconColorHex: snapshotRecording.iconColorHex,
+                eqSettings: snapshotRecording.eqSettings,
+                projectId: snapshotRecording.projectId,
+                parentRecordingId: snapshotRecording.parentRecordingId,
+                versionIndex: snapshotRecording.versionIndex,
+                proofStatusRaw: snapshotRecording.proofStatusRaw,
+                proofSHA256: nil,
+                proofCloudCreatedAt: nil,
+                proofCloudRecordName: nil,
+                locationModeRaw: snapshotRecording.locationModeRaw,
+                locationProofHash: snapshotRecording.locationProofHash,
+                locationProofStatusRaw: snapshotRecording.locationProofStatusRaw,
+                markers: editedMarkers
+            )
+        }
         return RecordingSnapshot(from: snapshotRecording)
     }
 
     private var hasEdits: Bool {
-        currentSnapshot != originalSnapshot
+        currentSnapshot != originalSnapshot || hasAudioEdits
     }
 
     private var actionButtonTitle: String {
@@ -217,6 +275,7 @@ struct RecordingDetailView: View {
                 savePlaybackPosition()
                 playback.stop()
                 verificationTimeoutTask?.cancel()
+                editHistory.clear()  // Clean up undo history
             }
             .sheet(isPresented: $showManageTags) {
                 ManageTagsSheet()
@@ -322,30 +381,132 @@ struct RecordingDetailView: View {
 
     private var playbackSection: some View {
         VStack(spacing: 16) {
-            // Waveform
+            // Edit/Done button row (ABOVE waveform, not overlapping)
+            if !isLoadingWaveform && !waveformSamples.isEmpty {
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            if isEditingWaveform {
+                                // Exit edit mode - reset precision mode
+                                isPrecisionMode = false
+                                isEditingWaveform = false
+                            } else {
+                                // Enter edit mode - pause playback and set selection to full duration
+                                if playback.isPlaying {
+                                    playback.pause()
+                                }
+                                selectionStart = 0
+                                selectionEnd = pendingDuration ?? playback.duration
+                                editPlayheadPosition = 0
+                                isEditingWaveform = true
+                            }
+                        }
+                    } label: {
+                        Text(isEditingWaveform ? "Done" : "Edit")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(palette.accent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(palette.accent.opacity(0.15))
+                            .cornerRadius(6)
+                    }
+                }
+            }
+
+            // Waveform with animated height expansion
             ZStack {
                 if isLoadingWaveform {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: palette.textPrimary))
-                        .frame(height: 100)
+                        .frame(height: isEditingWaveform ? expandedWaveformHeight : compactWaveformHeight)
                 } else if waveformSamples.isEmpty {
                     Image(systemName: "waveform")
                         .font(.system(size: 60))
                         .foregroundColor(palette.textSecondary)
-                        .frame(height: 100)
+                        .frame(height: isEditingWaveform ? expandedWaveformHeight : compactWaveformHeight)
+                } else if isEditingWaveform {
+                    // Editable waveform with selection (0.01s precision)
+                    EditableWaveformView(
+                        samples: waveformSamples,
+                        duration: pendingDuration ?? playback.duration,
+                        selectionStart: $selectionStart,
+                        selectionEnd: $selectionEnd,
+                        playheadPosition: $editPlayheadPosition,
+                        currentTime: playback.currentTime,
+                        isEditing: true,
+                        isPrecisionMode: isPrecisionMode,
+                        markers: $editedMarkers,
+                        onScrub: { time in
+                            playback.seek(to: time)
+                        },
+                        onMarkerTap: { marker in
+                            // Tap marker to set playhead to marker position
+                            editPlayheadPosition = marker.time
+                            playback.seek(to: marker.time)
+                        },
+                        onMarkerMoved: { marker, newTime in
+                            // Marker was dragged - this is already handled by binding
+                        }
+                    )
+                    .frame(height: expandedWaveformHeight)
                 } else {
+                    // Normal playback waveform
                     WaveformView(
                         samples: waveformSamples,
                         progress: playbackProgress,
                         zoomScale: $zoomScale
                     )
-                    .frame(height: 100)
+                    .frame(height: compactWaveformHeight)
                 }
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
             .padding(.vertical, 10)
 
-            // Zoom indicator
-            if zoomScale > 1.01 {
+            // Edit mode: Selection info and actions
+            if isEditingWaveform {
+                VStack(spacing: 12) {
+                    // Selection time display with nudge controls (0.01s precision)
+                    SelectionTimeDisplay(
+                        selectionStart: $selectionStart,
+                        selectionEnd: $selectionEnd,
+                        duration: pendingDuration ?? playback.duration
+                    )
+
+                    // Edit actions with undo/redo and Hold for Precision
+                    WaveformEditActionsView(
+                        canUndo: editHistory.canUndo,
+                        canRedo: editHistory.canRedo,
+                        canTrim: canPerformTrim,
+                        canCut: canPerformCut,
+                        isProcessing: isProcessingEdit,
+                        isPrecisionMode: $isPrecisionMode,
+                        onUndo: performUndo,
+                        onRedo: performRedo,
+                        onTrim: performTrim,
+                        onCut: performCut,
+                        onAddMarker: addMarkerAtPlayhead
+                    )
+
+                    // Processing indicator
+                    if isProcessingEdit {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: palette.accent))
+                                .scaleEffect(0.8)
+                            Text("Processing...")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 4)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            // Zoom indicator (only when not editing)
+            if !isEditingWaveform && zoomScale > 1.01 {
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .font(.caption)
@@ -373,35 +534,37 @@ struct RecordingDetailView: View {
                     .foregroundColor(palette.textSecondary)
                     .monospacedDigit()
                 Spacer()
-                Text(formatTime(playback.duration))
+                Text(formatTime(pendingDuration ?? playback.duration))
                     .font(.caption)
                     .foregroundColor(palette.textSecondary)
                     .monospacedDigit()
             }
 
-            // Progress bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Rectangle()
-                        .fill(palette.stroke)
-                        .frame(height: 4)
-                        .cornerRadius(2)
-                    Rectangle()
-                        .fill(palette.accent)
-                        .frame(width: progressWidth(in: geometry.size.width), height: 4)
-                        .cornerRadius(2)
+            // Progress bar (only when not editing)
+            if !isEditingWaveform {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Rectangle()
+                            .fill(palette.stroke)
+                            .frame(height: 4)
+                            .cornerRadius(2)
+                        Rectangle()
+                            .fill(palette.accent)
+                            .frame(width: progressWidth(in: geometry.size.width), height: 4)
+                            .cornerRadius(2)
+                    }
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let progress = max(0, min(1, value.location.x / geometry.size.width))
+                                let newTime = progress * playback.duration
+                                playback.seek(to: newTime)
+                            }
+                    )
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let progress = max(0, min(1, value.location.x / geometry.size.width))
-                            let newTime = progress * playback.duration
-                            playback.seek(to: newTime)
-                        }
-                )
+                .frame(height: 20)
             }
-            .frame(height: 20)
 
             // Playback controls
             HStack(spacing: 32) {
@@ -484,6 +647,213 @@ struct RecordingDetailView: View {
             // Collapsible EQ Panel
             if showEQPanel {
                 eqPanel
+            }
+        }
+    }
+
+    // MARK: - Waveform Edit Helpers
+
+    private var canPerformTrim: Bool {
+        // Can trim if selection is not the entire duration
+        let duration = pendingDuration ?? playback.duration
+        return selectionStart > 0.1 || selectionEnd < (duration - 0.1)
+    }
+
+    private var canPerformCut: Bool {
+        // Can cut if selection is not the entire duration and has some content
+        let duration = pendingDuration ?? playback.duration
+        let selectionDuration = selectionEnd - selectionStart
+        return selectionDuration > 0.1 && selectionDuration < (duration - 0.1)
+    }
+
+    /// Create a snapshot of current state for undo
+    private func createUndoSnapshot(description: String) -> EditSnapshot {
+        EditSnapshot(
+            audioFileURL: pendingAudioEdit ?? currentRecording.fileURL,
+            duration: pendingDuration ?? playback.duration,
+            markers: editedMarkers,
+            selectionStart: selectionStart,
+            selectionEnd: selectionEnd,
+            description: description
+        )
+    }
+
+    /// Restore state from a snapshot
+    private func restoreFromSnapshot(_ snapshot: EditSnapshot) {
+        pendingAudioEdit = snapshot.audioFileURL == currentRecording.fileURL ? nil : snapshot.audioFileURL
+        pendingDuration = snapshot.audioFileURL == currentRecording.fileURL ? nil : snapshot.duration
+        editedMarkers = snapshot.markers
+        selectionStart = snapshot.selectionStart
+        selectionEnd = snapshot.selectionEnd
+
+        // Reload waveform and playback
+        isLoadingWaveform = true
+        Task {
+            let samples = await WaveformSampler.shared.samples(
+                for: snapshot.audioFileURL,
+                targetSampleCount: 150
+            )
+            await MainActor.run {
+                waveformSamples = samples
+                isLoadingWaveform = false
+                playback.load(url: snapshot.audioFileURL)
+            }
+        }
+    }
+
+    private func performUndo() {
+        guard let snapshot = editHistory.popUndo() else { return }
+
+        // Push current state to redo stack
+        let currentSnapshot = createUndoSnapshot(description: "Redo")
+        editHistory.pushRedo(currentSnapshot)
+
+        // Restore previous state
+        restoreFromSnapshot(snapshot)
+        hasAudioEdits = snapshot.audioFileURL != currentRecording.fileURL
+    }
+
+    private func performRedo() {
+        guard let snapshot = editHistory.popRedo() else { return }
+
+        // Push current state to undo stack
+        let currentSnapshot = createUndoSnapshot(description: snapshot.description)
+        editHistory.pushUndo(currentSnapshot)
+
+        // Restore redo state
+        restoreFromSnapshot(snapshot)
+        hasAudioEdits = snapshot.audioFileURL != currentRecording.fileURL
+    }
+
+    private func performTrim() {
+        guard canPerformTrim else { return }
+
+        // Push current state to undo stack before making changes
+        let undoSnapshot = createUndoSnapshot(description: "Trim")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.trim(
+                sourceURL: sourceURL,
+                startTime: selectionStart,
+                endTime: selectionEnd
+            )
+
+            await MainActor.run {
+                if result.success {
+                    // Update markers to match new timeline
+                    editedMarkers = editedMarkers.afterTrim(
+                        keepingStart: selectionStart,
+                        keepingEnd: selectionEnd
+                    )
+
+                    // Store pending edit
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+
+                    // Reload waveform for new file
+                    reloadWaveformForPendingEdit()
+
+                    // Reset selection to full new duration
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+
+                    // Reload playback
+                    playback.load(url: result.outputURL)
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func performCut() {
+        guard canPerformCut else { return }
+
+        // Push current state to undo stack before making changes
+        let undoSnapshot = createUndoSnapshot(description: "Cut")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.cut(
+                sourceURL: sourceURL,
+                startTime: selectionStart,
+                endTime: selectionEnd
+            )
+
+            await MainActor.run {
+                if result.success {
+                    // Update markers to match new timeline (remove cut region, shift after)
+                    editedMarkers = editedMarkers.afterCut(
+                        removingStart: selectionStart,
+                        removingEnd: selectionEnd
+                    )
+
+                    // Store pending edit
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+
+                    // Reload waveform for new file
+                    reloadWaveformForPendingEdit()
+
+                    // Reset selection
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+
+                    // Reload playback
+                    playback.load(url: result.outputURL)
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func addMarkerAtPlayhead() {
+        // Marker placement uses the edit playhead position (tap-to-set cursor)
+        // The editPlayheadPosition is controlled by:
+        // - Tapping anywhere on the waveform
+        // - Tapping a marker (sets playhead to marker time)
+        // - Dragging the playhead cursor
+        //
+        // This ensures deterministic, user-controlled marker placement.
+
+        // Quantize to 0.01s precision
+        let editStep: TimeInterval = 0.01
+        let quantizedTime = (editPlayheadPosition / editStep).rounded() * editStep
+        let duration = pendingDuration ?? playback.duration
+        let markerTime = Swift.max(0, Swift.min(quantizedTime, duration))
+
+        let newMarker = Marker(time: markerTime)
+        editedMarkers.append(newMarker)
+        editedMarkers = editedMarkers.sortedByTime
+
+        // Haptic feedback
+        let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+        impactGenerator.impactOccurred()
+    }
+
+    private func reloadWaveformForPendingEdit() {
+        guard let pendingURL = pendingAudioEdit else { return }
+
+        isLoadingWaveform = true
+        Task {
+            // Clear cache for old URL
+            await WaveformSampler.shared.clearCache(for: currentRecording.fileURL)
+
+            let samples = await WaveformSampler.shared.samples(
+                for: pendingURL,
+                targetSampleCount: 150
+            )
+            await MainActor.run {
+                waveformSamples = samples
+                isLoadingWaveform = false
             }
         }
     }
@@ -1276,6 +1646,56 @@ struct RecordingDetailView: View {
         }
         // Otherwise preserve the original iconColorHex (already in currentRecording)
         updated.eqSettings = localEQSettings
+        updated.markers = editedMarkers
+
+        // Handle audio edits - update file URL and duration
+        if let pendingURL = pendingAudioEdit, let newDuration = pendingDuration {
+            // Clean up old file if different
+            let oldURL = currentRecording.fileURL
+            if oldURL != pendingURL {
+                AudioEditor.shared.cleanupOldFile(at: oldURL)
+            }
+
+            // Create updated recording with new audio file
+            updated = RecordingItem(
+                id: updated.id,
+                fileURL: pendingURL,
+                createdAt: updated.createdAt,
+                duration: newDuration,
+                title: updated.title,
+                notes: updated.notes,
+                tagIDs: updated.tagIDs,
+                albumID: updated.albumID,
+                locationLabel: updated.locationLabel,
+                transcript: updated.transcript,
+                latitude: updated.latitude,
+                longitude: updated.longitude,
+                trashedAt: updated.trashedAt,
+                lastPlaybackPosition: 0,  // Reset playback position after edit
+                iconColorHex: updated.iconColorHex,
+                eqSettings: updated.eqSettings,
+                projectId: updated.projectId,
+                parentRecordingId: updated.parentRecordingId,
+                versionIndex: updated.versionIndex,
+                proofStatusRaw: nil,  // Clear proof - file has changed
+                proofSHA256: nil,
+                proofCloudCreatedAt: nil,
+                proofCloudRecordName: nil,
+                locationModeRaw: updated.locationModeRaw,
+                locationProofHash: updated.locationProofHash,
+                locationProofStatusRaw: updated.locationProofStatusRaw,
+                markers: editedMarkers
+            )
+
+            // Clear waveform cache for old URL
+            Task {
+                await WaveformSampler.shared.clearCache(for: oldURL)
+            }
+        }
+
+        // Clear edit history after saving
+        editHistory.clear()
+
         appState.updateRecording(updated)
     }
 

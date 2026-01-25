@@ -572,7 +572,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .overlay(
                     VStack(spacing: 0) {
-                        Color.clear.frame(height: topBarHeight + 16)
+                        Color.clear.frame(height: topBarHeight + 4)
 
                         if appState.recorder.isActive {
                             RecordingHUDCard(
@@ -3702,29 +3702,41 @@ struct TagsInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("Tags help you label ideas fast so you can find them later.")
+                Text("Tags let you label ideas fast so you can find them later.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
                 // How it works
                 InfoCard {
-                    Text("How to use")
+                    Text("How Tags work")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Add tags to recordings (e.g., beatbox, melody, lyrics, favorite)")
-                        InfoBulletRow(text: "Use tags to filter and search quickly")
-                        InfoBulletRow(text: "Change tag colors for personal organization")
-                        InfoBulletRow(text: "Manage tags in Settings → Manage Tags")
+                        InfoBulletRow(text: "Add tags to any recording (Hook, Verse, Beat, Lyrics, To Finish).")
+                        InfoBulletRow(text: "Tap tags to filter your library instantly.")
+                        InfoBulletRow(text: "Use multiple tags to describe the same idea (e.g., Hook + Melody).")
+                        InfoBulletRow(text: "Customize tags in Settings → Manage Tags (rename, recolor, delete).")
                     }
+
+                    Text("You can always edit tags later—nothing is permanent.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
                 }
                 .padding(.horizontal)
 
                 // Tip
                 InfoCard {
-                    InfoTipRow(text: "Keep tags short and consistent for best results.")
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.yellow)
+                        Text("Tip: Keep tag names short (1–2 words) so your filters stay clean.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .padding(.horizontal)
 
@@ -3745,22 +3757,35 @@ struct AlbumsInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("Albums are folders for grouping recordings by project or vibe.")
+                Text("Albums are folders that keep your recordings organized by project, session, or vibe.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
                 // How it works
                 InfoCard {
-                    Text("How to use")
+                    Text("How Albums work")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Move recordings into albums to keep drafts organized")
-                        InfoBulletRow(text: "Great for separating songs, clients, or sessions")
-                        InfoBulletRow(text: "Works with search and tags together")
-                        InfoBulletRow(text: "Swipe left on a recording to move it to an album")
+                        InfoBulletRow(text: "Use Albums to separate drafts, sessions, clients, or song ideas.")
+                        InfoBulletRow(text: "Move a recording into an Album from its Details screen, or use swipe actions in the list.")
+                        InfoBulletRow(text: "Albums work with Search and Tags—filter by Album first, then refine with tags.")
+                        InfoBulletRow(text: "Create a new Album anytime, and rename or delete Albums in Settings.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.yellow)
+                        Text("Tip: Keep a \"Drafts\" album for quick capture, then move ideas into project-specific albums later.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
                 }
                 .padding(.horizontal)
@@ -3789,15 +3814,15 @@ struct ProjectsInfoView: View {
 
                 // How it works
                 InfoCard {
-                    Text("How to use")
+                    Text("How Projects work")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "A Project groups related takes in one place (Hook v1, Chorus v2, Verse idea)")
-                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3...) instead of scattering files")
-                        InfoBulletRow(text: "Mark a take as Best Take to highlight the one you want to keep (optional)")
-                        InfoBulletRow(text: "Projects don't replace Albums: Albums organize your library, Projects link versions")
+                        InfoBulletRow(text: "A Project is a group of related takes for the same idea (Hook v1, Chorus v2, Verse idea).")
+                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3…) inside the same Project instead of making scattered files.")
+                        InfoBulletRow(text: "Best Take highlights the one to keep (optional). Press and hold a take to set it.")
+                        InfoBulletRow(text: "Albums vs Projects: Albums organize your library. Projects organize versions of the same idea.")
                     }
                 }
                 .padding(.horizontal)
@@ -3808,7 +3833,7 @@ struct ProjectsInfoView: View {
                         Image(systemName: "lightbulb.fill")
                             .font(.system(size: 14))
                             .foregroundColor(.yellow)
-                        Text("Use \"Record New Version\" in any recording's Details screen to quickly capture a new take.")
+                        Text("Tip: Use Record New Version in a recording's Details to quickly capture another take.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -3832,22 +3857,22 @@ struct MapsInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("If Location is enabled, Sonidea can pin where ideas were captured.")
+                Text("Maps lets you see your creative footprint—where your ideas were captured over time.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
                 // How it works
                 InfoCard {
-                    Text("How to use")
+                    Text("How Maps work")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Each recording can store an optional location")
-                        InfoBulletRow(text: "Map view shows your recording spots over time")
-                        InfoBulletRow(text: "Tap a pin to see the recording details")
-                        InfoBulletRow(text: "You control this: turn Location on/off in iOS Settings")
+                        InfoBulletRow(text: "Each recording can save an optional location when it's created.")
+                        InfoBulletRow(text: "Open Maps to see your recording spots over time—sessions, trips, and favorite places.")
+                        InfoBulletRow(text: "Tap a pin to jump straight to that recording's details.")
+                        InfoBulletRow(text: "You control it anytime: enable or disable Location in iOS Settings.")
                     }
                 }
                 .padding(.horizontal)
@@ -3858,7 +3883,7 @@ struct MapsInfoView: View {
                         Image(systemName: "info.circle.fill")
                             .font(.system(size: 14))
                             .foregroundColor(.blue)
-                        Text("Location is optional. The app works perfectly without it.")
+                        Text("Location is optional. Sonidea works fully without it, and you can turn it off anytime.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -3882,22 +3907,22 @@ struct RecordButtonInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("Move the record button anywhere to match your workflow.")
+                Text("Move the record button anywhere so it's always where your thumb expects it.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
                 // How it works
                 InfoCard {
-                    Text("How to use")
+                    Text("How it works")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Drag freely anywhere on screen (below the top menu)")
-                        InfoBulletRow(text: "Position is saved automatically")
-                        InfoBulletRow(text: "Long-press the button to see a quick reset option")
-                        InfoBulletRow(text: "If it ever feels off, use \"Reset Record Button Position\" in Settings")
+                        InfoBulletRow(text: "Drag the record button anywhere on screen (below the top bar).")
+                        InfoBulletRow(text: "Your placement is saved automatically.")
+                        InfoBulletRow(text: "Long-press the button to reveal quick options, including Reset.")
+                        InfoBulletRow(text: "You can also reset it anytime in Settings → Reset Record Button Position.")
                     }
                 }
                 .padding(.horizontal)
@@ -3908,7 +3933,7 @@ struct RecordButtonInfoView: View {
                         Image(systemName: "arrow.counterclockwise")
                             .font(.system(size: 14))
                             .foregroundColor(.blue)
-                        Text("Reset returns the button to the default bottom-center position, just like Voice Memos.")
+                        Text("Reset returns the button to the default bottom position.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }

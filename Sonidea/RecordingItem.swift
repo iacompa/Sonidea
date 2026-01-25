@@ -72,6 +72,11 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     /// Location proof status stored as raw string (independent from date proof)
     var locationProofStatusRaw: String?
 
+    // MARK: - Waveform Editing
+
+    /// Markers for this recording
+    var markers: [Marker]
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
@@ -278,7 +283,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         proofCloudRecordName: String? = nil,
         locationModeRaw: String? = nil,
         locationProofHash: String? = nil,
-        locationProofStatusRaw: String? = nil
+        locationProofStatusRaw: String? = nil,
+        markers: [Marker] = []
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -306,6 +312,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.locationModeRaw = locationModeRaw
         self.locationProofHash = locationProofHash
         self.locationProofStatusRaw = locationProofStatusRaw
+        self.markers = markers
     }
 
     // MARK: - Codable with Migration Support
@@ -317,6 +324,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
         case locationModeRaw, locationProofHash, locationProofStatusRaw
+        case markers
     }
 
     init(from decoder: Decoder) throws {
@@ -352,6 +360,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         locationModeRaw = try container.decodeIfPresent(String.self, forKey: .locationModeRaw)
         locationProofHash = try container.decodeIfPresent(String.self, forKey: .locationProofHash)
         locationProofStatusRaw = try container.decodeIfPresent(String.self, forKey: .locationProofStatusRaw)
+
+        // Migration: markers with empty default for existing recordings
+        markers = try container.decodeIfPresent([Marker].self, forKey: .markers) ?? []
     }
 }
 
@@ -367,7 +378,7 @@ struct RawRecordingData {
 
 // MARK: - Recording Spot (for Map clustering)
 
-struct RecordingSpot: Identifiable, Equatable {
+struct RecordingSpot: Identifiable, Equatable, Hashable {
     let id: String // cluster key based on rounded coordinates
     let centerCoordinate: CLLocationCoordinate2D
     var displayName: String
@@ -377,6 +388,10 @@ struct RecordingSpot: Identifiable, Equatable {
 
     static func == (lhs: RecordingSpot, rhs: RecordingSpot) -> Bool {
         lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 

@@ -142,7 +142,7 @@ struct RecordingsListView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
         .background(palette.background)
     }
 

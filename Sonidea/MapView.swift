@@ -30,6 +30,7 @@ struct GPSInsightsMapView: View {
     @Environment(\.themePalette) var palette
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var selectedRecording: RecordingItem?
+    @State private var selectedSpot: RecordingSpot?
     @State private var sheetState: BottomSheetState = .collapsed
     @State private var dragOffset: CGFloat = 0
 
@@ -85,7 +86,7 @@ struct GPSInsightsMapView: View {
                 if let coordinate = recording.coordinate {
                     Annotation(recording.title, coordinate: coordinate) {
                         Button {
-                            selectedRecording = recording
+                            handlePinTap(for: recording)
                         } label: {
                             RecordingMapPin()
                         }
@@ -104,6 +105,30 @@ struct GPSInsightsMapView: View {
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
+        .sheet(item: $selectedSpot) { spot in
+            SpotRecordingsView(spot: spot)
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
+    }
+
+    /// Handle tap on a map pin - open spot view if multiple recordings, else open recording directly
+    private func handlePinTap(for recording: RecordingItem) {
+        guard let lat = recording.latitude, let lon = recording.longitude else {
+            selectedRecording = recording
+            return
+        }
+
+        // Find the spot this recording belongs to
+        let clusterKey = SpotClustering.clusterKey(latitude: lat, longitude: lon)
+        if let spot = allSpots.first(where: { $0.id == clusterKey }), spot.totalCount > 1 {
+            // Multiple recordings at this spot - show spot view
+            selectedSpot = spot
+        } else {
+            // Single recording - open details directly
+            selectedRecording = recording
         }
     }
 
@@ -194,6 +219,8 @@ struct GPSInsightsMapView: View {
             Rectangle()
                 .fill(palette.separator)
                 .frame(height: 0.5)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -217,7 +244,7 @@ struct GPSInsightsMapView: View {
                         spots: topRecordedSpots,
                         valueKeyPath: \.totalCount,
                         valueLabel: "recordings",
-                        onSpotTap: zoomToSpot
+                        onSpotTap: handleSpotTap
                     )
 
                     // Most Favorited Section
@@ -228,7 +255,7 @@ struct GPSInsightsMapView: View {
                         spots: topFavoritedSpots,
                         valueKeyPath: \.favoriteCount,
                         valueLabel: "favorites",
-                        onSpotTap: zoomToSpot
+                        onSpotTap: handleSpotTap
                     )
                 }
                 .padding(.horizontal, 16)
@@ -254,7 +281,7 @@ struct GPSInsightsMapView: View {
                                     rank: index + 1,
                                     spot: spot,
                                     onTap: {
-                                        zoomToSpot(spot)
+                                        handleSpotTap(spot)
                                     }
                                 )
                             }
@@ -266,6 +293,21 @@ struct GPSInsightsMapView: View {
             .padding(.bottom, 16)
         }
         .scrollDisabled(sheetState == .collapsed)
+    }
+
+    /// Handle tap on a spot row - open spot view if multiple recordings, else open recording directly
+    private func handleSpotTap(_ spot: RecordingSpot) {
+        if spot.totalCount > 1 {
+            // Multiple recordings - show spot view
+            selectedSpot = spot
+        } else if let firstID = spot.recordingIDs.first,
+                  let recording = appState.recording(for: firstID) {
+            // Single recording - open details directly
+            selectedRecording = recording
+        } else {
+            // Fallback: just zoom to spot
+            zoomToSpot(spot)
+        }
     }
 
     @ViewBuilder
@@ -578,6 +620,229 @@ struct RecordingMapPin: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(.white)
         }
+    }
+}
+
+// MARK: - Spot Recordings View
+
+struct SpotRecordingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let spot: RecordingSpot
+
+    @State private var selectedRecording: RecordingItem?
+
+    /// Recordings at this spot, sorted newest first
+    private var recordings: [RecordingItem] {
+        spot.recordingIDs
+            .compactMap { appState.recording(for: $0) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // Header section
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            // Map pin icon
+                            ZStack {
+                                Circle()
+                                    .fill(palette.accent.opacity(0.15))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(palette.accent)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(spot.displayName)
+                                    .font(.headline)
+                                    .foregroundStyle(palette.textPrimary)
+
+                                Text("\(recordings.count) recording\(recordings.count == 1 ? "" : "s")")
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.textSecondary)
+                            }
+
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+                }
+
+                // Recordings section
+                Section {
+                    if recordings.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Image(systemName: "waveform")
+                                    .font(.title)
+                                    .foregroundStyle(palette.textTertiary)
+                                Text("No recordings found for this spot.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.textSecondary)
+                            }
+                            .padding(.vertical, 20)
+                            Spacer()
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    } else {
+                        ForEach(recordings) { recording in
+                            Button {
+                                selectedRecording = recording
+                            } label: {
+                                SpotRecordingRow(recording: recording)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(palette.cardBackground)
+                        }
+                    }
+                } header: {
+                    Text("Recordings")
+                        .foregroundStyle(palette.textSecondary)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .navigationTitle("Spot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(palette.accent)
+                }
+            }
+            .sheet(item: $selectedRecording) { recording in
+                RecordingDetailView(recording: recording)
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Spot Recording Row
+
+struct SpotRecordingRow: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let recording: RecordingItem
+
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: recording.createdAt)
+    }
+
+    private var formattedDuration: String {
+        let minutes = Int(recording.duration) / 60
+        let seconds = Int(recording.duration) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
+    }
+
+    private var albumName: String? {
+        guard let albumID = recording.albumID else { return nil }
+        return appState.album(for: albumID)?.name
+    }
+
+    private var projectContext: (title: String, take: String)? {
+        guard let projectId = recording.projectId,
+              let project = appState.project(for: projectId) else {
+            return nil
+        }
+        return (project.title, "V\(recording.versionIndex)")
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Waveform icon
+            ZStack {
+                Circle()
+                    .fill(palette.accent.opacity(0.1))
+                    .frame(width: 40, height: 40)
+                Image(systemName: "waveform")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(palette.accent)
+            }
+
+            // Content
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recording.title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(palette.textPrimary)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    // Date/time
+                    Text(formattedDate)
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+
+                    Text("•")
+                        .font(.caption)
+                        .foregroundStyle(palette.textTertiary)
+
+                    // Duration
+                    Label(formattedDuration, systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+                }
+
+                // Album/Project badges
+                HStack(spacing: 6) {
+                    if let albumName = albumName {
+                        HStack(spacing: 3) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 9))
+                            Text(albumName)
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(palette.textSecondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(palette.accent.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+
+                    if let context = projectContext {
+                        HStack(spacing: 3) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 9))
+                            Text("\(context.title) · \(context.take)")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(palette.textSecondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(palette.accent.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Chevron
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.textTertiary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
