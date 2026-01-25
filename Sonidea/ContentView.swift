@@ -2390,7 +2390,10 @@ struct SettingsSheetView: View {
 
     @State private var showLockScreenHelp = false
     @State private var showActionButtonHelp = false
+    @State private var showMicrophoneSheet = false
+    @State private var showStorageEstimateSheet = false
     @State private var showSiriShortcutsHelp = false
+    @State private var showGuide = false
 
     var body: some View {
         @Bindable var appState = appState
@@ -2490,119 +2493,49 @@ struct SettingsSheetView: View {
                     .listRowBackground(palette.cardBackground)
                 }
 
-                // MARK: How It Works Section
+                // MARK: Recording Section
                 Section {
-                    NavigationLink {
-                        TagsInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "tag", title: "Tags")
+                    // Recording Quality with info button
+                    HStack(spacing: 0) {
+                        Picker("Quality", selection: $appState.appSettings.recordingQuality) {
+                            ForEach(RecordingQualityPreset.allCases) { preset in
+                                Text(preset.displayName).tag(preset)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        Button {
+                            showStorageEstimateSheet = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.body)
+                                .foregroundStyle(palette.accent)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .listRowBackground(palette.cardBackground)
 
-                    NavigationLink {
-                        AlbumsInfoView()
+                    // Microphone
+                    Button {
+                        showMicrophoneSheet = true
                     } label: {
-                        SettingsInfoRow(icon: "folder", title: "Albums")
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    NavigationLink {
-                        ProjectsInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "folder.badge.plus", title: "Projects")
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    NavigationLink {
-                        MapsInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "map", title: "Maps")
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    NavigationLink {
-                        RecordButtonInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "hand.draw", title: "Movable Record Button")
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    NavigationLink {
-                        SearchInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "magnifyingglass", title: "Search")
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    NavigationLink {
-                        AppearanceInfoView()
-                    } label: {
-                        SettingsInfoRow(icon: "paintpalette", title: "Appearance")
-                    }
-                    .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("How it works")
-                        .foregroundColor(palette.textSecondary)
-                }
-
-                // MARK: Recording Quality Section
-                Section {
-                    Picker("Quality", selection: $appState.appSettings.recordingQuality) {
-                        ForEach(RecordingQualityPreset.allCases) { preset in
-                            Text(preset.displayName).tag(preset)
+                        HStack {
+                            Text("Microphone")
+                                .foregroundStyle(palette.textPrimary)
+                            Spacer()
+                            Text(microphoneDisplayName)
+                                .foregroundStyle(palette.textSecondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.textTertiary)
                         }
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Recording Quality")
+                    Text("Recording")
                         .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text(appState.appSettings.recordingQuality.description)
-                        .foregroundColor(palette.textSecondary)
-                }
-
-                Section {
-                    let availableInputs = AudioSessionManager.shared.availableInputs
-                    if availableInputs.count > 1 {
-                        // Multiple inputs available - show picker
-                        ForEach(availableInputs, id: \.uid) { input in
-                            Button {
-                                try? AudioSessionManager.shared.setPreferredInput(input)
-                            } label: {
-                                HStack {
-                                    Image(systemName: inputIcon(for: input))
-                                        .foregroundColor(palette.accent)
-                                        .frame(width: 24)
-                                    Text(input.portName)
-                                        .foregroundColor(palette.textPrimary)
-                                    Spacer()
-                                    if AudioSessionManager.shared.currentInput?.uid == input.uid {
-                                        Image(systemName: "checkmark")
-                                            .foregroundColor(palette.accent)
-                                    }
-                                }
-                            }
-                            .listRowBackground(palette.cardBackground)
-                        }
-                    } else {
-                        // Single or no inputs - just show current
-                        HStack {
-                            Image(systemName: "mic.fill")
-                                .foregroundColor(palette.accent)
-                                .frame(width: 24)
-                            Text("Current Input")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Text(AudioSessionManager.shared.currentInput?.portName ?? "Default")
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        .listRowBackground(palette.cardBackground)
-                    }
-                } header: {
-                    Text("Audio Input")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    Text("Select your preferred microphone for recording.")
                         .foregroundColor(palette.textSecondary)
                 }
 
@@ -2873,12 +2806,32 @@ struct SettingsSheetView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showGuide = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "book.closed")
+                            Text("Guide")
+                        }
+                    }
+                    .foregroundColor(palette.accent)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundColor(palette.accent)
                 }
             }
             .tint(palette.accent)
+            .sheet(isPresented: $showGuide) {
+                GuideView()
+            }
+            .sheet(isPresented: $showMicrophoneSheet) {
+                MicrophoneSelectorSheet()
+            }
+            .sheet(isPresented: $showStorageEstimateSheet) {
+                StorageEstimateSheet()
+            }
             .sheet(isPresented: $showShareSheet) {
                 if let url = exportedZIPURL {
                     ShareSheet(items: [url])
@@ -3046,18 +2999,438 @@ struct SettingsSheetView: View {
         }
     }
 
-    private func inputIcon(for input: AVAudioSessionPortDescription) -> String {
-        switch input.portType {
-        case .builtInMic:
-            return "mic.fill"
-        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE:
-            return "airpodspro"
-        case .headsetMic:
-            return "headphones"
-        case .usbAudio:
-            return "cable.connector"
-        default:
-            return "mic"
+    /// Display name for the currently selected microphone
+    private var microphoneDisplayName: String {
+        // If no preferred UID, show "Automatic"
+        guard let preferredUID = appState.appSettings.preferredInputUID else {
+            return "Automatic"
+        }
+
+        // Check if the preferred input is currently available
+        if let input = AudioSessionManager.shared.input(for: preferredUID) {
+            return input.portName
+        }
+
+        // Preferred input not available
+        return "Not connected"
+    }
+}
+
+// MARK: - Microphone Selector Sheet
+
+struct MicrophoneSelectorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // Automatic option
+                Button {
+                    selectInput(uid: nil)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkles")
+                            .font(.body)
+                            .foregroundStyle(palette.accent)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatic")
+                                .font(.body)
+                                .foregroundStyle(palette.textPrimary)
+                            Text("System chooses best available")
+                                .font(.caption)
+                                .foregroundStyle(palette.textSecondary)
+                        }
+
+                        Spacer()
+
+                        if appState.appSettings.preferredInputUID == nil {
+                            Image(systemName: "checkmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(palette.accent)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(palette.cardBackground)
+
+                // Available inputs section
+                Section {
+                    ForEach(AudioSessionManager.shared.availableInputs, id: \.uid) { input in
+                        Button {
+                            selectInput(uid: input.uid)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: AudioSessionManager.icon(for: input.portType))
+                                    .font(.body)
+                                    .foregroundStyle(palette.accent)
+                                    .frame(width: 28)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(input.portName)
+                                        .font(.body)
+                                        .foregroundStyle(palette.textPrimary)
+                                    Text(AudioSessionManager.portTypeName(for: input.portType))
+                                        .font(.caption)
+                                        .foregroundStyle(palette.textSecondary)
+                                }
+
+                                Spacer()
+
+                                if appState.appSettings.preferredInputUID == input.uid {
+                                    Image(systemName: "checkmark")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(palette.accent)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(palette.cardBackground)
+                    }
+                } header: {
+                    Text("Available Inputs")
+                        .foregroundStyle(palette.textSecondary)
+                }
+
+                // Show previously selected but unavailable input
+                if let preferredUID = appState.appSettings.preferredInputUID,
+                   !AudioSessionManager.shared.isInputAvailable(uid: preferredUID) {
+                    Section {
+                        HStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.body)
+                                .foregroundStyle(.orange)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Selected microphone")
+                                    .font(.body)
+                                    .foregroundStyle(palette.textPrimary)
+                                Text("Not connected")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "checkmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(palette.accent)
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    } header: {
+                        Text("Previously Selected")
+                            .foregroundStyle(palette.textSecondary)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .navigationTitle("Microphone Input")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(palette.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            // Refresh available inputs when sheet appears
+            AudioSessionManager.shared.refreshAvailableInputs()
+        }
+    }
+
+    private func selectInput(uid: String?) {
+        appState.appSettings.preferredInputUID = uid
+
+        // Apply the preference immediately if possible
+        do {
+            try AudioSessionManager.shared.setPreferredInput(uid: uid)
+        } catch {
+            print("Failed to set preferred input: \(error)")
+        }
+
+        dismiss()
+    }
+}
+
+// MARK: - Guide View
+
+struct GuideView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Learn how to get the most out of Sonidea's features.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.textSecondary)
+                        .listRowBackground(palette.cardBackground)
+                }
+
+                Section {
+                    NavigationLink {
+                        TagsInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "tag",
+                            title: "Tags",
+                            subtitle: "Organize recordings with custom labels"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        AlbumsInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "folder",
+                            title: "Albums",
+                            subtitle: "Group related recordings together"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        ProjectsInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "folder.badge.plus",
+                            title: "Projects",
+                            subtitle: "Track multiple takes and versions"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        MapsInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "map",
+                            title: "Maps",
+                            subtitle: "View recordings by location"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        RecordButtonInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "hand.draw",
+                            title: "Movable Record Button",
+                            subtitle: "Position the button anywhere on screen"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        SearchInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "magnifyingglass",
+                            title: "Search",
+                            subtitle: "Find recordings by title or transcript"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        AppearanceInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "paintpalette",
+                            title: "Appearance",
+                            subtitle: "Customize themes and colors"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("Features")
+                        .foregroundStyle(palette.textSecondary)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .navigationTitle("Guide")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(palette.accent)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Guide Row
+
+struct GuideRow: View {
+    @Environment(\.themePalette) private var palette
+
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundStyle(palette.accent)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body)
+                    .foregroundStyle(palette.textPrimary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(palette.textSecondary)
+            }
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Storage Estimate Sheet
+
+struct StorageEstimateSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // Explanation section
+                Section {
+                    Text("Estimates are approximate and vary based on audio content, silence, and complexity.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.textSecondary)
+                        .listRowBackground(palette.cardBackground)
+                }
+
+                // Quality estimates
+                Section {
+                    ForEach(RecordingQualityPreset.allCases) { preset in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.displayName)
+                                    .font(.body)
+                                    .foregroundStyle(palette.textPrimary)
+                                Text(preset.description)
+                                    .font(.caption)
+                                    .foregroundStyle(palette.textSecondary)
+                            }
+
+                            Spacer()
+
+                            Text(storageEstimate(for: preset))
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(palette.textSecondary)
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    }
+                } header: {
+                    Text("Estimated Storage per Minute")
+                        .foregroundStyle(palette.textSecondary)
+                }
+
+                // Technical notes
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label {
+                            Text("AAC formats use variable bitrate encoding")
+                        } icon: {
+                            Image(systemName: "waveform")
+                                .foregroundStyle(palette.accent)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+
+                        Label {
+                            Text("Lossless (ALAC) size depends on audio complexity")
+                        } icon: {
+                            Image(systemName: "music.note")
+                                .foregroundStyle(palette.accent)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+
+                        Label {
+                            Text("WAV is uncompressed with fixed, predictable size")
+                        } icon: {
+                            Image(systemName: "doc.badge.gearshape")
+                                .foregroundStyle(palette.accent)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .navigationTitle("Storage Estimate")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(palette.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// Calculate storage estimate string for a given quality preset
+    private func storageEstimate(for preset: RecordingQualityPreset) -> String {
+        switch preset {
+        case .standard:
+            // AAC ~128kbps = ~0.96 MB/min, but VBR so varies
+            return "~1 MB/min"
+
+        case .high:
+            // AAC ~256kbps = ~1.9 MB/min, but VBR so varies
+            return "~2 MB/min"
+
+        case .lossless:
+            // ALAC varies greatly based on content
+            // Typical speech: 2-4 MB/min, complex audio: 4-6 MB/min
+            return "~3–5 MB/min"
+
+        case .wav:
+            // PCM is deterministic: sample_rate × bit_depth × channels / 8 / 1024 / 1024 × 60
+            // 48000 Hz × 16-bit × 1 channel = 5.49 MB/min (mono)
+            // Formula: 48000 * 16 * 1 / 8 / 1024 / 1024 * 60 = 5.49
+            let sampleRate: Double = 48000
+            let bitDepth: Double = 16
+            let channels: Double = 1 // Mono recording
+            let bytesPerSecond = sampleRate * (bitDepth / 8) * channels
+            let mbPerMinute = bytesPerSecond * 60 / 1024 / 1024
+
+            return String(format: "~%.1f MB/min", mbPerMinute)
         }
     }
 }

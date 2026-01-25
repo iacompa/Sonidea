@@ -7,17 +7,30 @@
 
 import AVFoundation
 import Foundation
+import Observation
 
 // NOTE: To enable recording while screen is locked, you MUST enable:
 // Target > Signing & Capabilities > Background Modes > "Audio, AirPlay, and Picture in Picture"
 // This code provides the audio session support, but the capability must be enabled in Xcode.
 
 @MainActor
+@Observable
 final class AudioSessionManager {
     static let shared = AudioSessionManager()
 
     private(set) var isRecordingActive = false
     private(set) var isPlaybackActive = false
+
+    // Observable available inputs - updates on route changes
+    private(set) var availableInputs: [AVAudioSessionPortDescription] = []
+
+    // Current effective input
+    var currentInput: AVAudioSessionPortDescription? {
+        AVAudioSession.sharedInstance().currentRoute.inputs.first
+    }
+
+    // Actual sample rate after configuration (may differ from requested)
+    private(set) var actualSampleRate: Double = 48000
 
     var onInterruptionBegan: (() -> Void)?
     var onInterruptionEnded: ((Bool) -> Void)? // Bool = shouldResume
@@ -25,12 +38,59 @@ final class AudioSessionManager {
     var onMediaServicesReset: (() -> Void)?
 
     private init() {
+        refreshAvailableInputs()
         setupNotifications()
+    }
+
+    // MARK: - Input Management
+
+    /// Refresh the list of available inputs from AVAudioSession
+    func refreshAvailableInputs() {
+        availableInputs = AVAudioSession.sharedInstance().availableInputs ?? []
+    }
+
+    /// Check if a specific input UID is currently available
+    func isInputAvailable(uid: String) -> Bool {
+        availableInputs.contains { $0.uid == uid }
+    }
+
+    /// Get input description by UID
+    func input(for uid: String) -> AVAudioSessionPortDescription? {
+        availableInputs.first { $0.uid == uid }
+    }
+
+    /// Set preferred input by UID (nil = Automatic)
+    func setPreferredInput(uid: String?) throws {
+        let session = AVAudioSession.sharedInstance()
+
+        if let uid = uid, let input = input(for: uid) {
+            try session.setPreferredInput(input)
+        } else {
+            // Clear preferred input - system will choose automatically
+            try session.setPreferredInput(nil)
+        }
+    }
+
+    /// Apply preferred input from settings (if available)
+    func applyPreferredInput(from settings: AppSettings) {
+        guard let preferredUID = settings.preferredInputUID else {
+            // Automatic - clear any preferred input
+            try? AVAudioSession.sharedInstance().setPreferredInput(nil)
+            return
+        }
+
+        if let matchingInput = input(for: preferredUID) {
+            try? AVAudioSession.sharedInstance().setPreferredInput(matchingInput)
+        } else {
+            // Preferred input not available - fall back to automatic
+            try? AVAudioSession.sharedInstance().setPreferredInput(nil)
+        }
     }
 
     // MARK: - Session Configuration
 
-    func configureForRecording() throws {
+    /// Configure audio session for recording with specified quality preset
+    func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) throws {
         let session = AVAudioSession.sharedInstance()
 
         var options: AVAudioSession.CategoryOptions = [
@@ -42,10 +102,46 @@ final class AudioSessionManager {
         options.insert(.allowBluetoothA2DP)
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
+
+        // Try to set preferred sample rate
+        let requestedSampleRate = quality.sampleRate
+        try? session.setPreferredSampleRate(requestedSampleRate)
+
+        // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
-        // Apply preferred input if set
-        applyPreferredInput()
+        // Store actual sample rate (may differ from requested if hardware doesn't support it)
+        actualSampleRate = session.sampleRate
+
+        if actualSampleRate != requestedSampleRate {
+            print("AudioSession: Requested \(requestedSampleRate)Hz, got \(actualSampleRate)Hz")
+        }
+
+        // Apply preferred input
+        applyPreferredInput(from: settings)
+
+        // Refresh inputs after activation
+        refreshAvailableInputs()
+
+        isRecordingActive = true
+    }
+
+    /// Legacy method for backwards compatibility
+    func configureForRecording() throws {
+        let session = AVAudioSession.sharedInstance()
+
+        var options: AVAudioSession.CategoryOptions = [
+            .defaultToSpeaker,
+            .allowBluetooth
+        ]
+
+        options.insert(.allowBluetoothA2DP)
+
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+        actualSampleRate = session.sampleRate
+        refreshAvailableInputs()
 
         isRecordingActive = true
     }
@@ -64,33 +160,45 @@ final class AudioSessionManager {
         isPlaybackActive = false
     }
 
-    // MARK: - Input Selection
+    // MARK: - Input Icons
 
-    var availableInputs: [AVAudioSessionPortDescription] {
-        AVAudioSession.sharedInstance().availableInputs ?? []
-    }
-
-    var currentInput: AVAudioSessionPortDescription? {
-        AVAudioSession.sharedInstance().currentRoute.inputs.first
-    }
-
-    func setPreferredInput(_ input: AVAudioSessionPortDescription?) throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setPreferredInput(input)
-
-        // Persist the input UID
-        if let uid = input?.uid {
-            UserDefaults.standard.set(uid, forKey: "preferredInputUID")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "preferredInputUID")
+    /// Get SF Symbol icon name for input port type
+    static func icon(for portType: AVAudioSession.Port) -> String {
+        switch portType {
+        case .builtInMic:
+            return "iphone"
+        case .headsetMic:
+            return "headphones"
+        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE:
+            return "airpodspro"
+        case .usbAudio:
+            return "cable.connector"
+        case .carAudio:
+            return "car"
+        default:
+            return "mic.fill"
         }
     }
 
-    private func applyPreferredInput() {
-        guard let savedUID = UserDefaults.standard.string(forKey: "preferredInputUID") else { return }
-
-        if let matchingInput = availableInputs.first(where: { $0.uid == savedUID }) {
-            try? AVAudioSession.sharedInstance().setPreferredInput(matchingInput)
+    /// Get human-readable port type name
+    static func portTypeName(for portType: AVAudioSession.Port) -> String {
+        switch portType {
+        case .builtInMic:
+            return "Built-in"
+        case .headsetMic:
+            return "Headset"
+        case .bluetoothHFP:
+            return "Bluetooth"
+        case .bluetoothA2DP:
+            return "Bluetooth A2DP"
+        case .bluetoothLE:
+            return "Bluetooth LE"
+        case .usbAudio:
+            return "USB Audio"
+        case .carAudio:
+            return "CarPlay"
+        default:
+            return "External"
         }
     }
 
@@ -129,6 +237,7 @@ final class AudioSessionManager {
         isPlaybackActive = false
 
         Task { @MainActor in
+            refreshAvailableInputs()
             onMediaServicesReset?()
         }
     }
@@ -165,8 +274,11 @@ final class AudioSessionManager {
         }
 
         Task { @MainActor in
+            // Always refresh available inputs on route change
+            refreshAvailableInputs()
+
             switch reason {
-            case .oldDeviceUnavailable, .newDeviceAvailable:
+            case .oldDeviceUnavailable, .newDeviceAvailable, .categoryChange, .override:
                 onRouteChange?()
             default:
                 break

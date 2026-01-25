@@ -5,46 +5,86 @@
 //  Created by Michael Ramos on 1/22/26.
 //
 
+import AVFoundation
 import Foundation
 
 // MARK: - Recording Quality Preset
 
 enum RecordingQualityPreset: String, CaseIterable, Identifiable, Codable {
-    case good
-    case better
-    case best
+    case standard   // AAC, 44.1kHz, ~128kbps
+    case high       // AAC, 48kHz, ~256kbps
+    case lossless   // ALAC, 48kHz (fallback to AAC if unsupported)
+    case wav        // PCM WAV, 48kHz, 16-bit
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .good: return "Good"
-        case .better: return "Better"
-        case .best: return "Best"
+        case .standard: return "Standard"
+        case .high: return "High"
+        case .lossless: return "Lossless"
+        case .wav: return "WAV"
         }
     }
 
     var description: String {
         switch self {
-        case .good: return "22 kHz, smaller files"
-        case .better: return "44.1 kHz, balanced"
-        case .best: return "48 kHz, highest quality"
+        case .standard: return "AAC 44.1 kHz · Smaller files"
+        case .high: return "AAC 48 kHz · Balanced quality"
+        case .lossless: return "ALAC 48 kHz · Studio quality"
+        case .wav: return "PCM 48 kHz · Uncompressed"
         }
     }
 
     var sampleRate: Double {
         switch self {
-        case .good: return 22050
-        case .better: return 44100
-        case .best: return 48000
+        case .standard: return 44100
+        case .high, .lossless, .wav: return 48000
         }
     }
 
     var bitRate: Int {
         switch self {
-        case .good: return 64000
-        case .better: return 128000
-        case .best: return 192000
+        case .standard: return 128000
+        case .high: return 256000
+        case .lossless, .wav: return 0 // Not applicable for lossless/WAV
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .standard, .high, .lossless: return "m4a"
+        case .wav: return "wav"
+        }
+    }
+
+    var formatID: AudioFormatID {
+        switch self {
+        case .standard, .high: return kAudioFormatMPEG4AAC
+        case .lossless: return kAudioFormatAppleLossless
+        case .wav: return kAudioFormatLinearPCM
+        }
+    }
+
+    var isLossless: Bool {
+        switch self {
+        case .lossless, .wav: return true
+        case .standard, .high: return false
+        }
+    }
+
+    // Migration from old presets
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+
+        // Handle migration from old values
+        switch rawValue {
+        case "good": self = .standard
+        case "better": self = .high
+        case "best": self = .high
+        default:
+            self = RecordingQualityPreset(rawValue: rawValue) ?? .high
         }
     }
 }
@@ -203,13 +243,16 @@ struct SilenceSkipSettings: Codable, Equatable {
 // MARK: - App Settings (persisted)
 
 struct AppSettings: Codable {
-    var recordingQuality: RecordingQualityPreset = .better
+    var recordingQuality: RecordingQualityPreset = .high
     var transcriptionLanguage: TranscriptionLanguage = .system
     var autoTranscribe: Bool = false
     var skipInterval: SkipInterval = .fifteen
     var playbackSpeed: Float = 1.0
     var silenceSkipSettings: SilenceSkipSettings = .default
     var iCloudSyncEnabled: Bool = false
+
+    // Audio input preference (nil = Automatic)
+    var preferredInputUID: String? = nil
 
     // Move hint tracking
     var hasShownMoveHint: Bool = false

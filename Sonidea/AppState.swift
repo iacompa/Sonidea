@@ -39,8 +39,9 @@ final class AppState {
     var appSettings: AppSettings = .default {
         didSet {
             saveAppSettings()
-            // Apply quality preset to recorder
+            // Apply settings to recorder
             recorder.qualityPreset = appSettings.recordingQuality
+            recorder.appSettings = appSettings
         }
     }
 
@@ -91,6 +92,7 @@ final class AppState {
         migrateInboxToDrafts()
         purgeOldTrashedRecordings()
         recorder.qualityPreset = appSettings.recordingQuality
+        recorder.appSettings = appSettings
         loadRecordButtonPosition()
 
         // Connect sync manager

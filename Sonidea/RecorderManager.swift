@@ -30,7 +30,10 @@ final class RecorderManager: NSObject {
     var recordingState: RecordingState = .idle
     var currentDuration: TimeInterval = 0
     var liveMeterSamples: [Float] = []
-    var qualityPreset: RecordingQualityPreset = .better
+    var qualityPreset: RecordingQualityPreset = .high
+
+    // Reference to app settings (set by AppState)
+    var appSettings: AppSettings = .default
 
     /// Duration accumulated before current recording segment (for pause/resume)
     private var accumulatedDuration: TimeInterval = 0
@@ -187,7 +190,10 @@ final class RecorderManager: NSObject {
         guard recordingState == .idle else { return }
 
         do {
-            try AudioSessionManager.shared.configureForRecording()
+            try AudioSessionManager.shared.configureForRecording(
+                quality: qualityPreset,
+                settings: appSettings
+            )
         } catch {
             print("Failed to set up audio session: \(error)")
             return
@@ -196,7 +202,7 @@ final class RecorderManager: NSObject {
         // Request location at start of recording
         requestLocationIfNeeded()
 
-        let fileURL = generateFileURL()
+        let fileURL = generateFileURL(for: qualityPreset)
         currentFileURL = fileURL
 
         let settings = recordingSettings(for: qualityPreset)
@@ -386,23 +392,68 @@ final class RecorderManager: NSObject {
     // MARK: - Quality Settings
 
     private func recordingSettings(for preset: RecordingQualityPreset) -> [String: Any] {
-        return [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: preset.sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: preset.bitRate,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
+        // Use actual sample rate from audio session (may differ from requested)
+        let effectiveSampleRate = AudioSessionManager.shared.actualSampleRate
+
+        switch preset {
+        case .standard:
+            // AAC, 44.1kHz, ~128kbps
+            return [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: min(effectiveSampleRate, 44100),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 128000,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+
+        case .high:
+            // AAC, 48kHz, ~256kbps
+            return [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 256000,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+
+        case .lossless:
+            // Apple Lossless (ALAC), 48kHz
+            // Falls back gracefully if ALAC encoding fails
+            return [
+                AVFormatIDKey: Int(kAudioFormatAppleLossless),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitDepthHintKey: 16,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+
+        case .wav:
+            // Linear PCM (WAV), 48kHz, 16-bit
+            return [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
+            ]
+        }
     }
 
     // MARK: - Helpers
 
-    private func generateFileURL() -> URL {
+    private func generateFileURL(for preset: RecordingQualityPreset) -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let filename = "recording_\(formatter.string(from: Date())).m4a"
+        let filename = "recording_\(formatter.string(from: Date())).\(preset.fileExtension)"
         return documentsPath.appendingPathComponent(filename)
+    }
+
+    /// Legacy method for backwards compatibility
+    private func generateFileURL() -> URL {
+        generateFileURL(for: qualityPreset)
     }
 
     private func startTimer() {
