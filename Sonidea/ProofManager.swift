@@ -109,17 +109,36 @@ final class ProofManager {
 
     /// Safely get the CloudKit container, or nil if unavailable
     /// This NEVER calls CKContainer.default() - always uses explicit identifier
+    /// Uses defensive checks to prevent EXC_BREAKPOINT crashes
     private func getContainerSafely() -> CKContainer? {
         // Return cached container if we have one
         if let container = _container {
             return container
         }
 
-        // First check if iCloud is available at all
+        // DEFENSIVE CHECK 1: Verify iCloud is available at all
         guard FileManager.default.ubiquityIdentityToken != nil else {
             logger.warning("iCloud not available - ubiquityIdentityToken is nil")
             cloudKitAvailability = .notSignedIn
             return nil
+        }
+
+        // DEFENSIVE CHECK 2: Verify the container identifier is valid
+        // An empty or malformed identifier can cause crashes
+        guard !Self.containerIdentifier.isEmpty,
+              Self.containerIdentifier.hasPrefix("iCloud.") else {
+            logger.error("Invalid container identifier: \(Self.containerIdentifier)")
+            cloudKitAvailability = .unavailable(reason: "Invalid iCloud container configuration")
+            return nil
+        }
+
+        // DEFENSIVE CHECK 3: Verify entitlements contain the container
+        // Check if ubiquity container is accessible (this validates entitlements)
+        let ubiquityURL = FileManager.default.url(forUbiquityContainerIdentifier: Self.containerIdentifier)
+        if ubiquityURL == nil {
+            // Container might not be in entitlements or not properly configured
+            // Log warning but continue - CloudKit might still work for some operations
+            logger.warning("Ubiquity container URL is nil - entitlements may be misconfigured")
         }
 
         // Use explicit container identifier - NEVER use CKContainer.default()

@@ -76,9 +76,10 @@ struct RoadmapItem: Identifiable {
 }
 
 let roadmapItems: [RoadmapItem] = [
-    RoadmapItem(title: "Import from Files"),
-    RoadmapItem(title: "Smarter Drafts organization"),
-    RoadmapItem(title: "More pro recording polish")
+    RoadmapItem(title: "AI-powered track analysis that automatically tags recordings"),
+    RoadmapItem(title: "Android release"),
+    RoadmapItem(title: "More themes"),
+    RoadmapItem(title: "Make the best audio capture app in the world")
 ]
 
 // MARK: - Ask Prompt Trigger

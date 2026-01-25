@@ -98,6 +98,11 @@ struct RecordingDetailView: View {
     @State private var hasAudioEdits = false  // Track if audio was modified
     @State private var editHistory = EditHistory()  // Undo/redo support
 
+    // Pro waveform editor state
+    @State private var highResWaveformData: WaveformData?
+    @State private var skipSilenceManager = SkipSilenceManager()
+    @State private var isLoadingHighResWaveform = false
+
     // Waveform height constants
     private let compactWaveformHeight: CGFloat = 100
     private let expandedWaveformHeight: CGFloat = 200
@@ -300,6 +305,26 @@ struct RecordingDetailView: View {
                 playback.stop()
                 editHistory.clear()  // Clean up undo history
             }
+            .onChange(of: isEditingWaveform) { _, editing in
+                if editing {
+                    // Load high-res waveform data when entering edit mode
+                    loadHighResWaveform()
+                }
+            }
+            .onChange(of: skipSilenceManager.isEnabled) { _, enabled in
+                if enabled {
+                    // Analyze audio for silence when skip silence is enabled
+                    Task {
+                        await skipSilenceManager.analyze(url: pendingAudioEdit ?? currentRecording.fileURL)
+                    }
+                }
+            }
+            .onChange(of: playback.currentTime) { _, currentTime in
+                // Skip silence during playback
+                if playback.isPlaying, let skipTo = skipSilenceManager.shouldSkip(at: currentTime) {
+                    playback.seek(to: skipTo)
+                }
+            }
             .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
                 Button("OK") {
                     playback.clearError()
@@ -410,7 +435,10 @@ struct RecordingDetailView: View {
                                 }
                                 selectionStart = 0
                                 selectionEnd = pendingDuration ?? playback.duration
-                                editPlayheadPosition = 0
+                                // Set playhead to current playback position (quantized to 0.01s)
+                                // This ensures the marker is placed where the user was listening
+                                let currentTime = playback.currentTime
+                                editPlayheadPosition = (currentTime / 0.01).rounded() * 0.01
                                 isEditingWaveform = true
                             }
                         }
@@ -439,30 +467,26 @@ struct RecordingDetailView: View {
                         .foregroundColor(palette.textSecondary)
                         .frame(height: isEditingWaveform ? expandedWaveformHeight : compactWaveformHeight)
                 } else if isEditingWaveform {
-                    // Editable waveform with selection (0.01s precision)
-                    EditableWaveformView(
-                        samples: waveformSamples,
+                    // Pro-level waveform editor with Voice Memos-style dense bars, timeline, pinch-to-zoom, and pan
+                    ProWaveformEditor(
+                        waveformData: highResWaveformData,
                         duration: pendingDuration ?? playback.duration,
                         selectionStart: $selectionStart,
                         selectionEnd: $selectionEnd,
                         playheadPosition: $editPlayheadPosition,
-                        currentTime: playback.currentTime,
-                        isEditing: true,
-                        isPrecisionMode: isPrecisionMode,
                         markers: $editedMarkers,
-                        onScrub: { time in
+                        currentTime: playback.currentTime,
+                        isPlaying: playback.isPlaying,
+                        isPrecisionMode: $isPrecisionMode,
+                        onSeek: { time in
                             playback.seek(to: time)
                         },
                         onMarkerTap: { marker in
                             // Tap marker to set playhead to marker position
                             editPlayheadPosition = marker.time
                             playback.seek(to: marker.time)
-                        },
-                        onMarkerMoved: { marker, newTime in
-                            // Marker was dragged - this is already handled by binding
                         }
                     )
-                    .frame(height: expandedWaveformHeight)
                 } else {
                     // Normal playback waveform
                     WaveformView(
@@ -643,6 +667,30 @@ struct RecordingDetailView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
+                    .cornerRadius(8)
+                }
+
+                // Skip Silence button
+                Button {
+                    skipSilenceManager.isEnabled.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: skipSilenceManager.isEnabled ? "forward.fill" : "forward")
+                            .font(.system(size: 12))
+                        if skipSilenceManager.isAnalyzing {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(width: 12, height: 12)
+                        } else {
+                            Text("Skip")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    .foregroundColor(skipSilenceManager.isEnabled ? .white : .orange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(skipSilenceManager.isEnabled ? Color.orange : Color.orange.opacity(0.15))
                     .cornerRadius(8)
                 }
 
@@ -835,12 +883,18 @@ struct RecordingDetailView: View {
         // - Dragging the playhead cursor
         //
         // This ensures deterministic, user-controlled marker placement.
+        // The playhead position is already quantized to 0.01s in all input sources,
+        // so we use it directly without re-quantization.
 
-        // Quantize to 0.01s precision
-        let editStep: TimeInterval = 0.01
-        let quantizedTime = (editPlayheadPosition / editStep).rounded() * editStep
         let duration = pendingDuration ?? playback.duration
-        let markerTime = Swift.max(0, Swift.min(quantizedTime, duration))
+        let markerTime = Swift.max(0, Swift.min(editPlayheadPosition, duration))
+
+        // DEBUG: Log marker placement values (remove after verification)
+        print("📍 ADD MARKER DEBUG:")
+        print("   playheadPosition: \(editPlayheadPosition)")
+        print("   selectionStart: \(selectionStart)")
+        print("   selectionEnd: \(selectionEnd)")
+        print("   markerTime: \(markerTime)")
 
         let newMarker = Marker(time: markerTime)
         editedMarkers.append(newMarker)
@@ -855,16 +909,27 @@ struct RecordingDetailView: View {
         guard let pendingURL = pendingAudioEdit else { return }
 
         isLoadingWaveform = true
+        // Clear high-res waveform so it reloads with new audio
+        highResWaveformData = nil
+        // Reset skip silence manager for new audio
+        skipSilenceManager.clear()
+
         Task {
-            // Clear cache for old URL
+            // Clear caches for old URL
             await WaveformSampler.shared.clearCache(for: currentRecording.fileURL)
+            await AudioWaveformExtractor.shared.clearCache(for: currentRecording.fileURL)
 
             let samples = await WaveformSampler.shared.samples(
                 for: pendingURL,
                 targetSampleCount: 150
             )
+
+            // Load high-res waveform for new file
+            let waveformData = try? await AudioWaveformExtractor.shared.extractWaveform(from: pendingURL)
+
             await MainActor.run {
                 waveformSamples = samples
+                highResWaveformData = waveformData
                 isLoadingWaveform = false
             }
         }
@@ -1123,172 +1188,327 @@ struct RecordingDetailView: View {
     // MARK: - Metadata Section
 
     private var metadataSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Title
+        VStack(alignment: .leading, spacing: 24) {
+
+            // ═══════════════════════════════════════════════════════════════
+            // DETAILS CARD - Title, Album, Project, Tags in ONE unified card
+            // ═══════════════════════════════════════════════════════════════
             VStack(alignment: .leading, spacing: 8) {
-                Text("Title")
+                Text("Details")
                     .font(.caption)
+                    .fontWeight(.medium)
                     .foregroundColor(palette.textSecondary)
                     .textCase(.uppercase)
-                TextField("Recording title", text: $editedTitle)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(palette.textPrimary)
-                    .padding(12)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
-            }
+                    .padding(.bottom, 2)
 
-            // Album
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Album")
-                    .font(.caption)
-                    .foregroundColor(palette.textSecondary)
-                    .textCase(.uppercase)
-
-                Button {
-                    showChooseAlbum = true
-                } label: {
-                    HStack {
-                        if let album = appState.album(for: currentRecording.albumID) {
-                            Text(album.name)
+                MetadataCard {
+                    // Row 1: Title
+                    CardRow(showDivider: true) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("TITLE")
+                                .font(.caption2)
+                                .foregroundColor(palette.textTertiary)
+                                .textCase(.uppercase)
+                            TextField("Recording title", text: $editedTitle)
+                                .textFieldStyle(.plain)
+                                .font(.body)
                                 .foregroundColor(palette.textPrimary)
-                        } else {
-                            Text("None")
-                                .foregroundColor(palette.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    // Row 2: Album
+                    CardRow(showDivider: true, action: { showChooseAlbum = true }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("ALBUM")
+                                .font(.caption2)
+                                .foregroundColor(palette.textTertiary)
+                                .textCase(.uppercase)
+                            Text(appState.album(for: currentRecording.albumID)?.name ?? "None")
+                                .font(.body)
+                                .foregroundColor(appState.album(for: currentRecording.albumID) != nil ? palette.textPrimary : palette.textSecondary)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
-                            .foregroundColor(palette.textSecondary)
+                            .fontWeight(.semibold)
+                            .foregroundColor(palette.textTertiary)
                     }
-                    .padding(12)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
-                }
-            }
 
-            // Project & Version
-            projectSection
+                    // Row 3: Project
+                    projectCardRow
 
-            // Tags
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Tags")
-                        .font(.caption)
-                        .foregroundColor(palette.textSecondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                    Button("Manage") {
-                        showManageTags = true
-                    }
-                    .font(.caption)
-                    .foregroundColor(palette.accent)
-                }
+                    // Row 4: Tags
+                    CardRow(showDivider: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("TAGS")
+                                    .font(.caption2)
+                                    .foregroundColor(palette.textTertiary)
+                                    .textCase(.uppercase)
+                                Spacer()
+                                Button("Manage") {
+                                    showManageTags = true
+                                }
+                                .font(.caption)
+                                .foregroundColor(palette.accent)
+                            }
 
-                FlowLayout(spacing: 8) {
-                    ForEach(appState.tags) { tag in
-                        TagChipSelectable(
-                            tag: tag,
-                            isSelected: currentRecording.tagIDs.contains(tag.id)
-                        ) {
-                            currentRecording = appState.toggleTag(tag, for: currentRecording)
+                            if appState.tags.isEmpty {
+                                Text("No tags")
+                                    .font(.subheadline)
+                                    .foregroundColor(palette.textSecondary)
+                            } else {
+                                FlowLayout(spacing: 8) {
+                                    ForEach(appState.tags) { tag in
+                                        TagChipSelectable(
+                                            tag: tag,
+                                            isSelected: currentRecording.tagIDs.contains(tag.id)
+                                        ) {
+                                            currentRecording = appState.toggleTag(tag, for: currentRecording)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Location Section (simplified)
+            // Location Section
             locationSection
 
             // Transcription
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Transcription")
-                        .font(.caption)
-                        .foregroundColor(palette.textSecondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                    if !currentRecording.transcript.isEmpty {
-                        Button("Clear") {
-                            currentRecording.transcript = ""
-                            appState.updateTranscript("", for: currentRecording.id)
+            transcriptionSection
+
+            // Notes
+            notesSection
+
+            // Footer: File size + Verification status
+            footerSection
+        }
+    }
+
+    // MARK: - Project Card Row (inside Details card)
+
+    @ViewBuilder
+    private var projectCardRow: some View {
+        CardRow(showDivider: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("PROJECT")
+                    .font(.caption2)
+                    .foregroundColor(palette.textTertiary)
+                    .textCase(.uppercase)
+
+                if currentRecording.belongsToProject {
+                    // Recording is part of a project - show project info
+                    if let project = appState.project(for: currentRecording.projectId) {
+                        Button {
+                            if isOpenedFromProject {
+                                if hasEdits { saveChanges() }
+                                dismiss()
+                            } else {
+                                showProjectSheet = true
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "folder.fill")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 20)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(project.title)
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textPrimary)
+                                            .lineLimit(1)
+
+                                        Text(currentRecording.versionLabel)
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(palette.accent)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(palette.accent.opacity(0.15))
+                                            .cornerRadius(4)
+
+                                        if project.bestTakeRecordingId == currentRecording.id {
+                                            Image(systemName: "star.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(.yellow)
+                                        }
+                                    }
+
+                                    Text("\(appState.recordingCount(in: project)) versions")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+
+                                Spacer()
+
+                                if isOpenedFromProject {
+                                    Text("Back")
+                                        .font(.caption)
+                                        .foregroundColor(palette.accent)
+                                } else {
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(palette.textTertiary)
+                                }
+                            }
+                            .padding(10)
+                            .background(palette.background.opacity(0.5))
+                            .cornerRadius(8)
                         }
-                        .font(.caption)
-                        .foregroundColor(.red)
+                        .buttonStyle(.plain)
+
+                        // Remove from project (only if not opened from project)
+                        if !isOpenedFromProject {
+                            Button(role: .destructive) {
+                                appState.removeFromProject(recording: currentRecording)
+                                refreshRecording()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "folder.badge.minus")
+                                    Text("Remove from Project")
+                                }
+                                .font(.caption)
+                                .foregroundColor(.red)
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+                } else {
+                    // Not in a project - show action buttons
+                    HStack(spacing: 10) {
+                        Button {
+                            showCreateProject = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.subheadline)
+                                Text("Create")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                            .foregroundColor(palette.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(palette.accent.opacity(0.12))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+
+                        if !appState.projects.isEmpty {
+                            Button {
+                                showChooseProject = true
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "folder")
+                                        .font(.subheadline)
+                                    Text("Add to...")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                                .foregroundColor(palette.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(palette.background.opacity(0.5))
+                                .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
+            }
+        }
+    }
 
+    // MARK: - Transcription Section
+
+    private var transcriptionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Transcription")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(palette.textSecondary)
+                    .textCase(.uppercase)
+                Spacer()
+                if !currentRecording.transcript.isEmpty {
+                    Button("Clear") {
+                        currentRecording.transcript = ""
+                        appState.updateTranscript("", for: currentRecording.id)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.red)
+                }
+            }
+
+            MetadataCard {
                 if isTranscribing {
-                    HStack {
+                    CardRow(showDivider: false) {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
                         Text("Transcribing...")
                             .font(.subheadline)
                             .foregroundColor(palette.textSecondary)
+                        Spacer()
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
                 } else if let error = transcriptionError {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(error)
+                    CardRow(showDivider: false) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(error)
+                                .font(.subheadline)
+                                .foregroundColor(.red)
+                            Button("Try Again") {
+                                transcribeRecording()
+                            }
                             .font(.subheadline)
-                            .foregroundColor(.red)
-                        Button("Try Again") {
-                            transcribeRecording()
+                            .foregroundColor(palette.accent)
                         }
-                        .font(.subheadline)
-                        .foregroundColor(palette.accent)
+                        Spacer()
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
                 } else if currentRecording.transcript.isEmpty {
-                    Button {
-                        transcribeRecording()
-                    } label: {
-                        HStack {
-                            Image(systemName: "waveform.badge.mic")
-                            Text("Transcribe Recording")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(palette.accent)
-                        .padding(12)
-                        .frame(maxWidth: .infinity)
-                        .background(palette.inputBackground)
-                        .cornerRadius(8)
+                    CardRow(showDivider: false, action: { transcribeRecording() }) {
+                        Image(systemName: "waveform.badge.mic")
+                            .foregroundColor(palette.accent)
+                        Text("Transcribe Recording")
+                            .font(.subheadline)
+                            .foregroundColor(palette.accent)
+                        Spacer()
                     }
                 } else {
-                    Text(currentRecording.transcript)
-                        .font(.subheadline)
-                        .foregroundColor(palette.textPrimary)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(palette.inputBackground)
-                        .cornerRadius(8)
+                    CardRow(showDivider: false) {
+                        Text(currentRecording.transcript)
+                            .font(.subheadline)
+                            .foregroundColor(palette.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
+        }
+    }
 
-            // Notes
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Notes")
-                    .font(.caption)
-                    .foregroundColor(palette.textSecondary)
-                    .textCase(.uppercase)
-                TextEditor(text: $editedNotes)
-                    .scrollContentBackground(.hidden)
-                    .foregroundColor(palette.textPrimary)
-                    .padding(8)
-                    .frame(minHeight: 100)
-                    .background(palette.inputBackground)
-                    .cornerRadius(8)
-                    .focused($isNotesFocused)
-            }
+    // MARK: - Notes Section
 
-            // Footer: File size + Verification status
-            footerSection
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notes")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(palette.textSecondary)
+                .textCase(.uppercase)
+
+            TextEditor(text: $editedNotes)
+                .scrollContentBackground(.hidden)
+                .foregroundColor(palette.textPrimary)
+                .padding(12)
+                .frame(minHeight: 100)
+                .background(palette.inputBackground)
+                .cornerRadius(CardStyle.cornerRadius)
+                .focused($isNotesFocused)
         }
     }
 
@@ -1342,158 +1562,25 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: - Project Section
-
-    @ViewBuilder
-    private var projectSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Project")
-                .font(.caption)
-                .foregroundColor(palette.textSecondary)
-                .textCase(.uppercase)
-
-            if currentRecording.belongsToProject {
-                // Recording is part of a project
-                if let project = appState.project(for: currentRecording.projectId) {
-                    Button {
-                        if isOpenedFromProject {
-                            // Already came from project - just go back (dismiss)
-                            if hasEdits {
-                                saveChanges()
-                            }
-                            dismiss()
-                        } else {
-                            // Open project sheet
-                            showProjectSheet = true
-                        }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "folder.fill")
-                                .foregroundColor(palette.accent)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(project.title)
-                                        .font(.subheadline)
-                                        .foregroundColor(palette.textPrimary)
-                                        .lineLimit(1)
-
-                                    Text(currentRecording.versionLabel)
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(palette.accent)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(palette.accent.opacity(0.15))
-                                        .cornerRadius(4)
-
-                                    if project.bestTakeRecordingId == currentRecording.id {
-                                        Image(systemName: "star.fill")
-                                            .font(.caption)
-                                            .foregroundColor(.yellow)
-                                    }
-                                }
-
-                                Text("\(appState.recordingCount(in: project)) versions")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
-
-                            Spacer()
-
-                            if isOpenedFromProject {
-                                // Show "Back" indicator when opened from project
-                                Text("Back")
-                                    .font(.caption)
-                                    .foregroundColor(palette.accent)
-                            } else {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
-                        }
-                        .padding(12)
-                        .background(palette.inputBackground)
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-
-                    // Remove from project button (only show if not opened from project context)
-                    if !isOpenedFromProject {
-                        Button(role: .destructive) {
-                            appState.removeFromProject(recording: currentRecording)
-                            refreshRecording()
-                        } label: {
-                            HStack {
-                                Image(systemName: "folder.badge.minus")
-                                Text("Remove from Project")
-                            }
-                            .font(.caption)
-                            .foregroundColor(.red)
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-            } else {
-                // Standalone recording - show options to add to project
-                HStack(spacing: 12) {
-                    Button {
-                        showCreateProject = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "folder.badge.plus")
-                            Text("Create Project")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(palette.accent)
-                        .padding(12)
-                        .frame(maxWidth: .infinity)
-                        .background(palette.inputBackground)
-                        .cornerRadius(8)
-                    }
-
-                    if !appState.projects.isEmpty {
-                        Button {
-                            showChooseProject = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "folder")
-                                Text("Add to Project")
-                            }
-                            .font(.subheadline)
-                            .foregroundColor(palette.textPrimary)
-                            .padding(12)
-                            .frame(maxWidth: .infinity)
-                            .background(palette.inputBackground)
-                            .cornerRadius(8)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private func refreshRecording() {
         if let updated = appState.recording(for: currentRecording.id) {
             currentRecording = updated
         }
     }
 
-    // MARK: - Location Section (Simplified)
+    // MARK: - Location Section
 
     @ViewBuilder
     private var locationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Location")
                 .font(.caption)
+                .fontWeight(.medium)
                 .foregroundColor(palette.textSecondary)
                 .textCase(.uppercase)
 
-            Button {
-                showLocationEditor = true
-            } label: {
-                HStack(spacing: 10) {
+            MetadataCard {
+                CardRow(showDivider: false, action: { showLocationEditor = true }) {
                     Image(systemName: "mappin.circle.fill")
                         .foregroundColor(currentRecording.hasCoordinates ? .red : palette.textTertiary)
                         .font(.system(size: 20))
@@ -1538,13 +1625,10 @@ struct RecordingDetailView: View {
 
                     Image(systemName: "chevron.right")
                         .font(.caption)
-                        .foregroundColor(palette.textSecondary)
+                        .fontWeight(.semibold)
+                        .foregroundColor(palette.textTertiary)
                 }
-                .padding(12)
-                .background(palette.inputBackground)
-                .cornerRadius(8)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -1746,6 +1830,25 @@ struct RecordingDetailView: View {
         }
     }
 
+    private func loadHighResWaveform() {
+        guard highResWaveformData == nil else { return }
+        isLoadingHighResWaveform = true
+        Task {
+            do {
+                let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                let waveformData = try await AudioWaveformExtractor.shared.extractWaveform(from: audioURL)
+                await MainActor.run {
+                    highResWaveformData = waveformData
+                    isLoadingHighResWaveform = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingHighResWaveform = false
+                }
+            }
+        }
+    }
+
     private func transcribeRecording() {
         isTranscribing = true
         transcriptionError = nil
@@ -1849,10 +1952,9 @@ struct VerificationInfoSheet: View {
                         .foregroundColor(palette.accent)
                 }
             }
-            .task {
-                // Check CloudKit availability when sheet opens
-                await appState.proofManager.checkCloudKitAvailability()
-            }
+            // NOTE: We intentionally do NOT check CloudKit availability on sheet open.
+            // CloudKit is only initialized when user taps "Verify with iCloud" button.
+            // This prevents crashes if entitlements/provisioning are misconfigured.
         }
     }
 
@@ -2433,6 +2535,113 @@ struct FlowLayout: Layout {
 
         let totalHeight = currentY + lineHeight
         return (CGSize(width: maxWidth, height: totalHeight), frames)
+    }
+}
+
+// MARK: - Metadata Card Components
+
+/// Constants for consistent card styling
+private enum CardStyle {
+    static let cornerRadius: CGFloat = 12
+    static let horizontalPadding: CGFloat = 16
+    static let verticalPadding: CGFloat = 14
+    static let rowSpacing: CGFloat = 0  // Rows use dividers, not spacing
+    static let dividerOpacity: Double = 0.15
+    static let headerBottomPadding: CGFloat = 6
+}
+
+/// A container card with rounded background - used for grouping related metadata rows
+struct MetadataCard<Content: View>: View {
+    @Environment(\.themePalette) private var palette
+    let content: () -> Content
+
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CardStyle.rowSpacing) {
+            content()
+        }
+        .background(palette.inputBackground)
+        .cornerRadius(CardStyle.cornerRadius)
+    }
+}
+
+/// A tappable row inside a card - iOS Settings style
+struct CardRow<Content: View>: View {
+    @Environment(\.themePalette) private var palette
+    let showDivider: Bool
+    let action: (() -> Void)?
+    let content: () -> Content
+
+    init(showDivider: Bool = true, action: (() -> Void)? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.showDivider = showDivider
+        self.action = action
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let action = action {
+                Button(action: action) {
+                    rowContent
+                }
+                .buttonStyle(.plain)
+            } else {
+                rowContent
+            }
+
+            if showDivider {
+                Divider()
+                    .background(palette.textSecondary.opacity(CardStyle.dividerOpacity))
+                    .padding(.leading, CardStyle.horizontalPadding)
+            }
+        }
+    }
+
+    private var rowContent: some View {
+        HStack {
+            content()
+        }
+        .padding(.horizontal, CardStyle.horizontalPadding)
+        .padding(.vertical, CardStyle.verticalPadding)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Section header with optional right-side action - sits outside the card
+struct CardSectionHeader: View {
+    @Environment(\.themePalette) private var palette
+    let title: String
+    let actionLabel: String?
+    let action: (() -> Void)?
+
+    init(_ title: String, actionLabel: String? = nil, action: (() -> Void)? = nil) {
+        self.title = title
+        self.actionLabel = actionLabel
+        self.action = action
+    }
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(palette.textSecondary)
+                .textCase(.uppercase)
+
+            Spacer()
+
+            if let label = actionLabel, let action = action {
+                Button(action: action) {
+                    Text(label)
+                        .font(.caption)
+                        .foregroundColor(palette.accent)
+                }
+            }
+        }
+        .padding(.bottom, CardStyle.headerBottomPadding)
     }
 }
 

@@ -214,7 +214,7 @@ struct TipJarView: View {
 
     private var roadmapSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What we're adding next")
+            Text("App Goals")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)

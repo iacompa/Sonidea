@@ -42,6 +42,9 @@ struct EditableWaveformView: View {
     private let handleWidth: CGFloat = 14
     private let handleHitAreaWidth: CGFloat = 44
 
+    // Drag threshold to prevent accidental drags (increased from 1 to 10)
+    private let dragMinDistance: CGFloat = 10
+
     // Marker dimensions
     private let markerHitWidth: CGFloat = 32
 
@@ -336,8 +339,8 @@ struct EditableWaveformView: View {
                 .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)
         }
         .offset(x: x - 1)
-        .gesture(
-            DragGesture(minimumDistance: 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
                     if !isDraggingPlayhead {
                         isDraggingPlayhead = true
@@ -400,13 +403,14 @@ struct EditableWaveformView: View {
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
-        .gesture(
-            DragGesture(minimumDistance: 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
                     // Initialize on first change
                     if leftHandleDragStartTime == 0 && leftHandleDragStartX == 0 {
                         leftHandleDragStartTime = selectionStart
                         leftHandleDragStartX = value.startLocation.x
+                        impactGenerator.impactOccurred(intensity: 0.5)
                     }
 
                     // Calculate delta
@@ -456,13 +460,14 @@ struct EditableWaveformView: View {
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
-        .gesture(
-            DragGesture(minimumDistance: 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
                     // Initialize on first change
                     if rightHandleDragStartTime == 0 && rightHandleDragStartX == 0 {
                         rightHandleDragStartTime = selectionEnd
                         rightHandleDragStartX = value.startLocation.x
+                        impactGenerator.impactOccurred(intensity: 0.5)
                     }
 
                     // Calculate delta
@@ -639,7 +644,7 @@ struct MarkerView: View {
     }
 }
 
-// MARK: - Edit Actions Row
+// MARK: - Edit Actions Row (Single Row, Compact)
 
 struct WaveformEditActionsView: View {
     let canUndo: Bool
@@ -657,72 +662,202 @@ struct WaveformEditActionsView: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Main action row
+        ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // Undo button
-                Button {
-                    onUndo()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 16, weight: .medium))
-                }
-                .buttonStyle(EditActionIconButtonStyle(isEnabled: canUndo && !isProcessing))
-                .disabled(!canUndo || isProcessing)
-
-                // Redo button
-                Button {
-                    onRedo()
-                } label: {
-                    Image(systemName: "arrow.uturn.forward")
-                        .font(.system(size: 16, weight: .medium))
-                }
-                .buttonStyle(EditActionIconButtonStyle(isEnabled: canRedo && !isProcessing))
-                .disabled(!canRedo || isProcessing)
-
-                Spacer()
-
                 // Trim button
-                Button {
-                    onTrim()
-                } label: {
-                    Label("Trim", systemImage: "scissors")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-                .buttonStyle(EditActionButtonStyle(isEnabled: canTrim && !isProcessing))
-                .disabled(!canTrim || isProcessing)
+                EditActionButton(
+                    icon: "crop",
+                    label: "Trim",
+                    isEnabled: canTrim && !isProcessing,
+                    style: .primary,
+                    action: onTrim
+                )
 
                 // Cut button
-                Button {
-                    onCut()
-                } label: {
-                    Label("Cut", systemImage: "minus.circle")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-                .buttonStyle(EditActionButtonStyle(isEnabled: canCut && !isProcessing))
-                .disabled(!canCut || isProcessing)
+                EditActionButton(
+                    icon: "scissors",
+                    label: "Cut",
+                    isEnabled: canCut && !isProcessing,
+                    style: .destructive,
+                    action: onCut
+                )
+
+                // Divider
+                Rectangle()
+                    .fill(palette.stroke.opacity(0.3))
+                    .frame(width: 1, height: 28)
+                    .padding(.horizontal, 4)
+
+                // Undo button
+                EditActionButton(
+                    icon: "arrow.uturn.backward",
+                    label: "Undo",
+                    isEnabled: canUndo && !isProcessing,
+                    style: .secondary,
+                    action: onUndo
+                )
+
+                // Redo button
+                EditActionButton(
+                    icon: "arrow.uturn.forward",
+                    label: "Redo",
+                    isEnabled: canRedo && !isProcessing,
+                    style: .secondary,
+                    action: onRedo
+                )
+
+                // Divider
+                Rectangle()
+                    .fill(palette.stroke.opacity(0.3))
+                    .frame(width: 1, height: 28)
+                    .padding(.horizontal, 4)
 
                 // Add Marker button
-                Button {
-                    onAddMarker()
-                } label: {
-                    Image(systemName: "flag")
-                        .font(.system(size: 16, weight: .medium))
-                }
-                .buttonStyle(EditActionIconButtonStyle(isEnabled: !isProcessing))
-                .disabled(isProcessing)
-            }
+                EditActionButton(
+                    icon: "flag.fill",
+                    label: "Marker",
+                    isEnabled: !isProcessing,
+                    style: .secondary,
+                    action: onAddMarker
+                )
 
-            // Hold for Precision button
-            HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
+                // Precision toggle
+                HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
+            }
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 4)
     }
 }
 
-// MARK: - Hold for Precision Button
+// MARK: - Edit Action Button Style Enum
+
+enum EditActionStyle {
+    case primary
+    case secondary
+    case destructive
+}
+
+// MARK: - Unified Edit Action Button
+
+struct EditActionButton: View {
+    let icon: String
+    let label: String
+    let isEnabled: Bool
+    let style: EditActionStyle
+    let action: () -> Void
+
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .foregroundColor(foregroundColor)
+            .background(backgroundColor)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(borderColor, lineWidth: style == .secondary ? 1 : 0)
+            )
+        }
+        .disabled(!isEnabled)
+    }
+
+    private var foregroundColor: Color {
+        guard isEnabled else { return palette.textTertiary }
+        switch style {
+        case .primary: return .white
+        case .secondary: return palette.accent
+        case .destructive: return .red
+        }
+    }
+
+    private var backgroundColor: Color {
+        guard isEnabled else { return palette.inputBackground }
+        switch style {
+        case .primary: return palette.accent
+        case .secondary: return palette.accent.opacity(0.12)
+        case .destructive: return Color.red.opacity(0.12)
+        }
+    }
+
+    private var borderColor: Color {
+        guard isEnabled else { return Color.clear }
+        switch style {
+        case .primary: return Color.clear
+        case .secondary: return palette.accent.opacity(0.25)
+        case .destructive: return Color.red.opacity(0.25)
+        }
+    }
+}
+
+// MARK: - Primary Edit Button Style
+
+struct PrimaryEditButtonStyle: ButtonStyle {
+    let isEnabled: Bool
+    @Environment(\.themePalette) private var palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(isEnabled ? .white : palette.textTertiary)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isEnabled ? palette.accent : palette.inputBackground)
+            )
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Secondary Edit Button Style
+
+struct SecondaryEditButtonStyle: ButtonStyle {
+    let isEnabled: Bool
+    var isDestructive: Bool = false
+    @Environment(\.themePalette) private var palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(isEnabled ? (isDestructive ? .red : palette.accent) : palette.textTertiary)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isEnabled ? (isDestructive ? Color.red.opacity(0.15) : palette.accent.opacity(0.15)) : palette.inputBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(isEnabled ? (isDestructive ? Color.red.opacity(0.3) : palette.accent.opacity(0.3)) : Color.clear, lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Compact Edit Button Style
+
+struct CompactEditButtonStyle: ButtonStyle {
+    let isEnabled: Bool
+    @Environment(\.themePalette) private var palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(isEnabled ? palette.accent : palette.textTertiary)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isEnabled ? palette.accent.opacity(0.15) : Color.clear)
+            )
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
+}
+
+// MARK: - Hold for Precision Button (Compact)
 
 struct HoldForPrecisionButton: View {
     @Binding var isPrecisionMode: Bool
@@ -732,80 +867,44 @@ struct HoldForPrecisionButton: View {
     private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
 
     var body: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: 4) {
+            Image(systemName: isPrecisionMode ? "scope" : "hand.tap")
+                .font(.system(size: 11, weight: .medium))
 
-            Text("Hold for precision")
-                .font(.caption)
+            Text(isPrecisionMode ? "0.01s" : "Precision")
+                .font(.caption2)
                 .fontWeight(.medium)
-                .foregroundColor(isPrecisionMode ? .white : palette.textSecondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isPrecisionMode ? palette.accent : palette.inputBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(isPrecisionMode ? Color.clear : palette.stroke, lineWidth: 1)
-                )
-                .scaleEffect(isPrecisionMode ? 1.02 : 1.0)
-                .animation(.easeInOut(duration: 0.1), value: isPrecisionMode)
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            if !isPrecisionMode {
-                                isPrecisionMode = true
-                                impactGenerator.impactOccurred(intensity: 0.6)
-                            }
-                        }
-                        .onEnded { _ in
-                            isPrecisionMode = false
-                            impactGenerator.impactOccurred(intensity: 0.3)
-                        }
-                )
-
-            Spacer()
         }
+        .foregroundColor(isPrecisionMode ? .white : palette.textSecondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isPrecisionMode ? palette.accent : palette.inputBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isPrecisionMode ? Color.clear : palette.stroke.opacity(0.5), lineWidth: 1)
+        )
+        .scaleEffect(isPrecisionMode ? 1.03 : 1.0)
+        .animation(.easeInOut(duration: 0.1), value: isPrecisionMode)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !isPrecisionMode {
+                        isPrecisionMode = true
+                        impactGenerator.impactOccurred(intensity: 0.6)
+                    }
+                }
+                .onEnded { _ in
+                    isPrecisionMode = false
+                    impactGenerator.impactOccurred(intensity: 0.3)
+                }
+        )
     }
 }
 
-// MARK: - Edit Action Button Styles
-
-struct EditActionButtonStyle: ButtonStyle {
-    let isEnabled: Bool
-    @Environment(\.themePalette) private var palette
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(isEnabled ? palette.accent : palette.textTertiary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isEnabled ? palette.accent.opacity(0.15) : palette.inputBackground)
-            )
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
-    }
-}
-
-struct EditActionIconButtonStyle: ButtonStyle {
-    let isEnabled: Bool
-    @Environment(\.themePalette) private var palette
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(isEnabled ? palette.accent : palette.textTertiary)
-            .frame(width: 36, height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isEnabled ? palette.accent.opacity(0.15) : palette.inputBackground)
-            )
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
-    }
-}
-
-// MARK: - Selection Time Display with Nudge Controls
+// MARK: - Selection Time Display (Compact Card)
 
 struct SelectionTimeDisplay: View {
     @Binding var selectionStart: TimeInterval
@@ -824,81 +923,46 @@ struct SelectionTimeDisplay: View {
     private var minimumGap: TimeInterval { 0.05 }
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Main time display
-            HStack {
-                Text("Selection: \(formatTime(selectionStart)) - \(formatTime(selectionEnd))")
-                    .font(.caption)
-                    .foregroundColor(palette.textSecondary)
+        HStack(spacing: 0) {
+            // Start time with nudge
+            SelectionEndpointControl(
+                label: "IN",
+                time: selectionStart,
+                onNudge: { delta in nudgeStart(by: delta) },
+                palette: palette
+            )
 
-                Spacer()
+            // Duration badge in center - clean typography, no blocky highlight
+            VStack(spacing: 2) {
+                Text("DURATION")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
 
-                Text("(\(formatTime(selectionDuration)))")
-                    .font(.caption)
+                Text(formatTime(selectionDuration))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
                     .foregroundColor(palette.accent)
-                    .monospacedDigit()
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
 
-            // Nudge controls row
-            HStack(spacing: 16) {
-                // Start handle nudge
-                HStack(spacing: 4) {
-                    Text("Start:")
-                        .font(.caption2)
-                        .foregroundColor(palette.textTertiary)
-
-                    Button {
-                        nudgeStart(by: -nudgeStep)
-                    } label: {
-                        Text("-")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .frame(width: 28, height: 24)
-                    }
-                    .buttonStyle(NudgeButtonStyle())
-
-                    Button {
-                        nudgeStart(by: nudgeStep)
-                    } label: {
-                        Text("+")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .frame(width: 28, height: 24)
-                    }
-                    .buttonStyle(NudgeButtonStyle())
-                }
-
-                Spacer()
-
-                // End handle nudge
-                HStack(spacing: 4) {
-                    Text("End:")
-                        .font(.caption2)
-                        .foregroundColor(palette.textTertiary)
-
-                    Button {
-                        nudgeEnd(by: -nudgeStep)
-                    } label: {
-                        Text("-")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .frame(width: 28, height: 24)
-                    }
-                    .buttonStyle(NudgeButtonStyle())
-
-                    Button {
-                        nudgeEnd(by: nudgeStep)
-                    } label: {
-                        Text("+")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .frame(width: 28, height: 24)
-                    }
-                    .buttonStyle(NudgeButtonStyle())
-                }
-            }
+            // End time with nudge
+            SelectionEndpointControl(
+                label: "OUT",
+                time: selectionEnd,
+                onNudge: { delta in nudgeEnd(by: delta) },
+                palette: palette
+            )
         }
+        .background(palette.inputBackground)
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(palette.stroke.opacity(0.3), lineWidth: 1)
+        )
     }
 
     private func nudgeStart(by delta: TimeInterval) {
         var newStart = selectionStart + delta
-        // Clamp: 0 <= newStart <= selectionEnd - minimumGap
         newStart = Swift.max(0, Swift.min(newStart, selectionEnd - minimumGap))
         selectionStart = newStart
         impactGenerator.impactOccurred(intensity: 0.4)
@@ -906,10 +970,62 @@ struct SelectionTimeDisplay: View {
 
     private func nudgeEnd(by delta: TimeInterval) {
         var newEnd = selectionEnd + delta
-        // Clamp: selectionStart + minimumGap <= newEnd <= duration
         newEnd = Swift.max(selectionStart + minimumGap, Swift.min(newEnd, duration))
         selectionEnd = newEnd
         impactGenerator.impactOccurred(intensity: 0.4)
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
+    }
+}
+
+// MARK: - Selection Endpoint Control
+
+struct SelectionEndpointControl: View {
+    let label: String
+    let time: TimeInterval
+    let onNudge: (TimeInterval) -> Void
+    let palette: ThemePalette
+
+    private let nudgeStep: TimeInterval = 0.01
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(palette.textTertiary)
+
+            Text(formatTime(time))
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundColor(palette.textPrimary)
+
+            // Nudge buttons
+            HStack(spacing: 2) {
+                Button {
+                    onNudge(-nudgeStep)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 26, height: 22)
+                }
+                .buttonStyle(NudgeButtonStyle())
+
+                Button {
+                    onNudge(nudgeStep)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 26, height: 22)
+                }
+                .buttonStyle(NudgeButtonStyle())
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     private func formatTime(_ time: TimeInterval) -> String {
@@ -929,10 +1045,10 @@ struct NudgeButtonStyle: ButtonStyle {
         configuration.label
             .foregroundColor(palette.accent)
             .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(palette.accent.opacity(0.15))
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(palette.accent.opacity(configuration.isPressed ? 0.25 : 0.15))
             )
-            .opacity(configuration.isPressed ? 0.6 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
     }
 }
 

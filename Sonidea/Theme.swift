@@ -172,6 +172,11 @@ struct ThemePalette: Equatable {
     let toolbarTextPrimary: Color?        // nil = use textPrimary
     let toolbarTextSecondary: Color?      // nil = use textSecondary
 
+    // Waveform editor colors
+    // Selection background should be visible but subtle - not overpower the waveform
+    // Each theme has a curated color to ensure good contrast with waveform bars
+    let waveformSelectionBackground: Color
+
     // Convenience accessors for toolbar text colors
     var effectiveToolbarTextPrimary: Color {
         toolbarTextPrimary ?? textPrimary
@@ -218,7 +223,8 @@ struct ThemePalette: Equatable {
         liveRecordingAccent: Color.red,  // System themes use red
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
-        toolbarTextSecondary: nil
+        toolbarTextSecondary: nil,
+        waveformSelectionBackground: Color.accentColor.opacity(0.15)  // Subtle blue tint
     )
 
     // MARK: - System Dark Palette
@@ -258,7 +264,8 @@ struct ThemePalette: Equatable {
         liveRecordingAccent: Color.red,  // System themes use red
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
-        toolbarTextSecondary: nil
+        toolbarTextSecondary: nil,
+        waveformSelectionBackground: Color.accentColor.opacity(0.20)  // Slightly more visible on dark
     )
 
     // MARK: - Angst Robot (Purple) Palette
@@ -298,7 +305,8 @@ struct ThemePalette: Equatable {
         liveRecordingAccent: Color.fromHex("#9B8CFF"),  // Purple accent for recording UI
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
-        toolbarTextSecondary: nil
+        toolbarTextSecondary: nil,
+        waveformSelectionBackground: Color.fromHex("#9B8CFF").opacity(0.18)  // Light purple selection
     )
 
     // MARK: - Cream (Russian White) Palette
@@ -338,7 +346,8 @@ struct ThemePalette: Equatable {
         liveRecordingAccent: Color.fromHex("#C4956A"),  // Warm amber accent for recording UI
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
-        toolbarTextSecondary: nil
+        toolbarTextSecondary: nil,
+        waveformSelectionBackground: Color.fromHex("#C4956A").opacity(0.12)  // Subtle amber on light bg
     )
 
     // MARK: - Logic Pro Palette (Light toolbar + Dark canvas)
@@ -399,7 +408,8 @@ struct ThemePalette: Equatable {
         // Logic Pro has a LIGHT toolbar on dark canvas
         toolbarColorScheme: .light,
         toolbarTextPrimary: Color.fromHex("#1C1C1E"),   // dark text on light toolbar
-        toolbarTextSecondary: Color.fromHex("#3A3A3C")
+        toolbarTextSecondary: Color.fromHex("#3A3A3C"),
+        waveformSelectionBackground: Color.fromHex("#7B8AF4").opacity(0.20)  // Periwinkle selection
     )
 
     // MARK: - Fruity (FL Studio) Palette
@@ -460,7 +470,8 @@ struct ThemePalette: Equatable {
         // Dark toolbar matching the overall dark scheme
         toolbarColorScheme: nil,
         toolbarTextPrimary: Color.fromHex("#F2F5F7"),
-        toolbarTextSecondary: Color.fromHex("#C9D2D8")
+        toolbarTextSecondary: Color.fromHex("#C9D2D8"),
+        waveformSelectionBackground: Color.fromHex("#F29A2E").opacity(0.15)  // Subtle orange selection
     )
 
     // MARK: - AVID (Pro Tools) Palette
@@ -521,7 +532,8 @@ struct ThemePalette: Equatable {
         // Dark toolbar matching the overall dark scheme
         toolbarColorScheme: nil,
         toolbarTextPrimary: Color.fromHex("#E9EEF4"),
-        toolbarTextSecondary: Color.fromHex("#AEBBCC")
+        toolbarTextSecondary: Color.fromHex("#AEBBCC"),
+        waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18)  // Teal selection
     )
 }
 
