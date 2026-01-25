@@ -18,6 +18,14 @@ final class PlaybackEngine {
     var playbackSpeed: Float = 1.0
     var eqSettings: EQSettings = .flat
 
+    /// Error state for UI to display
+    var loadError: PlaybackError?
+
+    /// Whether the engine is ready to play
+    var isLoaded: Bool {
+        audioFile != nil && audioEngine != nil
+    }
+
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var timePitchNode: AVAudioUnitTimePitch?
@@ -35,15 +43,49 @@ final class PlaybackEngine {
 
     // MARK: - Public API
 
+    /// Load audio file for playback with error reporting
     func load(url: URL) {
         stop()
+        loadError = nil
         currentFileURL = url
 
+        // Log file info for debugging
+        AudioDebug.logFileInfo(url: url, context: "PlaybackEngine.load")
+
+        // Verify file exists and is valid
+        let status = AudioDebug.verifyAudioFile(url: url)
+        guard status.isValid else {
+            let errorMsg = status.errorMessage ?? "Unknown error"
+            print("❌ [PlaybackEngine] File verification failed: \(errorMsg)")
+
+            switch status {
+            case .notFound:
+                loadError = .fileNotFound(url)
+            case .audioError(let error):
+                loadError = .cannotOpenFile(url, error)
+            default:
+                loadError = .cannotOpenFile(url, NSError(domain: "PlaybackEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMsg]))
+            }
+            return
+        }
+
+        // Configure audio session
         do {
             try AudioSessionManager.shared.configureForPlayback()
+            AudioDebug.logSessionState(context: "PlaybackEngine.load - after session config")
+        } catch {
+            AudioDebug.logError(error, context: "PlaybackEngine.load - session config")
+            loadError = .audioSessionFailed(error)
+            return
+        }
 
+        // Open audio file
+        do {
             audioFile = try AVAudioFile(forReading: url)
-            guard let file = audioFile else { return }
+            guard let file = audioFile else {
+                loadError = .cannotOpenFile(url, NSError(domain: "PlaybackEngine", code: -2, userInfo: [NSLocalizedDescriptionKey: "AVAudioFile returned nil"]))
+                return
+            }
 
             audioSampleRate = file.processingFormat.sampleRate
             audioLengthFrames = file.length
@@ -51,20 +93,29 @@ final class PlaybackEngine {
             currentTime = 0
             seekFrame = 0
 
+            print("✅ [PlaybackEngine] Audio file loaded: duration=\(duration)s, sampleRate=\(audioSampleRate)")
+
             setupAudioEngine(format: file.processingFormat)
         } catch {
-            print("Failed to load audio: \(error)")
+            AudioDebug.logError(error, context: "PlaybackEngine.load - open file")
+            loadError = .cannotOpenFile(url, error)
+            return
         }
     }
 
     func play() {
-        guard let engine = audioEngine, let player = playerNode, let file = audioFile else { return }
+        guard let engine = audioEngine, let player = playerNode, let file = audioFile else {
+            print("⚠️ [PlaybackEngine] play() called but engine not ready")
+            return
+        }
 
         if !engine.isRunning {
             do {
                 try engine.start()
+                AudioDebug.logSessionState(context: "PlaybackEngine.play - engine started")
             } catch {
-                print("Failed to start engine: \(error)")
+                AudioDebug.logError(error, context: "PlaybackEngine.play - engine start")
+                loadError = .engineStartFailed(error)
                 return
             }
         }
@@ -145,6 +196,11 @@ final class PlaybackEngine {
         seek(to: newTime)
     }
 
+    /// Clear any load error (call after user dismisses error alert)
+    func clearError() {
+        loadError = nil
+    }
+
     // MARK: - Speed Control
 
     func setSpeed(_ speed: Float) {
@@ -187,7 +243,10 @@ final class PlaybackEngine {
         guard let engine = audioEngine,
               let player = playerNode,
               let timePitch = timePitchNode,
-              let eq = eqNode else { return }
+              let eq = eqNode else {
+            print("⚠️ [PlaybackEngine] Failed to create audio nodes")
+            return
+        }
 
         // Configure time pitch
         timePitch.rate = playbackSpeed
@@ -206,6 +265,7 @@ final class PlaybackEngine {
         engine.connect(eq, to: engine.mainMixerNode, format: format)
 
         engine.prepare()
+        print("✅ [PlaybackEngine] Audio engine setup complete")
     }
 
     private func configureEQBands() {

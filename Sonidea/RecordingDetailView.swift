@@ -129,6 +129,9 @@ struct RecordingDetailView: View {
     @State private var verificationTimedOut = false
     @State private var verificationTimeoutTask: Task<Void, Never>?
 
+    // Playback error state
+    @State private var showPlaybackError = false
+
     // Original state snapshot for Done/Save logic
     private let originalSnapshot: RecordingSnapshot
 
@@ -267,6 +270,10 @@ struct RecordingDetailView: View {
             }
             .onAppear {
                 setupPlayback()
+                // Check for playback load errors
+                if playback.loadError != nil {
+                    showPlaybackError = true
+                }
                 loadReverseGeocodedName()
                 createProofSilently()
                 startVerificationTimeout()
@@ -276,6 +283,14 @@ struct RecordingDetailView: View {
                 playback.stop()
                 verificationTimeoutTask?.cancel()
                 editHistory.clear()  // Clean up undo history
+            }
+            .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
+                Button("OK") {
+                    playback.clearError()
+                    dismiss()
+                }
+            } message: {
+                Text(playback.loadError?.errorDescription ?? "The recording file could not be opened.")
             }
             .sheet(isPresented: $showManageTags) {
                 ManageTagsSheet()

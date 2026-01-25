@@ -237,16 +237,52 @@ final class RecorderManager: NSObject {
     /// Stop recording and return raw data for saving
     func stopRecording() -> RawRecordingData? {
         guard recordingState.isActive, let recorder = audioRecorder, let fileURL = currentFileURL else {
+            print("⚠️ [RecorderManager] stopRecording called but no active recording")
             return nil
         }
+
+        print("🎙️ [RecorderManager] Stopping recording: \(fileURL.lastPathComponent)")
 
         // Update duration one final time if recording (not paused)
         if recordingState == .recording, let startTime = segmentStartTime {
             accumulatedDuration += Date().timeIntervalSince(startTime)
         }
 
+        // Stop the recorder - this finalizes the file
         recorder.stop()
         stopTimer()
+
+        // CRITICAL: Verify the file was written successfully
+        // AVAudioRecorder.stop() is synchronous but file system may lag
+        let fileManager = FileManager.default
+        var fileVerified = false
+        var retryCount = 0
+        let maxRetries = 10
+
+        while !fileVerified && retryCount < maxRetries {
+            if fileManager.fileExists(atPath: fileURL.path) {
+                do {
+                    let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
+                    if let size = attrs[.size] as? Int64, size > 100 {
+                        fileVerified = true
+                        print("✅ [RecorderManager] File verified: \(size) bytes after \(retryCount) retries")
+                    }
+                } catch {
+                    print("⚠️ [RecorderManager] Error checking file attributes: \(error.localizedDescription)")
+                }
+            }
+
+            if !fileVerified {
+                retryCount += 1
+                // Small delay to let file system catch up
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+
+        if !fileVerified {
+            print("❌ [RecorderManager] File verification failed after \(maxRetries) retries")
+            AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
+        }
 
         let duration = accumulatedDuration
         let createdAt = Date()
@@ -261,6 +297,9 @@ final class RecorderManager: NSObject {
 
         resetState()
         clearInProgressRecording()
+
+        // Log final file info for debugging
+        AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - final")
 
         return RawRecordingData(
             fileURL: fileURL,

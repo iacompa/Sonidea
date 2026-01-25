@@ -246,6 +246,16 @@ final class AppState {
     // MARK: - Recording Management
 
     func addRecording(from rawData: RawRecordingData) {
+        // Verify the file exists and is valid before adding
+        let fileStatus = AudioDebug.verifyAudioFile(url: rawData.fileURL)
+        guard fileStatus.isValid else {
+            print("❌ [AppState] Cannot add recording - file verification failed: \(fileStatus.errorMessage ?? "unknown error")")
+            AudioDebug.logFileInfo(url: rawData.fileURL, context: "AppState.addRecording - failed verification")
+            return
+        }
+
+        print("✅ [AppState] File verified, adding recording: \(rawData.fileURL.lastPathComponent)")
+
         let title = "Recording \(nextRecordingNumber)"
         nextRecordingNumber += 1
         saveNextRecordingNumber()
