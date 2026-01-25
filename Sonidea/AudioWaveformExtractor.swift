@@ -58,13 +58,13 @@ struct WaveformData: Equatable {
 
     /// Get samples for a specific time range at appropriate LOD
     func samples(from startTime: TimeInterval, to endTime: TimeInterval, targetCount: Int) -> [Float] {
-        guard !lodLevels.isEmpty, duration > 0 else { return [] }
+        guard !lodLevels.isEmpty, duration > 0, targetCount > 0 else { return [] }
 
-        let rangeDuration = endTime - startTime
+        let rangeDuration = max(0.001, endTime - startTime)
         let idealSamplesPerSecond = Double(targetCount) / rangeDuration
 
-        // Find best LOD
-        var bestLOD = lodLevels.last!
+        // Find best LOD - prefer higher resolution when zoomed in
+        var bestLOD = lodLevels[0] // Default to highest resolution
         for samples in lodLevels {
             let lodSamplesPerSecond = Double(samples.count) / duration
             if lodSamplesPerSecond >= idealSamplesPerSecond {
@@ -73,16 +73,22 @@ struct WaveformData: Equatable {
             }
         }
 
-        // Extract range from best LOD
-        let startProgress = startTime / duration
-        let endProgress = endTime / duration
-        let startIndex = Int(startProgress * Double(bestLOD.count))
-        let endIndex = Int(endProgress * Double(bestLOD.count))
+        // Clamp time range to valid bounds
+        let clampedStart = max(0, min(startTime, duration))
+        let clampedEnd = max(clampedStart, min(endTime, duration))
 
-        let clampedStart = max(0, min(startIndex, bestLOD.count - 1))
-        let clampedEnd = max(clampedStart + 1, min(endIndex, bestLOD.count))
+        // Calculate precise floating-point indices for accurate time-to-sample mapping
+        let startProgress = clampedStart / duration
+        let endProgress = clampedEnd / duration
 
-        let slice = Array(bestLOD[clampedStart..<clampedEnd])
+        // Use floor for start, ceil for end to ensure we capture all samples in range
+        let startIndex = Int(floor(startProgress * Double(bestLOD.count)))
+        let endIndex = Int(ceil(endProgress * Double(bestLOD.count)))
+
+        let safeStart = max(0, min(startIndex, bestLOD.count - 1))
+        let safeEnd = max(safeStart + 1, min(endIndex, bestLOD.count))
+
+        let slice = Array(bestLOD[safeStart..<safeEnd])
 
         // Resample to target count if needed
         return resample(slice, to: targetCount)
@@ -331,13 +337,16 @@ actor AudioWaveformExtractor {
     private func extractLODSamples(from channelData: UnsafePointer<Float>, length: Int, targetCount: Int) -> [Float] {
         guard length > 0, targetCount > 0 else { return [] }
 
-        let samplesPerBucket = max(1, length / targetCount)
         var samples: [Float] = []
         samples.reserveCapacity(targetCount)
 
+        // Use floating-point bucket boundaries to ensure ALL audio samples are covered
+        // This prevents the "trailing samples skipped" bug from integer division
+        let bucketSize = Double(length) / Double(targetCount)
+
         for i in 0..<targetCount {
-            let start = i * samplesPerBucket
-            let end = min(start + samplesPerBucket, length)
+            let start = Int(Double(i) * bucketSize)
+            let end = min(Int(Double(i + 1) * bucketSize), length)
 
             // Use peak amplitude for each bucket
             var maxAmplitude: Float = 0

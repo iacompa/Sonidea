@@ -67,14 +67,14 @@ struct WaveformCanvas: View {
             let availableWidth = size.width - totalSpacing
             let barWidth = max(2, availableWidth / CGFloat(barCount))
 
-            // Calculate progress position - bars BEFORE this index are "played" (behind playhead)
-            let progressIndex = Int(progress * Double(barCount))
+            // Calculate playhead pixel position (single source of truth for progress indicator)
+            let playheadX = CGFloat(progress) * size.width
 
-            // Colors: played = bright/tinted (BEHIND playhead), unplayed = dim (AHEAD of playhead)
-            let playedColor: Color = isDarkMode ? .white : .accentColor
-            let unplayedColor: Color = isDarkMode ? .white.opacity(0.25) : Color(.systemGray4)
+            // Colors for waveform bars - uniform color, playhead is the only progress indicator
+            // This eliminates the "trailing indicator" caused by discrete bar coloring transitions
+            let barColor: Color = isDarkMode ? .white.opacity(0.4) : Color(.systemGray3)
 
-            // Draw all waveform bars
+            // Draw all waveform bars with uniform color
             for (index, sample) in samples.enumerated() {
                 let x = CGFloat(index) * (barWidth + barSpacing)
                 let barHeight = max(4, CGFloat(sample) * size.height * 0.9)
@@ -84,28 +84,20 @@ struct WaveformCanvas: View {
                 let path = RoundedRectangle(cornerRadius: cornerRadius)
                     .path(in: rect)
 
-                // Bars BEFORE progressIndex are played (behind playhead = bright)
-                // Bars AT or AFTER progressIndex are unplayed (ahead of playhead = dim)
-                let isPlayed = index < progressIndex
-                let color: Color = isPlayed ? playedColor : unplayedColor
-
-                context.fill(path, with: .color(color))
+                context.fill(path, with: .color(barColor))
             }
 
-            // Draw playhead line (vertical needle at current position)
+            // Draw single playhead line (the ONLY current-position indicator)
+            // No glow effect - just a clean, distinct line to avoid "trailing" appearance
             if progress > 0.001 && progress < 0.999 {
-                let playheadX = CGFloat(progress) * size.width
-
-                // Playhead: distinct accent color line with slight glow
                 let playheadPath = Path { path in
                     path.move(to: CGPoint(x: playheadX, y: 0))
                     path.addLine(to: CGPoint(x: playheadX, y: size.height))
                 }
 
-                // Draw a subtle glow behind the playhead for visibility
-                context.stroke(playheadPath, with: .color(playedColor.opacity(0.3)), lineWidth: 4)
-                // Draw the main playhead line
-                context.stroke(playheadPath, with: .color(playedColor), lineWidth: 2)
+                // Single clean playhead line - white in dark mode, accent in light mode
+                let playheadColor: Color = isDarkMode ? .white : .accentColor
+                context.stroke(playheadPath, with: .color(playheadColor), lineWidth: 2)
             }
         }
     }

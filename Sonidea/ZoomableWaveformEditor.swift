@@ -33,8 +33,8 @@ struct TimelineState: Equatable {
     /// Minimum zoom (show entire waveform)
     static let minZoom: CGFloat = 1.0
 
-    /// Maximum zoom (show ~1 second at a time for precision editing)
-    static let maxZoom: CGFloat = 20.0
+    /// Maximum zoom (cap at 1000% for mobile usability)
+    static let maxZoom: CGFloat = 10.0
 
     init(totalDuration: TimeInterval) {
         self.totalDuration = totalDuration

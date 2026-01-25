@@ -62,7 +62,7 @@ final class WaveformTimeline {
     }
 
     static let minZoom: CGFloat = 1.0
-    static let maxZoom: CGFloat = 200.0 // Can zoom to see ~0.5 seconds of a 100s recording (DAW-like)
+    static let maxZoom: CGFloat = 10.0  // Cap at 1000% for mobile usability
 
     init(duration: TimeInterval) {
         self.duration = max(0.01, duration)
@@ -132,6 +132,20 @@ final class WaveformTimeline {
     }
 }
 
+// MARK: - Selectable Silence Range (for 2-step removal with toggle)
+
+struct SelectableSilenceRange: Equatable, Identifiable {
+    let id: UUID
+    let range: SilenceRange
+    var isSelected: Bool
+
+    init(range: SilenceRange, isSelected: Bool = true) {
+        self.id = UUID()
+        self.range = range
+        self.isSelected = isSelected
+    }
+}
+
 // MARK: - Pro Waveform Editor
 
 struct ProWaveformEditor: View {
@@ -144,6 +158,12 @@ struct ProWaveformEditor: View {
     @Binding var selectionEnd: TimeInterval
     @Binding var playheadPosition: TimeInterval
     @Binding var markers: [Marker]
+
+    // Highlighted silence ranges (for 2-step removal flow)
+    let silenceRanges: [SelectableSilenceRange]
+
+    // Callbacks
+    let onSilenceRangeTap: ((UUID) -> Void)?
 
     // State
     let currentTime: TimeInterval
@@ -164,8 +184,14 @@ struct ProWaveformEditor: View {
     @State private var isPanning = false
     @State private var panStartTime: TimeInterval = 0
 
+    // Handle tooltip state (moved to parent to render outside clipped area)
+    @State private var leftHandleDragging = false
+    @State private var rightHandleDragging = false
+    @State private var leftHandleDragTime: TimeInterval = 0
+    @State private var rightHandleDragTime: TimeInterval = 0
+
     // Constants
-    private let waveformHeight: CGFloat = 200  // Increased from 180 for more detail
+    private let waveformHeight: CGFloat = 240  // Increased ~20% (from 200) for more editing space
     private let timeRulerHeight: CGFloat = 36  // Reduced ~20% from 44
     private let handleWidth: CGFloat = 16
     private let handleHitArea: CGFloat = 44
@@ -181,11 +207,13 @@ struct ProWaveformEditor: View {
         selectionEnd: Binding<TimeInterval>,
         playheadPosition: Binding<TimeInterval>,
         markers: Binding<[Marker]>,
+        silenceRanges: [SelectableSilenceRange] = [],
         currentTime: TimeInterval,
         isPlaying: Bool,
         isPrecisionMode: Binding<Bool>,
         onSeek: @escaping (TimeInterval) -> Void,
-        onMarkerTap: @escaping (Marker) -> Void
+        onMarkerTap: @escaping (Marker) -> Void,
+        onSilenceRangeTap: ((UUID) -> Void)? = nil
     ) {
         self.waveformData = waveformData
         self.duration = duration
@@ -193,11 +221,13 @@ struct ProWaveformEditor: View {
         self._selectionEnd = selectionEnd
         self._playheadPosition = playheadPosition
         self._markers = markers
+        self.silenceRanges = silenceRanges
         self.currentTime = currentTime
         self.isPlaying = isPlaying
         self._isPrecisionMode = isPrecisionMode
         self.onSeek = onSeek
         self.onMarkerTap = onMarkerTap
+        self.onSilenceRangeTap = onSilenceRangeTap
         self._timeline = State(initialValue: WaveformTimeline(duration: duration))
     }
 
@@ -224,7 +254,18 @@ struct ProWaveformEditor: View {
                         colorScheme: colorScheme
                     )
 
-                    // Selection overlay
+                    // Silence highlight overlay (red regions for 2-step removal)
+                    if !silenceRanges.isEmpty {
+                        SilenceHighlightOverlay(
+                            silenceRanges: silenceRanges,
+                            timeline: timeline,
+                            width: width,
+                            height: waveformHeight,
+                            onTap: onSilenceRangeTap
+                        )
+                    }
+
+                    // Selection overlay (uses same timeToX as handles)
                     SelectionRegionView(
                         selectionStart: selectionStart,
                         selectionEnd: selectionEnd,
@@ -267,7 +308,9 @@ struct ProWaveformEditor: View {
                         isPrecisionMode: isPrecisionMode,
                         width: width,
                         height: waveformHeight,
-                        palette: palette
+                        palette: palette,
+                        isDraggingExternal: $leftHandleDragging,
+                        dragTimeExternal: $leftHandleDragTime
                     )
 
                     SelectionHandleView(
@@ -279,6 +322,17 @@ struct ProWaveformEditor: View {
                         isPrecisionMode: isPrecisionMode,
                         width: width,
                         height: waveformHeight,
+                        palette: palette,
+                        isDraggingExternal: $rightHandleDragging,
+                        dragTimeExternal: $rightHandleDragTime
+                    )
+
+                    // Marker flags overlay (rendered last so always visible above playhead)
+                    MarkerFlagsOverlay(
+                        markers: markers,
+                        playheadPosition: playheadPosition,
+                        timeline: timeline,
+                        width: width,
                         palette: palette
                     )
                 }
@@ -305,6 +359,13 @@ struct ProWaveformEditor: View {
                 .padding(.top, 8)
             }
         }
+        // Tooltip overlay - rendered at VStack level so it can appear above the waveform
+        .overlay(alignment: .top) {
+            GeometryReader { geometry in
+                handleTooltipOverlay(width: geometry.size.width)
+            }
+            .allowsHitTesting(false)
+        }
         .onAppear {
             impactGenerator.prepare()
             selectionGenerator.prepare()
@@ -314,6 +375,56 @@ struct ProWaveformEditor: View {
                 timeline.ensureVisible(newTime, padding: timeline.visibleDuration * 0.2)
             }
         }
+    }
+
+    // MARK: - Tooltip Overlay (outside clipped container)
+
+    @ViewBuilder
+    private func handleTooltipOverlay(width: CGFloat) -> some View {
+        // Tooltip y position: just above the waveform area
+        // VStack layout: ruler (36) + spacing (4) + waveform starts at 40
+        // We want tooltip ~14pt above waveform, so y = 40 - 14 = 26
+        let tooltipY: CGFloat = timeRulerHeight + 4 - 14
+
+        ZStack {
+            // Left handle tooltip
+            if leftHandleDragging {
+                handleTooltip(time: leftHandleDragTime, width: width)
+                    .position(x: timeline.timeToX(leftHandleDragTime, width: width), y: tooltipY)
+            }
+            // Right handle tooltip
+            if rightHandleDragging {
+                handleTooltip(time: rightHandleDragTime, width: width)
+                    .position(x: timeline.timeToX(rightHandleDragTime, width: width), y: tooltipY)
+            }
+        }
+        .zIndex(1000)  // Ensure tooltips are above everything
+    }
+
+    private func handleTooltip(time: TimeInterval, width: CGFloat) -> some View {
+        let tooltipWidth: CGFloat = 70
+        // Clamp tooltip x position to stay on screen
+        let handleX = timeline.timeToX(time, width: width)
+        let clampedX = max(tooltipWidth / 2 + 8, min(handleX, width - tooltipWidth / 2 - 8))
+        let offsetX = clampedX - handleX
+
+        return Text(formatPreciseTime(time))
+            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.85))
+            )
+            .offset(x: offsetX)
+    }
+
+    private func formatPreciseTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
 
     // MARK: - Gestures
@@ -443,6 +554,9 @@ struct TimeRulerBar: View {
 
         let firstTick = ceil(startTime / interval) * interval
 
+        // Inset to prevent labels from being clipped at edges
+        let labelInset: CGFloat = 24
+
         var time = firstTick
         while time <= endTime {
             let progress = (time - startTime) / timeline.visibleDuration
@@ -461,9 +575,23 @@ struct TimeRulerBar: View {
                 let text = Text(labelText)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(palette.textTertiary)
-                // Position label centered in the top label area (size.height = 44, so y=16 centers in top 32px)
+                // Position label centered in the top label area
                 let labelY = (size.height - tickAreaHeight) / 2
-                context.draw(text, at: CGPoint(x: x, y: labelY), anchor: .center)
+
+                // Determine anchor based on position to prevent clipping at edges:
+                // - Near left edge: use .leading anchor so label extends rightward
+                // - Near right edge: use .trailing anchor so label extends leftward
+                // - Middle: use .center anchor (default)
+                let anchor: UnitPoint
+                if x < labelInset {
+                    anchor = .leading
+                } else if x > size.width - labelInset {
+                    anchor = .trailing
+                } else {
+                    anchor = .center
+                }
+
+                context.draw(text, at: CGPoint(x: x, y: labelY), anchor: anchor)
             }
 
             time += interval
@@ -564,29 +692,33 @@ struct SelectionRegionView: View {
     let palette: ThemePalette
 
     var body: some View {
-        let startX = timeline.timeToX(selectionStart, width: width)
-        let endX = timeline.timeToX(selectionEnd, width: width)
-        let selectionWidth = max(0, endX - startX)
+        // Use Canvas for pixel-perfect alignment with handles
+        // Both use exactly timeline.timeToX() for coordinate mapping
+        Canvas { context, size in
+            // Use the SAME timeToX function as handles for exact alignment
+            let startX = timeline.timeToX(selectionStart, width: size.width)
+            let endX = timeline.timeToX(selectionEnd, width: size.width)
+            let selectionWidth = max(0, endX - startX)
 
-        // Theme-aware selection highlight with curated per-theme background color
-        // Each theme has a waveformSelectionBackground color tuned for good contrast
-        ZStack {
-            // Filled selection background - uses theme-specific color for good contrast
-            RoundedRectangle(cornerRadius: 4)
-                .fill(palette.waveformSelectionBackground)
-                .frame(width: selectionWidth, height: height - 8)
-                .offset(x: startX + selectionWidth / 2 - width / 2)
+            guard selectionWidth > 0 else { return }
 
-            // Subtle top/bottom accent lines for definition
-            Rectangle()
-                .fill(palette.accent.opacity(0.4))
-                .frame(width: selectionWidth, height: 1)
-                .offset(x: startX + selectionWidth / 2 - width / 2, y: -height / 2 + 4)
+            // Selection background rectangle (with inset from top/bottom)
+            let backgroundRect = CGRect(
+                x: startX,
+                y: 4,
+                width: selectionWidth,
+                height: size.height - 8
+            )
+            let backgroundPath = RoundedRectangle(cornerRadius: 4).path(in: backgroundRect)
+            context.fill(backgroundPath, with: .color(palette.waveformSelectionBackground))
 
-            Rectangle()
-                .fill(palette.accent.opacity(0.4))
-                .frame(width: selectionWidth, height: 1)
-                .offset(x: startX + selectionWidth / 2 - width / 2, y: height / 2 - 4)
+            // Top accent line
+            let topLineRect = CGRect(x: startX, y: 4, width: selectionWidth, height: 1)
+            context.fill(Path(topLineRect), with: .color(palette.accent.opacity(0.4)))
+
+            // Bottom accent line
+            let bottomLineRect = CGRect(x: startX, y: size.height - 5, width: selectionWidth, height: 1)
+            context.fill(Path(bottomLineRect), with: .color(palette.accent.opacity(0.4)))
         }
         .allowsHitTesting(false)
     }
@@ -606,6 +738,9 @@ struct PlayheadLineView: View {
     @State private var isDragging = false
     @State private var dragStartTime: TimeInterval = 0
     @State private var lastHapticTime: TimeInterval = 0
+
+    // Precision mode multiplier (0.25 = 4x finer control)
+    private let precisionMultiplier: CGFloat = 0.25
 
     private let impactGenerator = UIImpactFeedbackGenerator(style: .light)
     private let selectionGenerator = UISelectionFeedbackGenerator()
@@ -641,17 +776,24 @@ struct PlayheadLineView: View {
                 if !isDragging {
                     isDragging = true
                     dragStartTime = playheadPosition
+                    lastHapticTime = playheadPosition
                     impactGenerator.impactOccurred(intensity: 0.5)
                 }
 
-                var newTime = timeline.xToTime(value.location.x, width: width)
-                if isPrecisionMode {
-                    let delta = value.translation.width * 0.25
-                    let timeDelta = Double(delta) / Double(width) * timeline.visibleDuration
-                    newTime = dragStartTime + timeDelta
-                }
+                // UNIFIED ANCHOR-BASED DRAG MAPPING
+                // Always use translation from drag start, apply precision multiplier
+                let deltaX = value.translation.width
+                let effectiveMultiplier = isPrecisionMode ? precisionMultiplier : 1.0
 
+                // Convert pixel delta to time delta: secondsPerPoint * dx * multiplier
+                let secondsPerPoint = timeline.visibleDuration / Double(width)
+                let timeDelta = Double(deltaX) * secondsPerPoint * Double(effectiveMultiplier)
+
+                var newTime = dragStartTime + timeDelta
+
+                // Clamp to valid range
                 newTime = max(0, min(newTime, duration))
+
                 // Use zoom-adaptive quantization
                 newTime = timeline.quantize(newTime)
 
@@ -684,6 +826,10 @@ struct SelectionHandleView: View {
     let height: CGFloat
     let palette: ThemePalette
 
+    // External bindings for tooltip rendering in parent (outside clipped area)
+    @Binding var isDraggingExternal: Bool
+    @Binding var dragTimeExternal: TimeInterval
+
     @State private var isDragging = false
     @State private var dragStartTime: TimeInterval = 0
     @State private var lastHapticTime: TimeInterval = 0
@@ -692,66 +838,29 @@ struct SelectionHandleView: View {
     private let handleWidth: CGFloat = 14
     private let hitAreaWidth: CGFloat = 44
     private let minGap: TimeInterval = 0.02
-    private let tooltipWidth: CGFloat = 70
-    private let tooltipHeight: CGFloat = 28
+
+    // Precision mode multiplier (0.25 = 4x finer control) - SAME AS PLAYHEAD
+    private let precisionMultiplier: CGFloat = 0.25
 
     private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
     private let selectionGenerator = UISelectionFeedbackGenerator()
     private let boundaryGenerator = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
+        // Use the unified timeToX for consistent coordinate mapping
         let x = timeline.timeToX(time, width: width)
 
         if x >= -hitAreaWidth && x <= width + hitAreaWidth {
-            ZStack {
-                // Visual handle
-                SelectionHandleShape(isLeft: isLeft)
-                    .fill(palette.accent)
-                    .frame(width: handleWidth, height: height * 0.6)
-
-                // Live time tooltip (visible only while dragging)
-                if isDragging {
-                    timeTooltip
-                        .offset(y: -height / 2 - tooltipHeight / 2 - 8)
-                }
-            }
-            .frame(width: hitAreaWidth, height: height)
-            .contentShape(Rectangle())
-            .offset(x: x - hitAreaWidth / 2)
-            .highPriorityGesture(dragGesture)
-            .zIndex(isDragging ? 200 : 50)  // Bring to front while dragging
+            // Visual handle only - tooltip is rendered in parent overlay
+            SelectionHandleShape(isLeft: isLeft)
+                .fill(palette.accent)
+                .frame(width: handleWidth, height: height * 0.6)
+                .frame(width: hitAreaWidth, height: height)
+                .contentShape(Rectangle())
+                .offset(x: x - hitAreaWidth / 2)
+                .highPriorityGesture(dragGesture)
+                .zIndex(isDragging ? 200 : 50)  // Bring to front while dragging
         }
-    }
-
-    // MARK: - Time Tooltip
-
-    private var timeTooltip: some View {
-        // Clamp tooltip position to stay on screen
-        let handleX = timeline.timeToX(time, width: width)
-        let tooltipX: CGFloat = {
-            let minX = tooltipWidth / 2 - hitAreaWidth / 2
-            let maxX = width - tooltipWidth / 2 - hitAreaWidth / 2
-            let idealX: CGFloat = 0  // Centered on handle
-            return max(minX - handleX, min(idealX, maxX - handleX))
-        }()
-
-        return Text(formatPreciseTime(time))
-            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-            .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Color.black.opacity(0.85))
-            )
-            .offset(x: tooltipX)
-    }
-
-    private func formatPreciseTime(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
-        return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
 
     private var dragGesture: some Gesture {
@@ -759,24 +868,37 @@ struct SelectionHandleView: View {
             .onChanged { value in
                 if !isDragging {
                     isDragging = true
+                    isDraggingExternal = true
                     dragStartTime = time
+                    dragTimeExternal = time
+                    lastHapticTime = time
                     last100msHapticTime = time
                     impactGenerator.impactOccurred(intensity: 0.6)
                     boundaryGenerator.prepare()
                 }
 
-                var deltaX = value.translation.width
-                if isPrecisionMode { deltaX *= 0.25 }
+                // UNIFIED ANCHOR-BASED DRAG MAPPING (same as PlayheadLineView)
+                let deltaX = value.translation.width
+                let effectiveMultiplier = isPrecisionMode ? precisionMultiplier : 1.0
 
-                let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
+                // Convert pixel delta to time delta: secondsPerPoint * dx * multiplier
+                let secondsPerPoint = timeline.visibleDuration / Double(width)
+                let timeDelta = Double(deltaX) * secondsPerPoint * Double(effectiveMultiplier)
+
                 var newTime = dragStartTime + timeDelta
 
-                // Use zoom-adaptive quantization for consistency
-                // At high zoom: 0.01s precision, at low zoom: coarser steps
+                // Clamp to prevent crossing handles
+                if isLeft {
+                    newTime = max(0, min(newTime, otherTime - minGap))
+                } else {
+                    newTime = max(otherTime + minGap, min(newTime, duration))
+                }
+
+                // Use zoom-adaptive quantization
                 let step = timeline.quantizationStep()
                 newTime = (newTime / step).rounded() * step
 
-                // Clamp to prevent crossing
+                // Re-clamp after quantization (quantization might push past limits)
                 if isLeft {
                     newTime = max(0, min(newTime, otherTime - minGap))
                 } else {
@@ -798,9 +920,11 @@ struct SelectionHandleView: View {
                 }
 
                 time = newTime
+                dragTimeExternal = newTime
             }
             .onEnded { _ in
                 isDragging = false
+                isDraggingExternal = false
                 impactGenerator.impactOccurred(intensity: 0.3)
             }
     }
@@ -887,6 +1011,10 @@ struct MarkerItemView: View {
     @State private var lastHapticTime: TimeInterval = 0
 
     private let hitWidth: CGFloat = 32
+
+    // Precision mode multiplier (0.25 = 4x finer control) - SAME AS PLAYHEAD/HANDLES
+    private let precisionMultiplier: CGFloat = 0.25
+
     private let impactGenerator = UIImpactFeedbackGenerator(style: .light)
     private let selectionGenerator = UISelectionFeedbackGenerator()
 
@@ -895,36 +1023,29 @@ struct MarkerItemView: View {
         let x = timeline.timeToX(displayTime, width: width)
 
         if x >= -hitWidth && x <= width + hitWidth {
-            VStack(spacing: 0) {
-                // Flag icon at top
-                Image(systemName: "flag.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(isDragging ? palette.accent : .orange)
-
-                // Vertical line
-                Rectangle()
-                    .fill(isDragging ? palette.accent : Color.orange.opacity(0.8))
-                    .frame(width: isDragging ? 3 : 2, height: height - 20)
-            }
-            .scaleEffect(isDragging ? 1.1 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: isDragging)
-            .position(x: x, y: height / 2)
-            .frame(width: hitWidth)
-            .contentShape(Rectangle().size(width: hitWidth, height: height))
-            .onTapGesture {
-                if !isDragging {
-                    onMarkerTap(marker)
-                    impactGenerator.impactOccurred(intensity: 0.5)
+            // Only render the vertical line here (flag is rendered in MarkerFlagsOverlay)
+            Rectangle()
+                .fill(isDragging ? palette.accent : Color.orange.opacity(0.7))
+                .frame(width: isDragging ? 2.5 : 1.5, height: height)
+                .scaleEffect(x: isDragging ? 1.2 : 1.0, y: 1.0)
+                .animation(.easeInOut(duration: 0.15), value: isDragging)
+                .position(x: x, y: height / 2)
+                .frame(width: hitWidth)
+                .contentShape(Rectangle().size(width: hitWidth, height: height))
+                .onTapGesture {
+                    if !isDragging {
+                        onMarkerTap(marker)
+                        impactGenerator.impactOccurred(intensity: 0.5)
+                    }
                 }
-            }
-            .gesture(markerDragGesture)
-            .contextMenu {
-                Button(role: .destructive) {
-                    markers.removeAll { $0.id == marker.id }
-                } label: {
-                    Label("Delete Marker", systemImage: "trash")
+                .gesture(markerDragGesture)
+                .contextMenu {
+                    Button(role: .destructive) {
+                        markers.removeAll { $0.id == marker.id }
+                    } label: {
+                        Label("Delete Marker", systemImage: "trash")
+                    }
                 }
-            }
         }
     }
 
@@ -937,19 +1058,29 @@ struct MarkerItemView: View {
                     isDragging = true
                     dragStartTime = marker.time
                     currentDragTime = marker.time
+                    lastHapticTime = marker.time
                     impactGenerator.impactOccurred(intensity: 0.6)
 
                 case .second(true, let drag):
                     guard let drag = drag else { return }
-                    var deltaX = drag.translation.width
-                    if isPrecisionMode { deltaX *= 0.25 }
 
-                    let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
+                    // UNIFIED ANCHOR-BASED DRAG MAPPING (same as PlayheadLineView/SelectionHandleView)
+                    let deltaX = drag.translation.width
+                    let effectiveMultiplier = isPrecisionMode ? precisionMultiplier : 1.0
+
+                    // Convert pixel delta to time delta: secondsPerPoint * dx * multiplier
+                    let secondsPerPoint = timeline.visibleDuration / Double(width)
+                    let timeDelta = Double(deltaX) * secondsPerPoint * Double(effectiveMultiplier)
+
                     var newTime = dragStartTime + timeDelta
+
+                    // Clamp to valid range
                     newTime = max(0, min(newTime, duration))
+
                     // Use zoom-adaptive quantization
                     newTime = timeline.quantize(newTime)
 
+                    // Haptic at quantization step boundaries
                     let step = timeline.quantizationStep()
                     if abs(newTime - lastHapticTime) >= step {
                         selectionGenerator.selectionChanged()
@@ -969,6 +1100,81 @@ struct MarkerItemView: View {
                 isDragging = false
                 impactGenerator.impactOccurred(intensity: 0.4)
             }
+    }
+}
+
+// MARK: - Silence Highlight Overlay (red regions for 2-step removal)
+
+struct SilenceHighlightOverlay: View {
+    let silenceRanges: [SelectableSilenceRange]
+    let timeline: WaveformTimeline
+    let width: CGFloat
+    let height: CGFloat
+    let onTap: ((UUID) -> Void)?
+
+    var body: some View {
+        ForEach(silenceRanges) { selectableRange in
+            let range = selectableRange.range
+            let startX = timeline.timeToX(range.start, width: width)
+            let endX = timeline.timeToX(range.end, width: width)
+            let rangeWidth = endX - startX
+
+            // Only render if visible
+            if endX >= 0 && startX <= width && rangeWidth > 0 {
+                Rectangle()
+                    .fill(selectableRange.isSelected ? Color.red.opacity(0.4) : Color.gray.opacity(0.25))
+                    .frame(width: max(2, rangeWidth), height: height)
+                    .overlay(
+                        // Show strikethrough for deselected ranges
+                        !selectableRange.isSelected ?
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.4))
+                            .frame(height: 2)
+                        : nil
+                    )
+                    .position(x: startX + rangeWidth / 2, y: height / 2)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap?(selectableRange.id)
+                    }
+            }
+        }
+    }
+}
+
+// MARK: - Marker Flags Overlay (rendered above playhead for visibility)
+
+struct MarkerFlagsOverlay: View {
+    let markers: [Marker]
+    let playheadPosition: TimeInterval
+    let timeline: WaveformTimeline
+    let width: CGFloat
+    let palette: ThemePalette
+
+    var body: some View {
+        ForEach(markers) { marker in
+            let x = timeline.timeToX(marker.time, width: width)
+
+            if x >= -20 && x <= width + 20 {
+                // Check if marker is very close to playhead (within 8px)
+                let playheadX = timeline.timeToX(playheadPosition, width: width)
+                let isNearPlayhead = abs(x - playheadX) < 8
+
+                // Flag badge at top - offset slightly if near playhead
+                ZStack {
+                    // Background pill for better visibility
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.orange)
+                        .frame(width: 18, height: 14)
+
+                    // Flag icon
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.white)
+                }
+                .position(x: x + (isNearPlayhead ? 10 : 0), y: 7)
+            }
+        }
     }
 }
 

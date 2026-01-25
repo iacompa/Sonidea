@@ -390,29 +390,6 @@ struct RecordingDetailView: View {
             .sheet(isPresented: $showCreateProject) {
                 CreateProjectSheet(recording: currentRecording)
             }
-            .confirmationDialog("Project", isPresented: $showProjectActionSheet, titleVisibility: .hidden) {
-                if currentRecording.belongsToProject {
-                    // Already in a project - show view/remove options
-                    Button("View Project") {
-                        showProjectSheet = true
-                    }
-                    Button("Remove from Project", role: .destructive) {
-                        appState.removeFromProject(recording: currentRecording)
-                        refreshRecording()
-                    }
-                } else {
-                    // Not in a project - show create/add options
-                    Button("Create Project...") {
-                        showCreateProject = true
-                    }
-                    if !appState.projects.isEmpty {
-                        Button("Add to Existing...") {
-                            showChooseProject = true
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) { }
-            }
             .sheet(item: $verificationSheetItem) { item in
                 VerificationInfoSheet(
                     recordingID: item.id,
@@ -635,8 +612,20 @@ struct RecordingDetailView: View {
                         .foregroundColor(palette.textSecondary)
                         .frame(height: isEditingWaveform ? expandedWaveformHeight : compactWaveformHeight)
                 } else if isEditingWaveform {
-                    // Pro-level waveform editor with Voice Memos-style dense bars, timeline, pinch-to-zoom, and pan
-                    ProWaveformEditor(
+                    // Edit mode: Show loading indicator if high-res waveform not yet loaded
+                    // This prevents blank waveform when entering Edit mode before async load completes
+                    if highResWaveformData == nil {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: palette.accent))
+                            Text("Loading waveform...")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                        .frame(height: expandedWaveformHeight)
+                    } else {
+                        // Pro-level waveform editor with Voice Memos-style dense bars, timeline, pinch-to-zoom, and pan
+                        ProWaveformEditor(
                         waveformData: highResWaveformData,
                         duration: pendingDuration ?? playback.duration,
                         selectionStart: $selectionStart,
@@ -659,6 +648,7 @@ struct RecordingDetailView: View {
                             toggleSilenceRange(id: id)
                         }
                     )
+                    }
                 } else {
                     // Normal playback waveform
                     WaveformView(
@@ -770,8 +760,23 @@ struct RecordingDetailView: View {
                 .frame(height: 20)
             }
 
-            // Playback controls
-            HStack(spacing: 32) {
+            // Playback controls - Apple-like symmetric single row
+            // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ EQ ]
+            HStack(spacing: 16) {
+                // Speed button (left edge)
+                Button {
+                    cycleSpeed()
+                } label: {
+                    Text(String(format: "%.1fx", playback.playbackSpeed))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.blue)
+                        .frame(width: 48, height: 36)
+                        .background(Color.blue.opacity(0.15))
+                        .cornerRadius(8)
+                }
+
+                Spacer()
+
                 // Skip backward
                 Button {
                     playback.skip(seconds: -Double(appState.appSettings.skipInterval.rawValue))
@@ -779,9 +784,10 @@ struct RecordingDetailView: View {
                     Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))
                         .foregroundColor(palette.textPrimary)
+                        .frame(width: 44, height: 44)
                 }
 
-                // Play/Pause
+                // Play/Pause (centered)
                 Button {
                     playback.togglePlayPause()
                 } label: {
@@ -797,73 +803,26 @@ struct RecordingDetailView: View {
                     Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))
                         .foregroundColor(palette.textPrimary)
+                        .frame(width: 44, height: 44)
                 }
-            }
 
-            // Speed and EQ controls
-            HStack(spacing: 12) {
                 Spacer()
 
-                // Speed button
-                Button {
-                    cycleSpeed()
-                } label: {
-                    Text(String(format: "%.1fx", playback.playbackSpeed))
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.blue)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.15))
-                        .cornerRadius(8)
-                }
-
-                // EQ button
+                // EQ button (right edge)
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showEQPanel.toggle()
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 12))
-                        Text("EQ")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                    .foregroundColor(showEQPanel ? .white : .purple)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
-                    .cornerRadius(8)
+                    Text("EQ")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(showEQPanel ? .white : .purple)
+                        .frame(width: 48, height: 36)
+                        .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
+                        .cornerRadius(8)
                 }
-
-                // Skip Silence button
-                Button {
-                    skipSilenceManager.isEnabled.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: skipSilenceManager.isEnabled ? "forward.fill" : "forward")
-                            .font(.system(size: 12))
-                        if skipSilenceManager.isAnalyzing {
-                            ProgressView()
-                                .scaleEffect(0.5)
-                                .frame(width: 12, height: 12)
-                        } else {
-                            Text("Skip")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    .foregroundColor(skipSilenceManager.isEnabled ? .white : .orange)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(skipSilenceManager.isEnabled ? Color.orange : Color.orange.opacity(0.15))
-                    .cornerRadius(8)
-                }
-
-                Spacer()
             }
+            .padding(.horizontal, 8)
 
             Text(currentRecording.formattedDate)
                 .font(.caption)
@@ -1565,7 +1524,7 @@ struct RecordingDetailView: View {
                     action: { showChooseAlbum = true }
                 )
 
-                // Row 3: Project
+                // Row 3: Project - popover attached to ROW ITSELF with .rect(.bounds) anchor
                 PickerRow(
                     label: "PROJECT",
                     value: projectDisplayValue,
@@ -1574,6 +1533,38 @@ struct RecordingDetailView: View {
                     showDivider: false,
                     action: { showProjectActionSheet = true }
                 )
+                .popover(
+                    isPresented: $showProjectActionSheet,
+                    attachmentAnchor: .rect(.bounds),
+                    arrowEdge: .bottom
+                ) {
+                    // Popover content - menu options
+                    ProjectActionMenu(
+                        belongsToProject: currentRecording.belongsToProject,
+                        hasProjects: !appState.projects.isEmpty,
+                        onViewProject: {
+                            showProjectActionSheet = false
+                            showProjectSheet = true
+                        },
+                        onRemoveFromProject: {
+                            showProjectActionSheet = false
+                            appState.removeFromProject(recording: currentRecording)
+                            refreshRecording()
+                        },
+                        onCreateProject: {
+                            showProjectActionSheet = false
+                            showCreateProject = true
+                        },
+                        onAddToExisting: {
+                            showProjectActionSheet = false
+                            showChooseProject = true
+                        },
+                        onCancel: {
+                            showProjectActionSheet = false
+                        }
+                    )
+                    .presentationCompactAdaptation(.popover)
+                }
             }
 
             // Card 2: Tags with inline chips
@@ -2048,6 +2039,10 @@ struct RecordingDetailView: View {
         }
 
         loadWaveform()
+
+        // Pre-load high-res waveform in background so Edit mode is instant
+        // This prevents blank waveform when entering Edit mode
+        loadHighResWaveform()
     }
 
     private func saveChanges() {
@@ -3116,6 +3111,81 @@ struct PickerRow: View {
                     .padding(.leading, CardStyle.horizontalPadding)
             }
         }
+    }
+}
+
+/// Popover menu for Project row actions
+struct ProjectActionMenu: View {
+    @Environment(\.themePalette) private var palette
+
+    let belongsToProject: Bool
+    let hasProjects: Bool
+    let onViewProject: () -> Void
+    let onRemoveFromProject: () -> Void
+    let onCreateProject: () -> Void
+    let onAddToExisting: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if belongsToProject {
+                // Recording is in a project - show view/remove options
+                menuButton(title: "View Project", icon: "folder.fill") {
+                    onViewProject()
+                }
+
+                Divider()
+
+                menuButton(title: "Remove from Project", icon: "minus.circle", isDestructive: true) {
+                    onRemoveFromProject()
+                }
+            } else {
+                // Recording is not in a project - show add options
+                menuButton(title: "Create New Project", icon: "folder.badge.plus") {
+                    onCreateProject()
+                }
+
+                if hasProjects {
+                    Divider()
+
+                    menuButton(title: "Add to Existing Project", icon: "folder") {
+                        onAddToExisting()
+                    }
+                }
+            }
+
+            Divider()
+
+            menuButton(title: "Cancel", icon: nil) {
+                onCancel()
+            }
+        }
+        .frame(width: 220)
+        .background(palette.cardBackground)
+    }
+
+    @ViewBuilder
+    private func menuButton(title: String, icon: String?, isDestructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 16))
+                        .foregroundColor(isDestructive ? .red : palette.accent)
+                        .frame(width: 24)
+                }
+
+                Text(title)
+                    .font(.system(size: 15))
+                    .foregroundColor(isDestructive ? .red : palette.textPrimary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
