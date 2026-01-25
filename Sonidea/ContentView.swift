@@ -2806,13 +2806,8 @@ struct SettingsSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
+                    Button("Guide") {
                         showGuide = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "book.closed")
-                            Text("Guide")
-                        }
                     }
                     .foregroundColor(palette.accent)
                 }
