@@ -3592,6 +3592,17 @@ struct GuideView: View {
                         )
                     }
                     .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        iCloudSyncInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "icloud",
+                            title: "iCloud Sync",
+                            subtitle: "Keep recordings synced across devices"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Features")
                         .foregroundStyle(palette.textSecondary)
@@ -4582,6 +4593,133 @@ struct AppearanceInfoView: View {
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - iCloud Sync Info View
+
+struct iCloudSyncInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Keep your recordings, tags, albums, and projects synced across all your Apple devices.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How iCloud Sync works")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Enable iCloud Sync in Settings to start syncing automatically.")
+                        InfoBulletRow(text: "Recordings, audio files, tags, albums, and projects all sync in real-time.")
+                        InfoBulletRow(text: "Changes on one device appear on your other devices within seconds.")
+                        InfoBulletRow(text: "Works in the background — no manual syncing needed.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // What syncs
+                InfoCard {
+                    Text("What gets synced")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Audio files — your actual recordings")
+                        InfoBulletRow(text: "Metadata — titles, notes, transcripts, locations")
+                        InfoBulletRow(text: "Tags — all your custom tags and assignments")
+                        InfoBulletRow(text: "Albums — including the Drafts and Imports system albums")
+                        InfoBulletRow(text: "Projects — versions, best takes, and project notes")
+                        InfoBulletRow(text: "Deletions — trashed items sync across devices too")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Status indicators
+                InfoCard {
+                    Text("Sync status indicators")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.icloud.fill")
+                                .foregroundColor(.green)
+                            Text("Synced — Everything is up to date")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                                .foregroundColor(.blue)
+                            Text("Syncing — Upload or download in progress")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.icloud.fill")
+                                .foregroundColor(.red)
+                            Text("Error — Check your connection and try again")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.icloud")
+                                .foregroundColor(.yellow)
+                            Text("Sign in required — Log in to iCloud")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+
+                // Requirements
+                InfoCard {
+                    Text("Requirements")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Signed in to iCloud on all devices")
+                        InfoBulletRow(text: "Sonidea installed on each device")
+                        InfoBulletRow(text: "Sufficient iCloud storage for audio files")
+                        InfoBulletRow(text: "Internet connection for syncing")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tips
+                InfoCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.yellow)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Tips for best results:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("• Use \"Sync Now\" after making many changes offline\n• Large recordings may take longer to upload\n• Edits and deletions sync immediately when online")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("iCloud Sync")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
