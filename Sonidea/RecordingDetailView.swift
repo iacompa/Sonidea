@@ -352,13 +352,22 @@ struct RecordingDetailView: View {
                 editHistory.clear()  // Clean up undo history
             }
             .onChange(of: isEditingWaveform) { _, editing in
-                // Stop playback when switching modes to ensure only one playback context is active
-                playback.stop()
+                // Pause playback when switching modes (don't stop - keeps engine ready for edit mode playback)
+                playback.pause()
                 if editing {
                     // Load high-res waveform data when entering edit mode
                     // Force load if data is nil and not currently loading (handles failed pre-load)
                     let shouldForce = highResWaveformData == nil && !isLoadingHighResWaveform
                     loadHighResWaveform(force: shouldForce)
+
+                    // Ensure playback engine is loaded with current audio file
+                    // This handles case where engine was stopped/unloaded
+                    if !playback.isLoaded {
+                        let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                        playback.load(url: audioURL)
+                        // Seek to current playhead position after reload
+                        playback.seek(to: editPlayheadPosition)
+                    }
                 }
             }
             .onChange(of: skipSilenceManager.isEnabled) { _, enabled in
@@ -648,20 +657,20 @@ struct RecordingDetailView: View {
                     Button {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                             if isEditingWaveform {
-                                // Exit edit mode - stop playback and reset precision mode
-                                playback.stop()
+                                // Exit edit mode - pause playback and reset precision mode
+                                playback.pause()
                                 isPrecisionMode = false
                                 silenceMode = .idle  // Clear any highlighted silence
                                 isEditingWaveform = false
                             } else {
-                                // Enter edit mode - stop playback and set selection to full duration
-                                playback.stop()
+                                // Enter edit mode - capture playhead position BEFORE pausing
+                                // This ensures the marker is placed where the user was listening
+                                let capturedTime = playback.currentTime
+                                playback.pause()
                                 selectionStart = 0
                                 selectionEnd = effectiveEditDuration
-                                // Set playhead to current playback position (quantized to 0.01s)
-                                // This ensures the marker is placed where the user was listening
-                                let currentTime = playback.currentTime
-                                editPlayheadPosition = (currentTime / 0.01).rounded() * 0.01
+                                // Set playhead to captured position (quantized to 0.01s)
+                                editPlayheadPosition = (capturedTime / 0.01).rounded() * 0.01
                                 isEditingWaveform = true
                             }
                         }
@@ -878,7 +887,15 @@ struct RecordingDetailView: View {
 
                 // Skip backward
                 Button {
-                    playback.skip(seconds: -Double(appState.appSettings.skipInterval.rawValue))
+                    let skipAmount = -Double(appState.appSettings.skipInterval.rawValue)
+                    if isEditingWaveform {
+                        // In edit mode: update editor playhead and sync to playback
+                        let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
+                        editPlayheadPosition = newTime
+                        playback.seek(to: newTime)
+                    } else {
+                        playback.skip(seconds: skipAmount)
+                    }
                 } label: {
                     Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))
@@ -888,7 +905,18 @@ struct RecordingDetailView: View {
 
                 // Play/Pause (centered)
                 Button {
-                    playback.togglePlayPause()
+                    if isEditingWaveform && !playback.isPlaying {
+                        // In edit mode: ensure engine is loaded and seek to playhead before playing
+                        if !playback.isLoaded {
+                            let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                            playback.load(url: audioURL)
+                        }
+                        // Seek to the editor playhead position, then play
+                        playback.seek(to: editPlayheadPosition)
+                        playback.play()
+                    } else {
+                        playback.togglePlayPause()
+                    }
                 } label: {
                     Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 56))
@@ -897,7 +925,15 @@ struct RecordingDetailView: View {
 
                 // Skip forward
                 Button {
-                    playback.skip(seconds: Double(appState.appSettings.skipInterval.rawValue))
+                    let skipAmount = Double(appState.appSettings.skipInterval.rawValue)
+                    if isEditingWaveform {
+                        // In edit mode: update editor playhead and sync to playback
+                        let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
+                        editPlayheadPosition = newTime
+                        playback.seek(to: newTime)
+                    } else {
+                        playback.skip(seconds: skipAmount)
+                    }
                 } label: {
                     Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
                         .font(.system(size: 28))

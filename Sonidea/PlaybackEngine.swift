@@ -120,6 +120,11 @@ final class PlaybackEngine {
             }
         }
 
+        // CRITICAL: Stop player first to clear any previously scheduled segments
+        // This prevents segment accumulation when pause/play is cycled, which causes
+        // playhead drift (UI shows 100% while audio continues from queued segments)
+        player.stop()
+
         // Schedule from current seek position
         let frameCount = AVAudioFrameCount(audioLengthFrames - seekFrame)
         guard frameCount > 0 else {
@@ -146,10 +151,15 @@ final class PlaybackEngine {
     }
 
     func pause() {
+        // Update current time first to capture accurate position
+        updateCurrentTime()
+
+        // Save current position to seekFrame so play() resumes from here
+        seekFrame = AVAudioFramePosition(currentTime * audioSampleRate)
+
         playerNode?.pause()
         isPlaying = false
         stopTimer()
-        updateCurrentTime()
     }
 
     func stop() {
