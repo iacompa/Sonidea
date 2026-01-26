@@ -1234,6 +1234,9 @@ struct SharedAlbumDetailView: View {
                     isLoading = false
                 }
             } else {
+                // Load shared recording info (creator attribution, location, etc.)
+                let sharedInfos = await appState.sharedAlbumManager.fetchSharedRecordingInfo(for: album)
+
                 // Load activity
                 let activity = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 50)
 
@@ -1245,6 +1248,7 @@ struct SharedAlbumDetailView: View {
 
                 await MainActor.run {
                     recordings = albumRecordings
+                    sharedRecordingInfos = sharedInfos
                     activityEvents = activity
                     trashItems = trash
                     albumSettings = settings ?? .default

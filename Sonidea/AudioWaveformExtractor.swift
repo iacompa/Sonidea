@@ -167,8 +167,8 @@ actor AudioWaveformExtractor {
     private let rmsWindowMs: Double = 30.0              // RMS window size (ms)
     private let rmsHopMs: Double = 10.0                 // Hop size (ms) - overlap for smoother detection
     private let silenceEnterHoldMs: Double = 80.0       // Debounce: must stay silent for 80ms to enter silence
-    private let silenceExitHoldMs: Double = 50.0        // Debounce: must stay non-silent for 50ms to exit silence
-    private let mergeGapMs: Double = 120.0              // Merge silence regions separated by gaps < 120ms
+    private let silenceExitHoldMs: Double = 30.0        // Debounce: must stay non-silent for 30ms to exit silence (reduced for better transient detection)
+    private let mergeGapMs: Double = 40.0               // Merge silence regions separated by gaps < 40ms (reduced from 120ms to avoid swallowing short audio)
 
     // MARK: - Public API
 

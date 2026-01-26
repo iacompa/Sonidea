@@ -236,7 +236,7 @@ final class SharedAlbumManager {
     }
 
     /// Add a recording to a shared album with CloudKit
-    func addRecordingToSharedAlbum(recording: RecordingItem, album: Album) async throws {
+    func addRecordingToSharedAlbum(recording: RecordingItem, album: Album, locationMode: LocationSharingMode = .none) async throws {
         guard album.isShared else { return }
 
         logger.info("Adding recording to shared album: \(recording.title) -> \(album.name)")
@@ -250,6 +250,10 @@ final class SharedAlbumManager {
             throw SharedAlbumError.audioOnlyViolation
         }
 
+        // Get current user info
+        let currentUserId = await getCurrentUserId() ?? "unknown"
+        let currentUserName = await getCurrentUserDisplayName() ?? "Unknown User"
+
         let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
         let recordID = CKRecord.ID(recordName: recording.id.uuidString, zoneID: zoneID)
 
@@ -259,6 +263,23 @@ final class SharedAlbumManager {
         record["createdAt"] = recording.createdAt
         record["notes"] = recording.notes
 
+        // Creator attribution
+        record["creatorId"] = currentUserId
+        record["creatorDisplayName"] = currentUserName
+
+        // Location sharing (opt-in)
+        record["locationSharingMode"] = locationMode.rawValue
+        if locationMode != .none, let lat = recording.latitude, let lon = recording.longitude {
+            let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: locationMode)
+            record["sharedLatitude"] = approx.latitude
+            record["sharedLongitude"] = approx.longitude
+            record["sharedPlaceName"] = recording.locationLabel
+        }
+
+        // Verification status
+        record["isVerified"] = recording.hasProof
+        record["verifiedAt"] = recording.proofCloudCreatedAt
+
         // Add audio as CKAsset
         if FileManager.default.fileExists(atPath: recording.fileURL.path) {
             let asset = CKAsset(fileURL: recording.fileURL)
@@ -267,6 +288,17 @@ final class SharedAlbumManager {
 
         do {
             try await privateDatabase.save(record)
+
+            // Log activity
+            let event = SharedAlbumActivityEvent.recordingAdded(
+                albumId: album.id,
+                actorId: currentUserId,
+                actorDisplayName: currentUserName,
+                recordingId: recording.id,
+                recordingTitle: recording.title
+            )
+            try? await logActivity(event: event, for: album)
+
             logger.info("Added recording to shared album")
         } catch {
             logger.error("Failed to add recording to shared album: \(error.localizedDescription)")
@@ -292,6 +324,61 @@ final class SharedAlbumManager {
             logger.error("Failed to delete recording from shared album: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
         }
+    }
+
+    /// Fetch shared recording info for all recordings in a shared album
+    func fetchSharedRecordingInfo(for album: Album) async -> [UUID: SharedRecordingItem] {
+        guard album.isShared else { return [:] }
+
+        logger.info("Fetching shared recording info for album: \(album.id)")
+
+        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
+        let predicate = NSPredicate(value: true)
+        let query = CKQuery(recordType: "SharedRecording", predicate: predicate)
+
+        var result: [UUID: SharedRecordingItem] = [:]
+
+        do {
+            let records = try await privateDatabase.records(matching: query, inZoneWith: zoneID, resultsLimit: 500)
+
+            for (_, recordResult) in records.matchResults {
+                if case .success(let record) = recordResult {
+                    guard let recordingIdString = record.recordID.recordName.components(separatedBy: "-").first,
+                          let recordingId = UUID(uuidString: record.recordID.recordName) else {
+                        continue
+                    }
+
+                    let sharedInfo = SharedRecordingItem(
+                        id: UUID(),
+                        recordingId: recordingId,
+                        albumId: album.id,
+                        creatorId: record["creatorId"] as? String ?? "unknown",
+                        creatorDisplayName: record["creatorDisplayName"] as? String ?? "Unknown",
+                        createdAt: record["createdAt"] as? Date ?? Date(),
+                        wasImported: record["wasImported"] as? Bool ?? false,
+                        recordedWithHeadphones: record["recordedWithHeadphones"] as? Bool ?? false,
+                        isSensitive: record["isSensitive"] as? Bool ?? false,
+                        sensitiveApproved: record["sensitiveApproved"] as? Bool ?? false,
+                        sensitiveApprovedBy: record["sensitiveApprovedBy"] as? String,
+                        sensitiveApprovedAt: record["sensitiveApprovedAt"] as? Date,
+                        locationSharingMode: LocationSharingMode(rawValue: record["locationSharingMode"] as? String ?? "none") ?? .none,
+                        sharedLatitude: record["sharedLatitude"] as? Double,
+                        sharedLongitude: record["sharedLongitude"] as? Double,
+                        sharedPlaceName: record["sharedPlaceName"] as? String,
+                        isVerified: record["isVerified"] as? Bool ?? false,
+                        verifiedAt: record["verifiedAt"] as? Date
+                    )
+
+                    result[recordingId] = sharedInfo
+                }
+            }
+
+            logger.info("Fetched \(result.count) shared recording info items")
+        } catch {
+            logger.error("Failed to fetch shared recording info: \(error.localizedDescription)")
+        }
+
+        return result
     }
 
     /// Fetch participants for a shared album

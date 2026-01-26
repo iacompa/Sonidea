@@ -845,6 +845,8 @@ struct HoldForPrecisionButton: View {
             Text(isPrecisionMode ? "0.01s" : "Precision")
                 .font(.caption2)
                 .fontWeight(.medium)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundColor(isPrecisionMode ? .white : palette.textSecondary)
         .padding(.horizontal, 10)

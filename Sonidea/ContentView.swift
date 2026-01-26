@@ -2728,6 +2728,7 @@ struct SettingsSheetView: View {
     @State private var showSiriShortcutsHelp = false
     @State private var showGuide = false
     @State private var showCreateSharedAlbumSheet = false
+    @State private var isResetButtonAnimating = false
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -2826,13 +2827,25 @@ struct SettingsSheetView: View {
                 // MARK: Record Button Position Section
                 Section {
                     Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        // Perform reset
                         appState.resetRecordButtonPosition()
+                        // Trigger animation after reset
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            isResetButtonAnimating = true
+                        }
+                        // Success haptic
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        // Reset animation state after completion
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            isResetButtonAnimating = false
+                        }
                     } label: {
                         HStack {
                             Image(systemName: "arrow.counterclockwise")
                                 .foregroundColor(palette.accent)
                                 .frame(width: 24)
+                                .rotationEffect(.degrees(isResetButtonAnimating ? -360 : 0))
+                                .animation(.easeInOut(duration: 0.4), value: isResetButtonAnimating)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Reset Record Button Position")
                                     .foregroundColor(palette.textPrimary)
@@ -3727,6 +3740,13 @@ struct GuideView: View {
                     .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
+                        SharedAlbumsInfoView()
+                    } label: {
+                        SharedAlbumsGuideRow()
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
                         ProjectsInfoView()
                     } label: {
                         GuideRow(
@@ -4476,6 +4496,317 @@ struct AlbumsInfoView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Albums")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Shared Albums Guide Row (Gold-styled)
+
+struct SharedAlbumsGuideRow: View {
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.2.fill")
+                .font(.body)
+                .foregroundStyle(Color.sharedAlbumGold)
+                .shadow(color: .sharedAlbumGold.opacity(0.5), radius: 4, x: 0, y: 0)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Shared Albums")
+                    .font(.body)
+                    .foregroundStyle(Color.sharedAlbumGold)
+                    .shadow(color: .sharedAlbumGold.opacity(0.4), radius: 3, x: 0, y: 0)
+                Text("Collaborate on recordings with others")
+                    .font(.caption)
+                    .foregroundStyle(palette.textSecondary)
+            }
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Shared Albums Info View
+
+struct SharedAlbumsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Shared Albums let you collaborate on recordings with trusted people via iCloud.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // What Shared Albums Are
+                InfoCard {
+                    Text("What is a Shared Album?")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "A collaborative album that syncs via iCloud with specific invited people.")
+                        InfoBulletRow(text: "Only audio recordings are supported (no photos, videos, or other files).")
+                        InfoBulletRow(text: "Shared albums appear with a gold glow, a badge, and participant count to distinguish them.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // How to Create
+                InfoCard {
+                    Text("How to Create a Shared Album")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SharedAlbumInfoBullet(
+                            prefix: "You cannot convert an existing album into a Shared Album.",
+                            suffix: " You must create one fresh before adding recordings."
+                        )
+                        SharedAlbumInfoBullet(
+                            prefix: "This prevents accidentally sharing a full private library or enabling mass deletion.",
+                            suffix: ""
+                        )
+                    }
+
+                    Text("Steps:")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                        .padding(.top, 8)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        SharedAlbumStepRow(number: 1, action: "Tap", highlight: "Create Shared Album", suffix: " in Settings.")
+                        SharedAlbumStepRow(number: 2, action: "Name the album and choose initial settings.", highlight: nil, suffix: nil)
+                        SharedAlbumStepRow(number: 3, action: "Tap", highlight: "Invite People", suffix: " to share the link.")
+                        SharedAlbumStepRow(number: 4, action: "Add recordings (you'll see a confirmation before sharing).", highlight: nil, suffix: nil)
+                    }
+                }
+                .padding(.horizontal)
+
+                // Roles & Permissions
+                InfoCard {
+                    Text("Roles & Permissions")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SharedAlbumRoleRow(
+                            role: "Admin",
+                            roleColor: .sharedAlbumGold,
+                            description: "Invite/remove people, change settings, delete any recording."
+                        )
+                        SharedAlbumRoleRow(
+                            role: "Member",
+                            roleColor: .blue,
+                            description: "Add recordings, edit their own metadata. Delete permission depends on album settings."
+                        )
+                        SharedAlbumRoleRow(
+                            role: "Viewer",
+                            roleColor: .secondary,
+                            description: "Listen only. Cannot add or delete recordings."
+                        )
+                    }
+                }
+                .padding(.horizontal)
+
+                // Confirmation & Privacy
+                InfoCard {
+                    Text("Privacy & Confirmation")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "When adding a recording to a shared album, you'll see a confirmation showing how many people will receive it.")
+                        SharedAlbumInfoBullet(
+                            prefix: "Location sharing is ",
+                            highlight: "opt-in per album",
+                            suffix: " and defaults to OFF."
+                        )
+                        InfoBulletRow(text: "If enabled, locations appear on a map with attribution (who recorded and when).")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Trash & Restore
+                InfoCard {
+                    HStack(spacing: 8) {
+                        Text("Shared Album Trash")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Text("(Anti-disaster)")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Deletions in Shared Albums do not permanently delete immediately.")
+                        SharedAlbumInfoBullet(
+                            prefix: "Deleted recordings move to ",
+                            highlight: "Shared Album Trash",
+                            suffix: " for 7–30 days (configurable by admin)."
+                        )
+                        InfoBulletRow(text: "Restore permissions depend on album settings: either any participant can restore, or admins only.")
+                        InfoBulletRow(text: "After the retention period, items are permanently removed.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Activity Feed
+                InfoCard {
+                    Text("Activity Feed")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SharedAlbumInfoBullet(
+                            prefix: "Each shared album has an ",
+                            highlight: "Activity",
+                            suffix: " tab showing who added, deleted, or renamed recordings."
+                        )
+                        InfoBulletRow(text: "This provides transparency and trust within the group.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Safety Warning
+                InfoCard {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Safety Warning")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Only share albums with people you trust.")
+                        InfoBulletRow(text: "Participants with permission can add or delete audio based on their role and album settings.")
+                        InfoBulletRow(text: "Be aware of inappropriate content risks (spam, unwanted audio). Members can leave anytime.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Leaving a Shared Album
+                InfoCard {
+                    Text("Leaving a Shared Album")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SharedAlbumInfoBullet(
+                            prefix: "Tap ",
+                            highlight: "Leave Shared Album",
+                            suffix: " in the album settings to remove yourself."
+                        )
+                        InfoBulletRow(text: "Your device will stop syncing that album.")
+                        InfoBulletRow(text: "Recordings you added remain in the album for other participants unless they delete them.")
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Shared Albums")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Shared Album Info Helpers (Gold Highlighted Text)
+
+/// A bullet row with optional gold-highlighted inline text
+struct SharedAlbumInfoBullet: View {
+    let prefix: String
+    var highlight: String? = nil
+    var suffix: String = ""
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("•")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .frame(width: 12, alignment: .leading)
+
+            if let highlight = highlight {
+                (Text(prefix)
+                    .foregroundColor(.secondary) +
+                 Text(highlight)
+                    .foregroundColor(.sharedAlbumGold)
+                    .fontWeight(.medium) +
+                 Text(suffix)
+                    .foregroundColor(.secondary))
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(prefix + suffix)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A numbered step with optional gold-highlighted button/label text
+struct SharedAlbumStepRow: View {
+    let number: Int
+    let action: String
+    let highlight: String?
+    let suffix: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.sharedAlbumGold)
+                .frame(width: 20, alignment: .leading)
+
+            if let highlight = highlight {
+                (Text(action + " ")
+                    .foregroundColor(.secondary) +
+                 Text(highlight)
+                    .foregroundColor(.sharedAlbumGold)
+                    .fontWeight(.semibold) +
+                 Text(suffix ?? "")
+                    .foregroundColor(.secondary))
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(action)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A role description row with colored role name
+struct SharedAlbumRoleRow: View {
+    let role: String
+    let roleColor: Color
+    let description: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("•")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .frame(width: 12, alignment: .leading)
+
+            (Text(role)
+                .foregroundColor(roleColor)
+                .fontWeight(.semibold) +
+             Text(": " + description)
+                .foregroundColor(.secondary))
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
