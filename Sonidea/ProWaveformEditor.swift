@@ -636,8 +636,13 @@ struct WaveformBarsView: View {
         Canvas { context, size in
             guard let data = waveformData else { return }
 
+            // Use Canvas size.width which is always valid (never 0)
+            // The passed `width` parameter can be 0 on first GeometryReader layout
+            let actualWidth = size.width
+            guard actualWidth > 0 else { return }
+
             // Get samples for visible range
-            let targetBars = Int(width / 3) // ~3pt per bar for dense look
+            let targetBars = max(1, Int(actualWidth / 3)) // ~3pt per bar for dense look, minimum 1
             let samples = data.samples(
                 from: timeline.visibleStartTime,
                 to: timeline.visibleEndTime,
@@ -649,7 +654,7 @@ struct WaveformBarsView: View {
             let barCount = samples.count
             let barSpacing: CGFloat = 1.5
             let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let barWidth = max(1.5, (size.width - totalSpacing) / CGFloat(barCount))
+            let barWidth = max(1.5, (actualWidth - totalSpacing) / CGFloat(barCount))
 
             // Colors
             let selectedColor = palette.accent

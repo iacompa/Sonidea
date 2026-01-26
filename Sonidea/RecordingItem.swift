@@ -71,6 +71,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     let createdAt: Date
     let duration: TimeInterval
 
+    /// Last modification time (for sync conflict resolution)
+    var modifiedAt: Date
+
     var title: String
     var notes: String
     var tagIDs: [UUID]
@@ -410,12 +413,14 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         overdubRoleRaw: String? = nil,
         overdubIndex: Int? = nil,
         overdubOffsetSeconds: Double = 0,
-        overdubSourceBaseId: UUID? = nil
+        overdubSourceBaseId: UUID? = nil,
+        modifiedAt: Date? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
         self.createdAt = createdAt
         self.duration = duration
+        self.modifiedAt = modifiedAt ?? createdAt
         self.title = title
         self.notes = notes
         self.tagIDs = tagIDs
@@ -451,7 +456,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     // MARK: - Codable with Migration Support
 
     enum CodingKeys: String, CodingKey {
-        case id, fileURL, createdAt, duration, title, notes, tagIDs, albumID
+        case id, fileURL, createdAt, duration, modifiedAt, title, notes, tagIDs, albumID
         case locationLabel, transcript, latitude, longitude, trashedAt
         case lastPlaybackPosition, iconColorHex, iconName, eqSettings
         case projectId, parentRecordingId, versionIndex
@@ -469,6 +474,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         fileURL = try container.decode(URL.self, forKey: .fileURL)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         duration = try container.decode(TimeInterval.self, forKey: .duration)
+        // Migration: modifiedAt defaults to createdAt for existing recordings
+        modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
         title = try container.decode(String.self, forKey: .title)
         notes = try container.decode(String.self, forKey: .notes)
         tagIDs = try container.decode([UUID].self, forKey: .tagIDs)

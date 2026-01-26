@@ -645,16 +645,13 @@ struct MarkerView: View {
 }
 
 // MARK: - Edit Actions Row (Single Row, Compact)
+// Note: Undo/Redo moved to top bar (near Done button) to free space here
 
 struct WaveformEditActionsView: View {
-    let canUndo: Bool
-    let canRedo: Bool
     let canTrim: Bool
     let canCut: Bool
     let isProcessing: Bool
     @Binding var isPrecisionMode: Bool
-    let onUndo: () -> Void
-    let onRedo: () -> Void
     let onTrim: () -> Void
     let onCut: () -> Void
     let onAddMarker: () -> Void
@@ -662,70 +659,44 @@ struct WaveformEditActionsView: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                // Trim button
-                EditActionButton(
-                    icon: "crop",
-                    label: "Trim",
-                    isEnabled: canTrim && !isProcessing,
-                    style: .primary,
-                    action: onTrim
-                )
+        HStack(spacing: 8) {
+            // Trim button
+            EditActionButton(
+                icon: "crop",
+                label: "Trim",
+                isEnabled: canTrim && !isProcessing,
+                style: .primary,
+                action: onTrim
+            )
 
-                // Cut button
-                EditActionButton(
-                    icon: "scissors",
-                    label: "Cut",
-                    isEnabled: canCut && !isProcessing,
-                    style: .destructive,
-                    action: onCut
-                )
+            // Cut button
+            EditActionButton(
+                icon: "scissors",
+                label: "Cut",
+                isEnabled: canCut && !isProcessing,
+                style: .destructive,
+                action: onCut
+            )
 
-                // Divider
-                Rectangle()
-                    .fill(palette.stroke.opacity(0.3))
-                    .frame(width: 1, height: 28)
-                    .padding(.horizontal, 4)
+            // Divider
+            Rectangle()
+                .fill(palette.stroke.opacity(0.3))
+                .frame(width: 1, height: 28)
+                .padding(.horizontal, 4)
 
-                // Undo button
-                EditActionButton(
-                    icon: "arrow.uturn.backward",
-                    label: "Undo",
-                    isEnabled: canUndo && !isProcessing,
-                    style: .secondary,
-                    action: onUndo
-                )
+            // Add Marker button
+            EditActionButton(
+                icon: "flag.fill",
+                label: "Marker",
+                isEnabled: !isProcessing,
+                style: .secondary,
+                action: onAddMarker
+            )
 
-                // Redo button
-                EditActionButton(
-                    icon: "arrow.uturn.forward",
-                    label: "Redo",
-                    isEnabled: canRedo && !isProcessing,
-                    style: .secondary,
-                    action: onRedo
-                )
-
-                // Divider
-                Rectangle()
-                    .fill(palette.stroke.opacity(0.3))
-                    .frame(width: 1, height: 28)
-                    .padding(.horizontal, 4)
-
-                // Add Marker button
-                EditActionButton(
-                    icon: "flag.fill",
-                    label: "Marker",
-                    isEnabled: !isProcessing,
-                    style: .secondary,
-                    action: onAddMarker
-                )
-
-                // Precision toggle
-                HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
-            }
-            .padding(.horizontal, 4)
+            // Precision toggle
+            HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
         }
+        .padding(.horizontal, 4)
     }
 }
 
@@ -1076,14 +1047,10 @@ struct NudgeButtonStyle: ButtonStyle {
         .frame(height: 180)
 
         WaveformEditActionsView(
-            canUndo: true,
-            canRedo: false,
             canTrim: true,
             canCut: true,
             isProcessing: false,
             isPrecisionMode: .constant(false),
-            onUndo: {},
-            onRedo: {},
             onTrim: {},
             onCut: {},
             onAddMarker: {}

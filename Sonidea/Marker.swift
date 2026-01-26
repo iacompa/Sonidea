@@ -66,6 +66,43 @@ extension Array where Element == Marker {
         }
     }
 
+    /// Remap markers after removing multiple silence ranges
+    /// - Parameters:
+    ///   - ranges: Array of silence ranges that were removed (sorted by start time)
+    ///   - padding: Padding that was applied to each silence cut
+    /// - Returns: Markers with adjusted times, removing any that fell within silence regions
+    func afterRemovingSilence(ranges: [SilenceRange], padding: TimeInterval) -> [Marker] {
+        guard !ranges.isEmpty else { return self }
+
+        return compactMap { marker in
+            var adjustedTime = marker.time
+            var cumulativeRemoved: TimeInterval = 0
+
+            for silence in ranges {
+                // Account for padding on silence boundaries
+                let adjustedStart = silence.start + padding
+                let adjustedEnd = Swift.max(adjustedStart, silence.end - padding)
+
+                // Skip if padding makes this silence too short to matter
+                if adjustedEnd <= adjustedStart {
+                    continue
+                }
+
+                if marker.time >= adjustedStart && marker.time <= adjustedEnd {
+                    // Marker is inside a removed silence region - remove it
+                    return nil
+                } else if marker.time > adjustedEnd {
+                    // Marker is after this silence - accumulate removed duration
+                    cumulativeRemoved += (adjustedEnd - adjustedStart)
+                }
+            }
+
+            // Adjust marker time by total removed duration before it
+            adjustedTime = marker.time - cumulativeRemoved
+            return Marker(id: marker.id, time: Swift.max(0, adjustedTime), label: marker.label)
+        }
+    }
+
     /// Sort markers by time
     var sortedByTime: [Marker] {
         sorted { $0.time < $1.time }

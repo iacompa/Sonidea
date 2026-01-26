@@ -2658,6 +2658,24 @@ struct SettingsSheetView: View {
     @State private var showSiriShortcutsHelp = false
     @State private var showGuide = false
 
+    // Sync status color based on state
+    private var syncStatusColor: Color {
+        switch appState.syncManager.status {
+        case .disabled:
+            return palette.textSecondary
+        case .initializing, .syncing:
+            return palette.accent
+        case .synced:
+            return .green
+        case .error:
+            return .red
+        case .networkUnavailable:
+            return .orange
+        case .accountUnavailable:
+            return .yellow
+        }
+    }
+
     var body: some View {
         @Bindable var appState = appState
 
@@ -2907,6 +2925,54 @@ struct SettingsSheetView: View {
                                 }
                             }
                         }
+
+                    // Sync status row (only when enabled)
+                    if appState.appSettings.iCloudSyncEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Image(systemName: appState.syncManager.status.iconName)
+                                    .foregroundColor(syncStatusColor)
+                                    .font(.system(size: 14))
+
+                                Text(appState.syncManager.status.displayText)
+                                    .font(.subheadline)
+                                    .foregroundColor(palette.textSecondary)
+
+                                Spacer()
+
+                                if appState.syncManager.isSyncing {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                        .tint(palette.accent)
+                                }
+                            }
+
+                            // Progress bar when syncing
+                            if let progress = appState.syncManager.status.progress, progress > 0 {
+                                ProgressView(value: progress)
+                                    .tint(palette.accent)
+                            }
+
+                            // Show current upload if any
+                            if let currentUpload = appState.syncManager.uploadProgress.first(where: { $0.status == .uploading }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.circle")
+                                        .font(.caption2)
+                                        .foregroundColor(palette.textTertiary)
+                                    Text(currentUpload.fileName)
+                                        .font(.caption2)
+                                        .foregroundColor(palette.textTertiary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(Int(currentUpload.progress * 100))%")
+                                        .font(.caption2)
+                                        .foregroundColor(palette.textTertiary)
+                                        .monospacedDigit()
+                                }
+                            }
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    }
                 } header: {
                     Text("iCloud")
                         .foregroundColor(palette.textSecondary)
@@ -3782,56 +3848,108 @@ struct TrashItemRow: View {
 struct ImportDestinationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     let urls: [URL]
     let onImport: (UUID) -> Void
 
-    @State private var selectedAlbumID: UUID = Album.draftsID
+    @State private var selectedAlbumID: UUID = Album.importsID
+    @State private var showNewAlbumSheet = false
+    @State private var newAlbumName = ""
+
+    /// System albums (Imports and Drafts)
+    private var systemAlbums: [Album] {
+        // Include Imports even if it doesn't exist yet (we'll create it on import)
+        var result: [Album] = []
+
+        // Always show Imports option (will be created on import if needed)
+        if let imports = appState.albums.first(where: { $0.id == Album.importsID }) {
+            result.append(imports)
+        } else {
+            result.append(Album.imports)
+        }
+
+        // Show Drafts
+        if let drafts = appState.albums.first(where: { $0.id == Album.draftsID }) {
+            result.append(drafts)
+        }
+
+        return result
+    }
+
+    /// User-created albums (non-system)
+    private var userAlbums: [Album] {
+        appState.albums.filter { !$0.isSystem }
+    }
 
     var body: some View {
         NavigationStack {
             List {
+                // MARK: - Files Info Section
                 Section {
-                    HStack {
-                        Image(systemName: "doc.badge.plus")
-                            .foregroundColor(.blue)
-                            .font(.title2)
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(palette.accent.opacity(0.15))
+                                .frame(width: 44, height: 44)
+                            Image(systemName: "square.and.arrow.down")
+                                .foregroundColor(palette.accent)
+                                .font(.title3)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("\(urls.count) file\(urls.count == 1 ? "" : "s") selected")
+                            Text("\(urls.count) file\(urls.count == 1 ? "" : "s") to import")
                                 .font(.headline)
+                                .foregroundColor(palette.textPrimary)
                             Text(urls.map { $0.lastPathComponent }.prefix(3).joined(separator: ", ") + (urls.count > 3 ? "..." : ""))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                                 .lineLimit(1)
                         }
                     }
                     .padding(.vertical, 4)
+                    .listRowBackground(palette.cardBackground)
                 }
 
+                // MARK: - System Albums Section
                 Section {
-                    ForEach(appState.albums) { album in
-                        Button {
-                            selectedAlbumID = album.id
-                        } label: {
-                            HStack {
-                                Image(systemName: album.isSystem ? "folder.fill" : "folder")
-                                    .foregroundColor(album.isSystem ? .orange : .blue)
-                                Text(album.name)
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                if selectedAlbumID == album.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
+                    ForEach(systemAlbums) { album in
+                        albumRow(album, isSystem: true)
                     }
                 } header: {
-                    Text("Destination Album")
+                    Text("Default")
                 } footer: {
-                    Text("Choose where to save the imported recordings.")
+                    if selectedAlbumID == Album.importsID {
+                        Text("External files are saved to Imports by default.")
+                    }
+                }
+
+                // MARK: - User Albums Section
+                if !userAlbums.isEmpty {
+                    Section {
+                        ForEach(userAlbums) { album in
+                            albumRow(album, isSystem: false)
+                        }
+                    } header: {
+                        Text("Albums")
+                    }
+                }
+
+                // MARK: - Create New Album
+                Section {
+                    Button {
+                        showNewAlbumSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(.green)
+                            Text("New Album")
+                                .foregroundColor(palette.textPrimary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Import")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -3840,12 +3958,98 @@ struct ImportDestinationSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Import") {
+                        // Ensure Imports album exists if that's the destination
+                        if selectedAlbumID == Album.importsID {
+                            appState.ensureImportsAlbum()
+                        }
                         dismiss()
                         onImport(selectedAlbumID)
                     }
                     .fontWeight(.semibold)
                 }
             }
+            .alert("New Album", isPresented: $showNewAlbumSheet) {
+                TextField("Album name", text: $newAlbumName)
+                Button("Cancel", role: .cancel) {
+                    newAlbumName = ""
+                }
+                Button("Create") {
+                    if !newAlbumName.trimmingCharacters(in: .whitespaces).isEmpty {
+                        let album = appState.createAlbum(name: newAlbumName.trimmingCharacters(in: .whitespaces))
+                        selectedAlbumID = album.id
+                    }
+                    newAlbumName = ""
+                }
+            } message: {
+                Text("Enter a name for the new album.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func albumRow(_ album: Album, isSystem: Bool) -> some View {
+        Button {
+            selectedAlbumID = album.id
+        } label: {
+            HStack(spacing: 12) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(albumIconColor(album).opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: albumIconName(album))
+                        .foregroundColor(albumIconColor(album))
+                        .font(.system(size: 14, weight: .medium))
+                }
+
+                // Name
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(album.name)
+                            .foregroundColor(palette.textPrimary)
+                        if isSystem {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundColor(palette.textTertiary)
+                        }
+                    }
+                    if album.isImportsAlbum {
+                        Text("Recommended for external files")
+                            .font(.caption2)
+                            .foregroundColor(palette.textTertiary)
+                    }
+                }
+
+                Spacer()
+
+                // Checkmark
+                if selectedAlbumID == album.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(palette.accent)
+                        .font(.title3)
+                }
+            }
+        }
+        .listRowBackground(palette.cardBackground)
+    }
+
+    private func albumIconName(_ album: Album) -> String {
+        if album.isImportsAlbum {
+            return "square.and.arrow.down"
+        } else if album.isDraftsAlbum {
+            return "doc.text"
+        } else {
+            return "folder"
+        }
+    }
+
+    private func albumIconColor(_ album: Album) -> Color {
+        if album.isImportsAlbum {
+            return .blue
+        } else if album.isDraftsAlbum {
+            return .orange
+        } else {
+            return palette.accent
         }
     }
 }

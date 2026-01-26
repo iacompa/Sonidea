@@ -13,11 +13,12 @@ import OSLog
 // MARK: - Skip Silence Settings
 
 struct SkipSilenceSettings: Equatable, Codable {
-    /// Silence threshold in dBFS (default: -40 dB)
-    var thresholdDB: Float = -40.0
+    /// Silence threshold in dBFS (default: -45 dB)
+    /// Detection uses hysteresis: enters silence at threshold, exits at threshold + 5dB
+    var thresholdDB: Float = -45.0
 
-    /// Minimum silence duration to skip (default: 300ms)
-    var minSilenceDuration: TimeInterval = 0.3
+    /// Minimum silence duration to skip/cut (default: 500ms)
+    var minSilenceDuration: TimeInterval = 0.5
 
     /// Whether to apply a short fade when skipping (prevents clicks)
     var enableFade: Bool = true

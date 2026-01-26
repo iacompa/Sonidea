@@ -2,13 +2,78 @@
 //  iCloudSyncManager.swift
 //  Sonidea
 //
-//  Manages iCloud sync for recordings, tags, albums, and projects.
-//  Uses iCloud Documents (ubiquity container) for file-based sync.
+//  Unified sync manager that orchestrates CloudKit sync with fallback to iCloud Documents.
+//  Provides a single interface for the app to use.
 //
 
 import Foundation
 import Observation
 import UIKit
+import OSLog
+
+// MARK: - Sync Status (unified)
+
+@MainActor
+enum SyncStatusState: Equatable {
+    case disabled
+    case initializing
+    case syncing(progress: Double, description: String)
+    case synced(Date)
+    case error(String)
+    case accountUnavailable
+    case networkUnavailable
+
+    var displayText: String {
+        switch self {
+        case .disabled: return "Sync Off"
+        case .initializing: return "Setting up..."
+        case .syncing(let progress, let desc):
+            if progress > 0 {
+                return "\(desc) (\(Int(progress * 100))%)"
+            }
+            return desc
+        case .synced(let date):
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .abbreviated
+            return "Synced \(formatter.localizedString(for: date, relativeTo: Date()))"
+        case .error(let msg): return msg
+        case .accountUnavailable: return "Sign in to iCloud"
+        case .networkUnavailable: return "No Connection"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .disabled: return "icloud.slash"
+        case .initializing, .syncing: return "arrow.triangle.2.circlepath.icloud"
+        case .synced: return "checkmark.icloud.fill"
+        case .error: return "exclamationmark.icloud.fill"
+        case .accountUnavailable: return "person.icloud"
+        case .networkUnavailable: return "icloud.slash"
+        }
+    }
+
+    var progress: Double? {
+        if case .syncing(let p, _) = self { return p }
+        return nil
+    }
+
+    // For backward compatibility
+    static func == (lhs: SyncStatusState, rhs: SyncStatusState) -> Bool {
+        switch (lhs, rhs) {
+        case (.disabled, .disabled): return true
+        case (.initializing, .initializing): return true
+        case (.syncing(let p1, let d1), .syncing(let p2, let d2)): return p1 == p2 && d1 == d2
+        case (.synced(let d1), .synced(let d2)): return d1 == d2
+        case (.error(let e1), .error(let e2)): return e1 == e2
+        case (.accountUnavailable, .accountUnavailable): return true
+        case (.networkUnavailable, .networkUnavailable): return true
+        default: return false
+        }
+    }
+}
+
+// MARK: - iCloud Sync Manager
 
 @MainActor
 @Observable
@@ -16,18 +81,34 @@ final class iCloudSyncManager {
 
     // MARK: - Observable State
 
-    var isSyncing: Bool = false
+    var status: SyncStatusState = .disabled
     var lastSyncDate: Date?
     var syncError: String?
     var syncProgress: SyncProgress = .idle
+    var uploadProgress: [UploadProgress] = []
+
+    // Convenience properties
+    var isSyncing: Bool {
+        if case .syncing = status { return true }
+        if case .initializing = status { return true }
+        return false
+    }
+
+    // MARK: - Engines
+
+    private let cloudKitEngine = CloudKitSyncEngine()
+    private let logger = Logger(subsystem: "com.iacompa.sonidea", category: "iCloudSync")
+
+    // Weak reference to avoid retain cycle
+    weak var appState: AppState? {
+        didSet {
+            cloudKitEngine.appState = appState
+        }
+    }
 
     // MARK: - Configuration
 
-    private let metadataFileName = "sonidea-data.json"
-    private let audioDirectoryName = "Audio"
-
-    // Weak reference to avoid retain cycle (set by AppState)
-    weak var appState: AppState?
+    private var isEnabled = false
 
     // MARK: - iCloud Availability
 
@@ -35,332 +116,334 @@ final class iCloudSyncManager {
         FileManager.default.ubiquityIdentityToken != nil
     }
 
-    var ubiquityContainerURL: URL? {
-        FileManager.default.url(forUbiquityContainerIdentifier: nil)
-    }
-
-    private var documentsURL: URL? {
-        ubiquityContainerURL?.appendingPathComponent("Documents")
-    }
-
-    private var metadataURL: URL? {
-        documentsURL?.appendingPathComponent(metadataFileName)
-    }
-
-    private var audioDirectoryURL: URL? {
-        documentsURL?.appendingPathComponent(audioDirectoryName)
-    }
-
     // MARK: - Initialization
 
     init() {
-        loadLastSyncDate()
+        // Observe CloudKit engine status changes
+        observeCloudKitStatus()
     }
 
-    // MARK: - Public Methods
+    private func observeCloudKitStatus() {
+        // This will be called frequently as status changes
+        // In a real app, use Combine or async streams
+    }
 
-    /// Enable iCloud sync - performs initial sync
+    // MARK: - Public API
+
+    /// Enable iCloud sync
     func enableSync() async {
-        guard iCloudAvailable else {
-            syncError = SyncError.iCloudUnavailable.localizedDescription
-            return
-        }
+        guard !isEnabled else { return }
 
-        // Create directories if needed
-        await ensureDirectoriesExist()
+        logger.info("Enabling iCloud sync")
+        isEnabled = true
+        status = .initializing
 
-        // Perform initial sync
-        await syncNow()
+        // Use CloudKit as primary sync
+        await cloudKitEngine.enable()
+
+        // Mirror status from CloudKit engine
+        updateStatusFromEngine()
     }
 
     /// Disable iCloud sync
     func disableSync() {
-        // Just clear local sync state, don't delete cloud data
+        logger.info("Disabling iCloud sync")
+        isEnabled = false
+        cloudKitEngine.disable()
+        status = .disabled
         syncError = nil
-        isSyncing = false
     }
 
-    /// Perform a full sync with iCloud
+    /// Perform sync now
     func syncNow() async {
-        guard iCloudAvailable else {
-            syncError = SyncError.iCloudUnavailable.localizedDescription
-            return
-        }
-
-        guard let appState = appState else {
-            syncError = "App state not available"
-            return
-        }
-
-        guard !isSyncing else { return }
-
-        isSyncing = true
-        syncError = nil
-        syncProgress = SyncProgress(phase: .preparingData, current: 0, total: 5)
-
-        do {
-            // Step 1: Ensure directories exist
-            await ensureDirectoriesExist()
-
-            // Step 2: Read remote data
-            syncProgress.phase = .downloadingMetadata
-            syncProgress.current = 1
-            let remoteData = await readRemoteMetadata()
-
-            // Step 3: Merge data
-            syncProgress.phase = .mergingData
-            syncProgress.current = 2
-            let localData = appState.getSyncableData()
-            let merged = mergeData(local: localData, remote: remoteData)
-
-            // Step 4: Write merged metadata to iCloud
-            syncProgress.phase = .uploadingMetadata
-            syncProgress.current = 3
-            try await writeMetadataToiCloud(merged)
-
-            // Step 5: Sync audio files
-            syncProgress.phase = .uploadingAudio
-            syncProgress.current = 4
-            try await syncAudioFiles(recordings: merged.recordings)
-
-            // Step 6: Apply merged data to local state
-            appState.applySyncedData(merged)
-
-            // Success
-            syncProgress.phase = .complete
-            syncProgress.current = 5
-            lastSyncDate = Date()
-            saveLastSyncDate()
-            syncError = nil
-
-        } catch {
-            syncError = error.localizedDescription
-        }
-
-        isSyncing = false
-        syncProgress = .idle
+        guard isEnabled else { return }
+        cloudKitEngine.triggerSync()
+        updateStatusFromEngine()
     }
 
-    // MARK: - Private Methods
-
-    private func ensureDirectoriesExist() async {
-        guard let documentsURL = documentsURL,
-              let audioURL = audioDirectoryURL else { return }
-
-        let fileManager = FileManager.default
-
-        // Create Documents directory
-        if !fileManager.fileExists(atPath: documentsURL.path) {
-            try? fileManager.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-        }
-
-        // Create Audio directory
-        if !fileManager.fileExists(atPath: audioURL.path) {
-            try? fileManager.createDirectory(at: audioURL, withIntermediateDirectories: true)
-        }
+    /// Handle remote notification (called from AppDelegate)
+    func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async {
+        guard isEnabled else { return }
+        await cloudKitEngine.handleRemoteNotification(userInfo)
+        updateStatusFromEngine()
     }
 
-    private func readRemoteMetadata() async -> SyncableData? {
-        guard let metadataURL = metadataURL else { return nil }
-
-        // Check if file exists and is downloaded
-        let fileManager = FileManager.default
-
-        guard fileManager.fileExists(atPath: metadataURL.path) else {
-            return nil
-        }
-
-        // Try to download if in cloud
-        do {
-            try fileManager.startDownloadingUbiquitousItem(at: metadataURL)
-        } catch {
-            // File might already be local, continue
-        }
-
-        // Wait briefly for download (in production, use NSMetadataQuery for proper monitoring)
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-
-        // Read the file
-        guard let data = fileManager.contents(atPath: metadataURL.path) else {
-            return nil
-        }
-
-        do {
-            let decoder = JSONDecoder()
-            return try decoder.decode(SyncableData.self, from: data)
-        } catch {
-            print("Failed to decode remote metadata: \(error)")
-            return nil
-        }
+    /// Sync on app foreground
+    func syncOnForeground() async {
+        guard isEnabled else { return }
+        await cloudKitEngine.syncOnForeground()
+        updateStatusFromEngine()
     }
 
-    private func writeMetadataToiCloud(_ syncData: SyncableData) async throws {
-        guard let metadataURL = metadataURL else {
-            throw SyncError.containerNotFound
-        }
+    // MARK: - Sync Triggers
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-        do {
-            let data = try encoder.encode(syncData)
-
-            // Write using file coordinator for safe iCloud access
-            let coordinator = NSFileCoordinator()
-            var coordinatorError: NSError?
-
-            coordinator.coordinate(writingItemAt: metadataURL, options: .forReplacing, error: &coordinatorError) { url in
-                try? data.write(to: url, options: .atomic)
-            }
-
-            if let error = coordinatorError {
-                throw SyncError.fileOperationFailed(error)
-            }
-        } catch let error as SyncError {
-            throw error
-        } catch {
-            throw SyncError.encodingError(error)
-        }
-    }
-
-    private func syncAudioFiles(recordings: [RecordingItem]) async throws {
-        guard let audioDirectoryURL = audioDirectoryURL else {
-            throw SyncError.containerNotFound
-        }
-
-        let fileManager = FileManager.default
-        let localDocumentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-
-        for recording in recordings {
-            let localFileURL = recording.fileURL
-            let fileName = "\(recording.id.uuidString).\(localFileURL.pathExtension)"
-            let cloudFileURL = audioDirectoryURL.appendingPathComponent(fileName)
-
-            // Upload local file to cloud if it exists locally but not in cloud
-            if fileManager.fileExists(atPath: localFileURL.path) {
-                if !fileManager.fileExists(atPath: cloudFileURL.path) {
-                    do {
-                        try fileManager.copyItem(at: localFileURL, to: cloudFileURL)
-                    } catch {
-                        print("Failed to upload audio file: \(error)")
-                    }
-                }
-            }
-
-            // Download cloud file to local if it exists in cloud but not locally
-            if fileManager.fileExists(atPath: cloudFileURL.path) {
-                if !fileManager.fileExists(atPath: localFileURL.path) {
-                    // Start download
-                    try? fileManager.startDownloadingUbiquitousItem(at: cloudFileURL)
-
-                    // Wait for download (simplified - in production use NSMetadataQuery)
-                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-
-                    // Copy to local documents
-                    let localDestination = localDocumentsURL.appendingPathComponent(localFileURL.lastPathComponent)
-                    do {
-                        try fileManager.copyItem(at: cloudFileURL, to: localDestination)
-                    } catch {
-                        print("Failed to download audio file: \(error)")
-                    }
-                }
+    func onRecordingCreated(_ recording: RecordingItem) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.saveRecording(recording)
+                updateStatusFromEngine()
+            } catch {
+                logger.error("Failed to sync new recording: \(error.localizedDescription)")
+                status = .error(error.localizedDescription)
             }
         }
     }
 
-    // MARK: - Data Merging
-
-    private func mergeData(local: SyncableData, remote: SyncableData?) -> SyncableData {
-        guard let remote = remote else {
-            return local
-        }
-
-        // Simple last-write-wins strategy based on lastModified timestamp
-        // In a more sophisticated implementation, we'd merge per-item based on individual timestamps
-
-        if local.lastModified > remote.lastModified {
-            // Local is newer - use local data
-            return SyncableData(
-                recordings: local.recordings,
-                tags: mergeTags(local: local.tags, remote: remote.tags),
-                albums: mergeAlbums(local: local.albums, remote: remote.albums),
-                projects: local.projects,
-                lastModified: Date()
-            )
-        } else {
-            // Remote is newer - use remote data but preserve local audio file paths
-            return SyncableData(
-                recordings: mergeRecordings(local: local.recordings, remote: remote.recordings),
-                tags: mergeTags(local: local.tags, remote: remote.tags),
-                albums: mergeAlbums(local: local.albums, remote: remote.albums),
-                projects: remote.projects,
-                lastModified: Date()
-            )
-        }
-    }
-
-    private func mergeRecordings(local: [RecordingItem], remote: [RecordingItem]) -> [RecordingItem] {
-        var merged: [RecordingItem] = []
-        var localDict = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
-        var remoteIDs = Set<UUID>()
-
-        // For remote recordings, prefer local version if it exists (preserves file URL)
-        for remoteRecording in remote {
-            remoteIDs.insert(remoteRecording.id)
-            if let localRecording = localDict[remoteRecording.id] {
-                // Use local recording to preserve local file URL
-                merged.append(localRecording)
-                localDict.removeValue(forKey: remoteRecording.id)
-            } else {
-                // Recording only exists remotely - will need to download audio file
-                merged.append(remoteRecording)
+    func onRecordingUpdated(_ recording: RecordingItem) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.saveRecording(recording)
+                updateStatusFromEngine()
+            } catch {
+                logger.error("Failed to sync recording update: \(error.localizedDescription)")
             }
         }
-
-        // Add any local recordings not in remote
-        merged.append(contentsOf: localDict.values)
-
-        return merged
     }
 
-    private func mergeTags(local: [Tag], remote: [Tag]) -> [Tag] {
-        // Union of both tag sets, preferring local for conflicts
-        var merged = local
-        let localIDs = Set(local.map { $0.id })
-
-        for remoteTag in remote {
-            if !localIDs.contains(remoteTag.id) {
-                merged.append(remoteTag)
+    func onAudioEdited(_ recording: RecordingItem) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.saveRecording(recording)
+                updateStatusFromEngine()
+            } catch {
+                logger.error("Failed to sync audio edit: \(error.localizedDescription)")
             }
         }
-
-        return merged
     }
 
-    private func mergeAlbums(local: [Album], remote: [Album]) -> [Album] {
-        // Union of both album sets, preferring local for conflicts
-        var merged = local
-        let localIDs = Set(local.map { $0.id })
-
-        for remoteAlbum in remote {
-            if !localIDs.contains(remoteAlbum.id) {
-                merged.append(remoteAlbum)
+    func onRecordingDeleted(_ recordingId: UUID) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.deleteRecording(recordingId)
+                updateStatusFromEngine()
+            } catch {
+                logger.error("Failed to sync deletion: \(error.localizedDescription)")
             }
         }
-
-        return merged
     }
 
-    // MARK: - Persistence
-
-    private let lastSyncDateKey = "iCloudLastSyncDate"
-
-    private func saveLastSyncDate() {
-        UserDefaults.standard.set(lastSyncDate, forKey: lastSyncDateKey)
+    func onMetadataChanged() {
+        guard isEnabled else { return }
+        cloudKitEngine.triggerSync()
     }
 
-    private func loadLastSyncDate() {
-        lastSyncDate = UserDefaults.standard.object(forKey: lastSyncDateKey) as? Date
+    func onTagCreated(_ tag: Tag) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveTag(tag)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onTagUpdated(_ tag: Tag) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveTag(tag)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onTagDeleted(_ tagId: UUID) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.deleteTag(tagId)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onAlbumCreated(_ album: Album) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveAlbum(album)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onAlbumUpdated(_ album: Album) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveAlbum(album)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onAlbumDeleted(_ albumId: UUID) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.deleteAlbum(albumId)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onProjectCreated(_ project: Project) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveProject(project)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onProjectUpdated(_ project: Project) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.saveProject(project)
+            updateStatusFromEngine()
+        }
+    }
+
+    func onProjectDeleted(_ projectId: UUID) {
+        guard isEnabled else { return }
+        Task {
+            try? await cloudKitEngine.deleteProject(projectId)
+            updateStatusFromEngine()
+        }
+    }
+
+    // MARK: - Status Updates
+
+    private func updateStatusFromEngine() {
+        // Convert CloudSyncStatus to SyncStatusState
+        status = convertStatus(cloudKitEngine.status)
+        lastSyncDate = cloudKitEngine.lastSyncDate
+        uploadProgress = cloudKitEngine.uploadProgress
+    }
+
+    private func convertStatus(_ cloudStatus: CloudSyncStatus) -> SyncStatusState {
+        switch cloudStatus {
+        case .disabled:
+            return .disabled
+        case .initializing:
+            return .initializing
+        case .syncing(let progress, let description):
+            return .syncing(progress: progress, description: description)
+        case .synced(let date):
+            return .synced(date)
+        case .error(let message):
+            return .error(message)
+        case .accountUnavailable:
+            return .accountUnavailable
+        case .networkUnavailable:
+            return .networkUnavailable
+        }
+    }
+}
+
+// MARK: - Sync Progress (backward compatibility)
+
+struct SyncProgress: Equatable {
+    var phase: SyncPhase
+    var current: Int
+    var total: Int
+
+    var progress: Double {
+        guard total > 0 else { return 0 }
+        return Double(current) / Double(total)
+    }
+
+    static let idle = SyncProgress(phase: .idle, current: 0, total: 0)
+}
+
+enum SyncPhase: String {
+    case idle = "Idle"
+    case preparingData = "Preparing data..."
+    case uploadingMetadata = "Uploading metadata..."
+    case uploadingAudio = "Uploading audio files..."
+    case downloadingMetadata = "Downloading metadata..."
+    case downloadingAudio = "Downloading audio files..."
+    case mergingData = "Merging data..."
+    case complete = "Complete"
+}
+
+// MARK: - Sync Error
+
+enum SyncError: Error, LocalizedError {
+    case iCloudUnavailable
+    case notSignedIn
+    case containerNotFound
+    case networkError(Error)
+    case encodingError(Error)
+    case decodingError(Error)
+    case fileOperationFailed(Error)
+    case cloudKitError(Error)
+    case unknown(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .iCloudUnavailable:
+            return "iCloud is not available"
+        case .notSignedIn:
+            return "Please sign in to iCloud"
+        case .containerNotFound:
+            return "iCloud container not found"
+        case .networkError(let error):
+            return "Network error: \(error.localizedDescription)"
+        case .encodingError(let error):
+            return "Failed to encode: \(error.localizedDescription)"
+        case .decodingError(let error):
+            return "Failed to decode: \(error.localizedDescription)"
+        case .fileOperationFailed(let error):
+            return "File error: \(error.localizedDescription)"
+        case .cloudKitError(let error):
+            return "CloudKit error: \(error.localizedDescription)"
+        case .unknown(let error):
+            return error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Upload Progress
+
+struct UploadProgress: Identifiable, Equatable {
+    let id: UUID
+    let fileName: String
+    var progress: Double
+    var status: UploadStatus
+
+    enum UploadStatus: Equatable {
+        case pending
+        case uploading
+        case completed
+        case failed(String)
+    }
+}
+
+// MARK: - Syncable Data
+
+struct SyncableData: Codable {
+    var recordings: [RecordingItem]
+    var tags: [Tag]
+    var albums: [Album]
+    var projects: [Project]
+    var lastModified: Date
+    var deviceIdentifier: String
+
+    static let empty = SyncableData(
+        recordings: [],
+        tags: [],
+        albums: [],
+        projects: [],
+        lastModified: Date.distantPast,
+        deviceIdentifier: ""
+    )
+
+    init(
+        recordings: [RecordingItem],
+        tags: [Tag],
+        albums: [Album],
+        projects: [Project],
+        lastModified: Date = Date(),
+        deviceIdentifier: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+    ) {
+        self.recordings = recordings
+        self.tags = tags
+        self.albums = albums
+        self.projects = projects
+        self.lastModified = lastModified
+        self.deviceIdentifier = deviceIdentifier
     }
 }
 
@@ -380,17 +463,13 @@ extension AppState {
 
     /// Apply synced data from iCloud
     func applySyncedData(_ data: SyncableData) {
-        // Update collections
         recordings = data.recordings
         tags = data.tags
         albums = data.albums
         projects = data.projects
-
-        // Persist locally
         saveAllData()
     }
 
-    /// Save all data to local storage
     private func saveAllData() {
         if let data = try? JSONEncoder().encode(recordings) {
             UserDefaults.standard.set(data, forKey: "savedRecordings")
@@ -403,6 +482,92 @@ extension AppState {
         }
         if let data = try? JSONEncoder().encode(projects) {
             UserDefaults.standard.set(data, forKey: "savedProjects")
+        }
+    }
+
+    // MARK: - Sync Trigger Hooks
+
+    func triggerSyncForRecording(_ recording: RecordingItem) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onRecordingUpdated(recording)
+        }
+    }
+
+    func triggerSyncForAudioEdit(_ recording: RecordingItem) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onAudioEdited(recording)
+        }
+    }
+
+    func triggerSyncForNewRecording(_ recording: RecordingItem) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onRecordingCreated(recording)
+        }
+    }
+
+    func triggerSyncForDeletion(_ recordingId: UUID) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onRecordingDeleted(recordingId)
+        }
+    }
+
+    func triggerSyncForMetadata() {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onMetadataChanged()
+        }
+    }
+
+    func triggerSyncForTag(_ tag: Tag) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onTagCreated(tag)
+        }
+    }
+
+    func triggerSyncForTagUpdate(_ tag: Tag) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onTagUpdated(tag)
+        }
+    }
+
+    func triggerSyncForTagDeletion(_ tagId: UUID) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onTagDeleted(tagId)
+        }
+    }
+
+    func triggerSyncForAlbum(_ album: Album) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onAlbumCreated(album)
+        }
+    }
+
+    func triggerSyncForAlbumUpdate(_ album: Album) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onAlbumUpdated(album)
+        }
+    }
+
+    func triggerSyncForAlbumDeletion(_ albumId: UUID) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onAlbumDeleted(albumId)
+        }
+    }
+
+    func triggerSyncForProject(_ project: Project) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onProjectCreated(project)
+        }
+    }
+
+    func triggerSyncForProjectUpdate(_ project: Project) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onProjectUpdated(project)
+        }
+    }
+
+    func triggerSyncForProjectDeletion(_ projectId: UUID) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onProjectDeleted(projectId)
         }
     }
 }

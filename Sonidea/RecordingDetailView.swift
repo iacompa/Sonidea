@@ -113,6 +113,7 @@ struct RecordingDetailView: View {
     @State private var highResWaveformData: WaveformData?
     @State private var skipSilenceManager = SkipSilenceManager()
     @State private var isLoadingHighResWaveform = false
+    @State private var silenceRMSMeter = SilenceRMSMeter()
 
     // Waveform height constants
     private let compactWaveformHeight: CGFloat = 100
@@ -239,6 +240,19 @@ struct RecordingDetailView: View {
         hasEdits ? "Save" : "Done"
     }
 
+    /// Effective duration for Edit mode - uses pending, playback, or recording duration as fallback
+    /// This prevents blank waveform when playback.duration is 0 (not yet loaded)
+    private var effectiveEditDuration: TimeInterval {
+        if let pending = pendingDuration, pending > 0 {
+            return pending
+        }
+        if playback.duration > 0 {
+            return playback.duration
+        }
+        // Fallback to recording's stored duration
+        return currentRecording.duration
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -341,7 +355,9 @@ struct RecordingDetailView: View {
                 playback.stop()
                 if editing {
                     // Load high-res waveform data when entering edit mode
-                    loadHighResWaveform()
+                    // Force load if data is nil and not currently loading (handles failed pre-load)
+                    let shouldForce = highResWaveformData == nil && !isLoadingHighResWaveform
+                    loadHighResWaveform(force: shouldForce)
                 }
             }
             .onChange(of: skipSilenceManager.isEnabled) { _, enabled in
@@ -356,6 +372,16 @@ struct RecordingDetailView: View {
                 // Skip silence during playback
                 if playback.isPlaying, let skipTo = skipSilenceManager.shouldSkip(at: currentTime) {
                     playback.seek(to: skipTo)
+                }
+                // Update silence debug strip RMS meter during playback/scrubbing
+                if case .highlighted = silenceMode {
+                    silenceRMSMeter.updateRMS(at: currentTime)
+                }
+            }
+            .onChange(of: silenceMode) { _, newMode in
+                // Clear RMS meter when leaving highlight mode
+                if case .idle = newMode {
+                    silenceRMSMeter.clear()
                 }
             }
             .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
@@ -579,7 +605,7 @@ struct RecordingDetailView: View {
                                 // Enter edit mode - stop playback and set selection to full duration
                                 playback.stop()
                                 selectionStart = 0
-                                selectionEnd = pendingDuration ?? playback.duration
+                                selectionEnd = effectiveEditDuration
                                 // Set playhead to current playback position (quantized to 0.01s)
                                 // This ensures the marker is placed where the user was listening
                                 let currentTime = playback.currentTime
@@ -623,11 +649,19 @@ struct RecordingDetailView: View {
                                 .foregroundColor(palette.textSecondary)
                         }
                         .frame(height: expandedWaveformHeight)
+                        .task {
+                            // Ensure waveform loading is triggered when this view appears
+                            // This handles cases where the pre-load failed or was skipped
+                            if highResWaveformData == nil && !isLoadingHighResWaveform {
+                                print("🎨 [Waveform] Loading view appeared - triggering load")
+                                loadHighResWaveform(force: true)
+                            }
+                        }
                     } else {
                         // Pro-level waveform editor with Voice Memos-style dense bars, timeline, pinch-to-zoom, and pan
                         ProWaveformEditor(
                         waveformData: highResWaveformData,
-                        duration: pendingDuration ?? playback.duration,
+                        duration: effectiveEditDuration,
                         selectionStart: $selectionStart,
                         selectionEnd: $selectionEnd,
                         playheadPosition: $editPlayheadPosition,
@@ -648,6 +682,9 @@ struct RecordingDetailView: View {
                             toggleSilenceRange(id: id)
                         }
                     )
+                    // Force fresh @State when duration changes to fix stale WaveformTimeline.duration
+                    // WaveformTimeline.duration is a `let` constant, so @State must be recreated
+                    .id("waveform-\(currentRecording.id)-\(Int(effectiveEditDuration * 1000))")
                     }
                 } else {
                     // Normal playback waveform
@@ -665,11 +702,21 @@ struct RecordingDetailView: View {
             // Edit mode: Selection info and actions
             if isEditingWaveform {
                 VStack(spacing: 12) {
+                    // Silence debug strip (only when highlighting silence)
+                    if case .highlighted = silenceMode {
+                        SilenceDebugStrip(
+                            currentDBFS: silenceRMSMeter.currentDBFS,
+                            thresholdDBFS: silenceRMSMeter.thresholdDBFS,
+                            isBelowThreshold: silenceRMSMeter.isBelowThreshold
+                        )
+                        .padding(.horizontal, 8)
+                    }
+
                     // Selection time display with nudge controls (0.01s precision)
                     SelectionTimeDisplay(
                         selectionStart: $selectionStart,
                         selectionEnd: $selectionEnd,
-                        duration: pendingDuration ?? playback.duration
+                        duration: effectiveEditDuration
                     )
 
                     // Edit actions: Trim, Cut, Skip Silence, Marker, Precision (Undo/Redo now in top bar)
@@ -1021,12 +1068,13 @@ struct RecordingDetailView: View {
     private func highlightSilentParts() {
         isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let detectionThreshold: Float = -45.0
 
         Task {
-            // Detect silence ranges (minimum 0.5s, threshold -40dB)
+            // Detect silence ranges (minimum 0.5s, threshold -45dB)
             let silenceRanges = try? await AudioWaveformExtractor.shared.detectSilence(
                 from: sourceURL,
-                threshold: -40.0,
+                threshold: detectionThreshold,
                 minDuration: 0.5
             )
 
@@ -1035,6 +1083,10 @@ struct RecordingDetailView: View {
                     // Wrap ranges in SelectableSilenceRange (all selected by default)
                     let selectableRanges = ranges.map { SelectableSilenceRange(range: $0, isSelected: true) }
                     silenceMode = .highlighted(selectableRanges)
+
+                    // Load audio into RMS meter for debug strip
+                    silenceRMSMeter.thresholdDBFS = detectionThreshold
+                    silenceRMSMeter.loadAudio(from: sourceURL)
 
                     // Calculate total silence duration for feedback
                     let totalSilence = ranges.reduce(0) { $0 + $1.duration }
@@ -2154,20 +2206,53 @@ struct RecordingDetailView: View {
         }
     }
 
-    private func loadHighResWaveform() {
-        guard highResWaveformData == nil else { return }
+    private func loadHighResWaveform(force: Bool = false) {
+        // Skip if already loaded (unless forced) or currently loading
+        if !force {
+            guard highResWaveformData == nil else {
+                print("🎨 [Waveform] loadHighResWaveform skipped: already loaded")
+                return
+            }
+        }
+
+        // Don't start another load if one is in progress
+        guard !isLoadingHighResWaveform else {
+            print("🎨 [Waveform] loadHighResWaveform skipped: already loading")
+            return
+        }
+
         isLoadingHighResWaveform = true
+        let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+        let recordingId = currentRecording.id
+
+        print("🎨 [Waveform] Loading high-res waveform for: \(audioURL.lastPathComponent)")
+        print("🎨 [Waveform] File exists: \(FileManager.default.fileExists(atPath: audioURL.path))")
+        print("🎨 [Waveform] Recording duration: \(currentRecording.duration)s")
+
         Task {
             do {
-                let audioURL = pendingAudioEdit ?? currentRecording.fileURL
                 let waveformData = try await AudioWaveformExtractor.shared.extractWaveform(from: audioURL)
+
                 await MainActor.run {
-                    highResWaveformData = waveformData
-                    isLoadingHighResWaveform = false
+                    // Verify we're still showing the same recording
+                    guard self.currentRecording.id == recordingId else {
+                        print("⚠️ [Waveform] Recording changed during load, discarding result")
+                        self.isLoadingHighResWaveform = false  // Reset flag even if discarding
+                        return
+                    }
+
+                    self.highResWaveformData = waveformData
+                    self.isLoadingHighResWaveform = false
+
+                    // Log success with sample counts
+                    let lodCount = waveformData.lodLevels.count
+                    let lod0Count = waveformData.lodLevels.first?.count ?? 0
+                    print("✅ [Waveform] High-res waveform loaded: \(lodCount) LOD levels, LOD0=\(lod0Count) samples, duration=\(waveformData.duration)s")
                 }
             } catch {
                 await MainActor.run {
-                    isLoadingHighResWaveform = false
+                    self.isLoadingHighResWaveform = false
+                    print("❌ [Waveform] Failed to load high-res waveform: \(error.localizedDescription)")
                 }
             }
         }

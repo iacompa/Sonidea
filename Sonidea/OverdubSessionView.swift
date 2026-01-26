@@ -36,6 +36,7 @@ struct OverdubSessionView: View {
     @State private var showDiscardConfirmation = false
     @State private var showSaveConfirmation = false
     @State private var errorMessage: String?
+    @State private var showErrorAlert = false
 
     @State private var offsetSliderValue: Double = 0 // For sync adjustment
     @State private var showOffsetSlider = false
@@ -110,6 +111,13 @@ struct OverdubSessionView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will delete the layer you just recorded.")
+            }
+            .alert("Error", isPresented: $showErrorAlert) {
+                Button("OK", role: .cancel) {
+                    errorMessage = nil
+                }
+            } message: {
+                Text(errorMessage ?? "An unknown error occurred.")
             }
             .onAppear {
                 setupSession()
@@ -318,15 +326,26 @@ struct OverdubSessionView: View {
                     .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.red)
+                            .fill(isPrepared ? Color.red : Color.red.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
                 .disabled(!isPrepared)
+                .opacity(isPrepared ? 1.0 : 0.6)
 
-                Text("The base track will play while you record")
-                    .font(.caption)
-                    .foregroundColor(palette.textTertiary)
+                if !isPrepared {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Preparing audio engine...")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                    }
+                } else {
+                    Text("The base track will play while you record")
+                        .font(.caption)
+                        .foregroundColor(palette.textTertiary)
+                }
             } else {
                 Text("Maximum layers reached")
                     .font(.subheadline)
@@ -557,15 +576,22 @@ struct OverdubSessionView: View {
     // MARK: - Actions
 
     private func setupSession() {
+        print("🎙️ [OverdubSessionView] setupSession() called")
+        print("🎙️ [OverdubSessionView] Base recording: \(baseRecording.title)")
+        print("🎙️ [OverdubSessionView] Base URL: \(baseRecording.fileURL)")
+
         // Check for existing overdub group
         if let groupId = baseRecording.overdubGroupId,
            let group = appState.overdubGroup(for: groupId) {
             self.overdubGroup = group
             self.existingLayers = appState.layerRecordings(for: group)
+            print("🎙️ [OverdubSessionView] Found existing overdub group with \(existingLayers.count) layers")
         }
 
         // Check headphones
-        if !AudioSessionManager.shared.isHeadphoneMonitoringActive() {
+        let hasHeadphones = AudioSessionManager.shared.isHeadphoneMonitoringActive()
+        print("🎙️ [OverdubSessionView] Headphones connected: \(hasHeadphones)")
+        if !hasHeadphones {
             showHeadphonesAlert = true
         }
 
@@ -586,6 +612,9 @@ struct OverdubSessionView: View {
         let layerURLs = existingLayers.map { $0.fileURL }
         let layerOffsets = existingLayers.map { $0.overdubOffsetSeconds }
 
+        print("🎙️ [OverdubSessionView] Preparing engine with base: \(baseRecording.fileURL.lastPathComponent)")
+        print("🎙️ [OverdubSessionView] Base file exists: \(FileManager.default.fileExists(atPath: baseRecording.fileURL.path))")
+
         do {
             try engine.prepare(
                 baseFileURL: baseRecording.fileURL,
@@ -596,8 +625,12 @@ struct OverdubSessionView: View {
                 settings: appState.appSettings
             )
             isPrepared = true
+            print("✅ [OverdubSessionView] Engine prepared successfully, isPrepared=\(isPrepared)")
         } catch {
-            errorMessage = "Failed to prepare: \(error.localizedDescription)"
+            isPrepared = false
+            errorMessage = "Failed to prepare overdub: \(error.localizedDescription)"
+            showErrorAlert = true
+            print("❌ [OverdubSessionView] Engine preparation failed: \(error)")
         }
     }
 
@@ -610,14 +643,18 @@ struct OverdubSessionView: View {
     }
 
     private func startRecording() {
+        print("🎙️ [OverdubSessionView] startRecording() called")
+
         // Check max layers
         guard existingLayers.count < OverdubGroup.maxLayers else {
+            print("⚠️ [OverdubSessionView] Max layers reached")
             showMaxLayersAlert = true
             return
         }
 
         // Check headphones
         guard AudioSessionManager.shared.isHeadphoneMonitoringActive() else {
+            print("⚠️ [OverdubSessionView] No headphones connected")
             showHeadphonesAlert = true
             return
         }
@@ -625,6 +662,7 @@ struct OverdubSessionView: View {
         // Generate file URL for new layer
         let layerURL = generateLayerFileURL()
         recordedLayerURL = layerURL
+        print("🎙️ [OverdubSessionView] Recording to: \(layerURL.lastPathComponent)")
 
         do {
             try engine.startRecording(
@@ -632,9 +670,12 @@ struct OverdubSessionView: View {
                 quality: appState.appSettings.recordingQuality
             )
             isRecording = true
+            print("✅ [OverdubSessionView] Recording started successfully")
         } catch {
             errorMessage = "Failed to start recording: \(error.localizedDescription)"
+            showErrorAlert = true
             recordedLayerURL = nil
+            print("❌ [OverdubSessionView] Failed to start recording: \(error)")
         }
     }
 

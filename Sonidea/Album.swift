@@ -32,6 +32,7 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
 
     // Well-known system album IDs
     static let draftsID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    static let importsID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 
     static let drafts = Album(
         id: draftsID,
@@ -39,4 +40,21 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
         createdAt: Date(timeIntervalSince1970: 0),
         isSystem: true
     )
+
+    static let imports = Album(
+        id: importsID,
+        name: "Imports",
+        createdAt: Date(timeIntervalSince1970: 0),
+        isSystem: true
+    )
+
+    /// Check if this is the Imports album
+    var isImportsAlbum: Bool {
+        id == Album.importsID
+    }
+
+    /// Check if this is the Drafts album
+    var isDraftsAlbum: Bool {
+        id == Album.draftsID
+    }
 }

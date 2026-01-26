@@ -291,6 +291,9 @@ final class AppState {
 
         print("✅ [AppState] Recording added successfully: \(title)")
 
+        // Trigger iCloud sync for new recording
+        triggerSyncForNewRecording(recording)
+
         // Auto-transcribe if enabled
         if appSettings.autoTranscribe {
             Task {
@@ -317,8 +320,13 @@ final class AppState {
         guard let index = recordings.firstIndex(where: { $0.id == updated.id }) else {
             return
         }
-        recordings[index] = updated
+        var recording = updated
+        recording.modifiedAt = Date()
+        recordings[index] = recording
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForRecording(recording)
     }
 
     func updateTranscript(_ text: String, for recordingID: UUID) {
@@ -326,7 +334,11 @@ final class AppState {
             return
         }
         recordings[index].transcript = text
+        recordings[index].modifiedAt = Date()
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForRecording(recordings[index])
     }
 
     func updatePlaybackPosition(_ position: TimeInterval, for recordingID: UUID) {
@@ -344,7 +356,11 @@ final class AppState {
         recordings[index].latitude = latitude
         recordings[index].longitude = longitude
         recordings[index].locationLabel = label
+        recordings[index].modifiedAt = Date()
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForRecording(recordings[index])
     }
 
     func recording(for id: UUID) -> RecordingItem? {
@@ -362,7 +378,11 @@ final class AppState {
             return
         }
         recordings[index].trashedAt = Date()
+        recordings[index].modifiedAt = Date()
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForRecording(recordings[index])
     }
 
     func moveToTrash(at offsets: IndexSet, from list: [RecordingItem]) {
@@ -377,13 +397,21 @@ final class AppState {
             return
         }
         recordings[index].trashedAt = nil
+        recordings[index].modifiedAt = Date()
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForRecording(recordings[index])
     }
 
     func permanentlyDelete(_ recording: RecordingItem) {
+        let recordingId = recording.id
         try? FileManager.default.removeItem(at: recording.fileURL)
-        recordings.removeAll { $0.id == recording.id }
+        recordings.removeAll { $0.id == recordingId }
         saveRecordings()
+
+        // Trigger iCloud sync for deletion
+        triggerSyncForDeletion(recordingId)
     }
 
     func emptyTrash() {
@@ -445,6 +473,10 @@ final class AppState {
         let tag = Tag(name: name, colorHex: colorHex)
         tags.append(tag)
         saveTags()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
+
         return tag
     }
 
@@ -457,6 +489,7 @@ final class AppState {
         if tag.isProtected {
             tags[index].colorHex = colorHex
             saveTags()
+            triggerSyncForTagUpdate(tags[index])
             return true
         }
 
@@ -467,6 +500,10 @@ final class AppState {
         tags[index].name = name
         tags[index].colorHex = colorHex
         saveTags()
+
+        // Trigger iCloud sync
+        triggerSyncForTagUpdate(tags[index])
+
         return true
     }
 
@@ -475,13 +512,19 @@ final class AppState {
         if tag.isProtected {
             return false
         }
-        tags.removeAll { $0.id == tag.id }
+        let tagId = tag.id
+        tags.removeAll { $0.id == tagId }
         // Remove tag from all recordings
         for i in recordings.indices {
-            recordings[i].tagIDs.removeAll { $0 == tag.id }
+            recordings[i].tagIDs.removeAll { $0 == tagId }
+            recordings[i].modifiedAt = Date()
         }
         saveTags()
         saveRecordings()
+
+        // Trigger iCloud sync for tag deletion
+        triggerSyncForTagDeletion(tagId)
+
         return true
     }
 
@@ -560,20 +603,29 @@ final class AppState {
         let album = Album(name: name)
         albums.append(album)
         saveAlbums()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
+
         return album
     }
 
     func deleteAlbum(_ album: Album) {
         guard album.canDelete else { return }
-        albums.removeAll { $0.id == album.id }
+        let albumId = album.id
+        albums.removeAll { $0.id == albumId }
         // Move recordings to Drafts
         for i in recordings.indices {
-            if recordings[i].albumID == album.id {
+            if recordings[i].albumID == albumId {
                 recordings[i].albumID = Album.draftsID
+                recordings[i].modifiedAt = Date()
             }
         }
         saveAlbums()
         saveRecordings()
+
+        // Trigger iCloud sync for album deletion
+        triggerSyncForAlbumDeletion(albumId)
     }
 
     func setAlbum(_ album: Album?, for recording: RecordingItem) -> RecordingItem {
@@ -588,6 +640,24 @@ final class AppState {
             albums.insert(Album.drafts, at: 0)
             saveAlbums()
         }
+    }
+
+    /// Ensure the Imports system album exists (called on first external import)
+    func ensureImportsAlbum() {
+        if !albums.contains(where: { $0.id == Album.importsID }) {
+            // Insert after Drafts (at index 1) or at beginning if no Drafts
+            let insertIndex = albums.firstIndex(where: { $0.id == Album.draftsID }).map { $0 + 1 } ?? 0
+            albums.insert(Album.imports, at: insertIndex)
+            saveAlbums()
+
+            // Trigger iCloud sync for new album
+            triggerSyncForAlbum(Album.imports)
+        }
+    }
+
+    /// Check if Imports album exists
+    var hasImportsAlbum: Bool {
+        albums.contains(where: { $0.id == Album.importsID })
     }
 
     private func migrateRecordingsToDrafts() {
@@ -775,18 +845,26 @@ final class AppState {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) && !recordings[i].tagIDs.contains(tag.id) {
                 recordings[i].tagIDs.append(tag.id)
+                recordings[i].modifiedAt = Date()
             }
         }
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
     }
 
     func removeTagFromRecordings(_ tag: Tag, recordingIDs: Set<UUID>) {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) {
                 recordings[i].tagIDs.removeAll { $0 == tag.id }
+                recordings[i].modifiedAt = Date()
             }
         }
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
     }
 
     func setAlbumForRecordings(_ album: Album?, recordingIDs: Set<UUID>) {
@@ -999,6 +1077,10 @@ final class AppState {
 
         albums[index].name = trimmedName
         saveAlbums()
+
+        // Trigger iCloud sync for album update
+        triggerSyncForAlbumUpdate(albums[index])
+
         return true
     }
 
@@ -1038,7 +1120,7 @@ final class AppState {
     @discardableResult
     func createProject(from recording: RecordingItem, title: String? = nil) -> Project {
         // Create the project
-        var project = Project(
+        let project = Project(
             title: title ?? recording.title,
             createdAt: Date(),
             updatedAt: Date()
@@ -1049,11 +1131,16 @@ final class AppState {
             recordings[index].projectId = project.id
             recordings[index].parentRecordingId = nil
             recordings[index].versionIndex = 1
+            recordings[index].modifiedAt = Date()
         }
 
         projects.insert(project, at: 0)
         saveProjects()
         saveRecordings()
+
+        // Trigger iCloud sync for new project
+        triggerSyncForProject(project)
+
         return project
     }
 
@@ -1063,6 +1150,10 @@ final class AppState {
         let project = Project(title: title)
         projects.insert(project, at: 0)
         saveProjects()
+
+        // Trigger iCloud sync for new project
+        triggerSyncForProject(project)
+
         return project
     }
 
@@ -1120,8 +1211,11 @@ final class AppState {
         if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
             projects[projectIndex].bestTakeRecordingId = recording.id
             projects[projectIndex].updatedAt = Date()
+            saveProjects()
+
+            // Trigger iCloud sync for project update
+            triggerSyncForProjectUpdate(projects[projectIndex])
         }
-        saveProjects()
     }
 
     /// Clear the best take for a project
@@ -1129,8 +1223,11 @@ final class AppState {
         if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
             projects[projectIndex].bestTakeRecordingId = nil
             projects[projectIndex].updatedAt = Date()
+            saveProjects()
+
+            // Trigger iCloud sync for project update
+            triggerSyncForProjectUpdate(projects[projectIndex])
         }
-        saveProjects()
     }
 
     /// Update project properties
@@ -1140,6 +1237,9 @@ final class AppState {
             updated.updatedAt = Date()
             projects[index] = updated
             saveProjects()
+
+            // Trigger iCloud sync for project update
+            triggerSyncForProjectUpdate(updated)
         }
     }
 
@@ -1149,23 +1249,31 @@ final class AppState {
             projects[index].pinned.toggle()
             projects[index].updatedAt = Date()
             saveProjects()
+
+            // Trigger iCloud sync for project update
+            triggerSyncForProjectUpdate(projects[index])
         }
     }
 
     /// Delete a project (recordings become standalone)
     func deleteProject(_ project: Project) {
+        let projectId = project.id
+
         // Remove project association from all recordings
         for i in recordings.indices {
-            if recordings[i].projectId == project.id {
+            if recordings[i].projectId == projectId {
                 recordings[i].projectId = nil
                 recordings[i].parentRecordingId = nil
                 recordings[i].versionIndex = 1
             }
         }
 
-        projects.removeAll { $0.id == project.id }
+        projects.removeAll { $0.id == projectId }
         saveProjects()
         saveRecordings()
+
+        // Trigger iCloud sync for project deletion
+        triggerSyncForProjectDeletion(projectId)
     }
 
     /// Get project statistics

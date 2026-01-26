@@ -158,9 +158,17 @@ actor AudioWaveformExtractor {
     private let lodLevelCount = 6
     private let baseSamplesPerSecond = 1000 // LOD0: 1000 samples/sec = 1ms resolution
 
-    // Silence detection settings
-    private let silenceThresholdDB: Float = -40.0 // dBFS threshold for silence
-    private let minSilenceDuration: TimeInterval = 0.25 // 250ms minimum silence
+    // Silence detection settings (dBFS-based with hysteresis + debounce)
+    private let silenceThresholdDB: Float = -45.0       // dBFS threshold to enter silence
+    private let nonSilenceThresholdDB: Float = -40.0    // dBFS threshold to exit silence (hysteresis)
+    private let minSilenceDuration: TimeInterval = 0.5  // 500ms minimum silence to cut (applied AFTER roll)
+    private let silencePreRollMs: Double = 50.0         // Pre-roll before cut (ms) - protect consonants
+    private let silencePostRollMs: Double = 50.0        // Post-roll after cut (ms) - protect transients
+    private let rmsWindowMs: Double = 30.0              // RMS window size (ms)
+    private let rmsHopMs: Double = 10.0                 // Hop size (ms) - overlap for smoother detection
+    private let silenceEnterHoldMs: Double = 80.0       // Debounce: must stay silent for 80ms to enter silence
+    private let silenceExitHoldMs: Double = 50.0        // Debounce: must stay non-silent for 50ms to exit silence
+    private let mergeGapMs: Double = 120.0              // Merge silence regions separated by gaps < 120ms
 
     // MARK: - Public API
 
@@ -229,7 +237,20 @@ actor AudioWaveformExtractor {
         return waveformData
     }
 
-    /// Detect silence ranges in the audio
+    /// Detect silence ranges in the audio using dBFS-based RMS with hysteresis and debounce
+    ///
+    /// Algorithm order:
+    /// 1. Detect silence/non-silence using RMS→dBFS + hysteresis state machine with debounce
+    /// 2. Build raw silence regions from continuous "silence" state
+    /// 3. Merge silence regions separated by tiny gaps (< mergeGapMs)
+    /// 4. Apply pre/post roll by SHRINKING each region
+    /// 5. Enforce minSilenceDuration on rolled regions ONLY
+    ///
+    /// - Parameters:
+    ///   - url: Audio file URL
+    ///   - threshold: Custom silence threshold in dBFS (default: -45 dBFS)
+    ///   - minDuration: Minimum silence duration to keep (default: 0.5s, applied after roll)
+    /// - Returns: Array of silence ranges ready for removal
     func detectSilence(from url: URL, threshold: Float? = nil, minDuration: TimeInterval? = nil) async throws -> [SilenceRange] {
         // Check cache first
         if let cached = silenceCache[url] {
@@ -243,6 +264,7 @@ actor AudioWaveformExtractor {
         let sampleRate = format.sampleRate
         let frameCount = AVAudioFrameCount(audioFile.length)
         let duration = Double(frameCount) / sampleRate
+        let channelCount = Int(format.channelCount)
 
         guard frameCount > 0 else {
             return []
@@ -258,64 +280,192 @@ actor AudioWaveformExtractor {
             throw WaveformError.noAudioData
         }
 
-        let channelData = floatChannelData[0]
         let length = Int(buffer.frameLength)
 
-        let thresholdDB = threshold ?? silenceThresholdDB
+        // Use provided thresholds or defaults
+        let silenceThreshold = threshold ?? silenceThresholdDB         // -45 dBFS to enter silence
+        let nonSilenceThreshold = threshold.map { $0 + 5 } ?? nonSilenceThresholdDB  // -40 dBFS to exit silence
         let minSilence = minDuration ?? minSilenceDuration
 
-        // Convert dB threshold to linear amplitude
-        let thresholdLinear = pow(10.0, thresholdDB / 20.0)
+        // Convert timing parameters to samples/windows
+        let windowSizeSamples = Int(sampleRate * rmsWindowMs / 1000.0)
+        let hopSizeSamples = Int(sampleRate * rmsHopMs / 1000.0)
+        let hopDuration = rmsHopMs / 1000.0
 
-        // Analyze in 10ms windows
-        let windowSize = Int(sampleRate * 0.01) // 10ms windows
-        let windowCount = length / windowSize
+        // Debounce hold counts (in hops)
+        let enterHoldCount = Int(ceil(silenceEnterHoldMs / rmsHopMs))
+        let exitHoldCount = Int(ceil(silenceExitHoldMs / rmsHopMs))
 
-        var silenceRanges: [SilenceRange] = []
+        // Calculate number of analysis frames
+        let frameCount2 = max(0, (length - windowSizeSamples) / hopSizeSamples + 1)
+
+        logger.debug("Silence detection: threshold=\(silenceThreshold)dB, hysteresis=\(nonSilenceThreshold)dB, window=\(self.rmsWindowMs)ms, hop=\(self.rmsHopMs)ms, enterHold=\(enterHoldCount), exitHold=\(exitHoldCount)")
+
+        // ============================================================
+        // STEP 1: Detect silence using RMS→dBFS + hysteresis + debounce
+        // ============================================================
+
+        enum SilenceState {
+            case nonSilent
+            case pendingSilent(holdCounter: Int)  // Waiting for debounce to confirm silence
+            case silent
+            case pendingNonSilent(holdCounter: Int)  // Waiting for debounce to confirm non-silence
+        }
+
+        var state: SilenceState = .nonSilent
+        var rawSilenceRanges: [SilenceRange] = []
         var silenceStartTime: TimeInterval?
 
-        for windowIndex in 0..<windowCount {
-            let start = windowIndex * windowSize
-            let end = min(start + windowSize, length)
+        for frameIndex in 0..<frameCount2 {
+            let sampleStart = frameIndex * hopSizeSamples
+            let sampleEnd = min(sampleStart + windowSizeSamples, length)
+            let sampleCount = sampleEnd - sampleStart
 
-            // Calculate RMS for this window
-            var sumSquares: Float = 0
-            for i in start..<end {
-                let sample = channelData[i]
-                sumSquares += sample * sample
-            }
-            let rms = sqrt(sumSquares / Float(end - start))
+            guard sampleCount > 0 else { continue }
 
-            let windowTime = Double(windowIndex) * 0.01
-            let isSilent = rms < thresholdLinear
-
-            if isSilent {
-                if silenceStartTime == nil {
-                    silenceStartTime = windowTime
+            // Calculate max-channel RMS (handles stereo better than single channel)
+            var maxChannelRMS: Float = 0
+            for ch in 0..<channelCount {
+                let channelData = floatChannelData[ch]
+                var sumSquares: Float = 0
+                for i in sampleStart..<sampleEnd {
+                    let sample = channelData[i]
+                    sumSquares += sample * sample
                 }
-            } else {
-                if let startTime = silenceStartTime {
-                    let silenceDuration = windowTime - startTime
-                    if silenceDuration >= minSilence {
-                        silenceRanges.append(SilenceRange(start: startTime, end: windowTime))
+                let channelRMS = sqrt(sumSquares / Float(sampleCount))
+                maxChannelRMS = max(maxChannelRMS, channelRMS)
+            }
+
+            // Convert RMS to dBFS: dBFS = 20 * log10(rms), floor at -96 dBFS
+            let dBFS: Float = maxChannelRMS > 0.000001 ? 20.0 * log10(maxChannelRMS) : -96.0
+
+            let frameTime = Double(frameIndex) * hopDuration
+            let isBelowSilenceThreshold = dBFS <= silenceThreshold
+            let isAboveNonSilenceThreshold = dBFS > nonSilenceThreshold
+
+            // State machine with debounce
+            switch state {
+            case .nonSilent:
+                if isBelowSilenceThreshold {
+                    // Start pending transition to silence
+                    state = .pendingSilent(holdCounter: 1)
+                }
+
+            case .pendingSilent(let holdCounter):
+                if isBelowSilenceThreshold {
+                    if holdCounter >= enterHoldCount {
+                        // Confirmed: transition to silence
+                        // Backdate silence start to when we first went below threshold
+                        silenceStartTime = frameTime - (Double(holdCounter) * hopDuration)
+                        state = .silent
+                    } else {
+                        state = .pendingSilent(holdCounter: holdCounter + 1)
                     }
-                    silenceStartTime = nil
+                } else {
+                    // Went back above threshold, cancel pending
+                    state = .nonSilent
+                }
+
+            case .silent:
+                if isAboveNonSilenceThreshold {
+                    // Start pending transition to non-silence
+                    state = .pendingNonSilent(holdCounter: 1)
+                }
+
+            case .pendingNonSilent(let holdCounter):
+                if isAboveNonSilenceThreshold {
+                    if holdCounter >= exitHoldCount {
+                        // Confirmed: transition to non-silence
+                        // End silence at when we first went above threshold
+                        if let startTime = silenceStartTime {
+                            let endTime = frameTime - (Double(holdCounter) * hopDuration)
+                            rawSilenceRanges.append(SilenceRange(start: startTime, end: endTime))
+                        }
+                        silenceStartTime = nil
+                        state = .nonSilent
+                    } else {
+                        state = .pendingNonSilent(holdCounter: holdCounter + 1)
+                    }
+                } else {
+                    // Dropped back below threshold, stay in silence
+                    state = .silent
                 }
             }
         }
 
-        // Handle silence at the end
-        if let startTime = silenceStartTime {
-            let silenceDuration = duration - startTime
-            if silenceDuration >= minSilence {
-                silenceRanges.append(SilenceRange(start: startTime, end: duration))
+        // Handle silence at end of file
+        if case .silent = state, let startTime = silenceStartTime {
+            rawSilenceRanges.append(SilenceRange(start: startTime, end: duration))
+        } else if case .pendingNonSilent = state, let startTime = silenceStartTime {
+            // Was about to exit silence but file ended - count as silence to end
+            rawSilenceRanges.append(SilenceRange(start: startTime, end: duration))
+        }
+
+        logger.debug("Raw silence regions: \(rawSilenceRanges.count)")
+
+        // ============================================================
+        // STEP 2: Merge silence regions separated by tiny gaps
+        // ============================================================
+
+        let mergeGap = mergeGapMs / 1000.0
+        var mergedRanges: [SilenceRange] = []
+
+        for range in rawSilenceRanges {
+            if let last = mergedRanges.last {
+                let gap = range.start - last.end
+                if gap < mergeGap {
+                    // Merge: extend previous range to cover this one
+                    mergedRanges[mergedRanges.count - 1] = SilenceRange(start: last.start, end: range.end)
+                } else {
+                    mergedRanges.append(range)
+                }
+            } else {
+                mergedRanges.append(range)
+            }
+        }
+
+        logger.debug("After merge: \(mergedRanges.count) regions")
+
+        // ============================================================
+        // STEP 3: Apply pre/post roll by SHRINKING each region
+        // ============================================================
+
+        let preRoll = silencePreRollMs / 1000.0
+        let postRoll = silencePostRollMs / 1000.0
+
+        var rolledRanges: [SilenceRange] = []
+        for range in mergedRanges {
+            let adjustedStart = range.start + preRoll
+            let adjustedEnd = range.end - postRoll
+
+            // Only keep if start < end after roll
+            if adjustedStart < adjustedEnd {
+                let finalStart = max(0, min(adjustedStart, duration))
+                let finalEnd = max(finalStart, min(adjustedEnd, duration))
+                if finalStart < finalEnd {
+                    rolledRanges.append(SilenceRange(start: finalStart, end: finalEnd))
+                }
+            }
+        }
+
+        logger.debug("After roll: \(rolledRanges.count) regions")
+
+        // ============================================================
+        // STEP 4: Enforce minSilenceDuration on ROLLED regions
+        // ============================================================
+
+        var silenceRanges: [SilenceRange] = []
+        for range in rolledRanges {
+            if range.duration >= minSilence {
+                silenceRanges.append(range)
             }
         }
 
         // Cache the result
         silenceCache[url] = silenceRanges
 
-        logger.info("Detected \(silenceRanges.count) silence ranges")
+        let totalSilence = silenceRanges.reduce(0.0) { $0 + $1.duration }
+        logger.info("Detected \(silenceRanges.count) removable silence ranges (from \(rawSilenceRanges.count) raw), total: \(String(format: "%.1f", totalSilence))s")
 
         return silenceRanges
     }

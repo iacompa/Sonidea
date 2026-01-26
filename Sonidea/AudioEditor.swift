@@ -200,6 +200,149 @@ final class AudioEditor {
         }
     }
 
+    // MARK: - Remove Multiple Silence Ranges (Skip Silence)
+
+    /// Result of skip silence operation
+    struct SkipSilenceResult {
+        let outputURL: URL
+        let newDuration: TimeInterval
+        let removedRangesCount: Int
+        let removedDuration: TimeInterval
+        let success: Bool
+        let error: Error?
+    }
+
+    /// Remove multiple silence ranges from audio (for Skip Silence feature)
+    /// - Parameters:
+    ///   - sourceURL: Original audio file URL
+    ///   - silenceRanges: Array of silence ranges to remove (must be sorted by start time, non-overlapping)
+    ///   - padding: Padding to keep on each side of cuts (default 0.05s)
+    /// - Returns: Result with new file URL, duration, and stats
+    func removeMultipleSilenceRanges(
+        sourceURL: URL,
+        silenceRanges: [SilenceRange],
+        padding: TimeInterval = 0.05
+    ) async -> SkipSilenceResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performRemoveSilenceRanges(
+                    sourceURL: sourceURL,
+                    silenceRanges: silenceRanges,
+                    padding: padding
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performRemoveSilenceRanges(
+        sourceURL: URL,
+        silenceRanges: [SilenceRange],
+        padding: TimeInterval
+    ) -> SkipSilenceResult {
+        guard !silenceRanges.isEmpty else {
+            return SkipSilenceResult(
+                outputURL: sourceURL,
+                newDuration: getDuration(of: sourceURL) ?? 0,
+                removedRangesCount: 0,
+                removedDuration: 0,
+                success: true,
+                error: nil
+            )
+        }
+
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let totalDuration = Double(totalFrames) / sampleRate
+
+            // Build "keep ranges" by inverting silence ranges (with padding adjustment)
+            var keepRanges: [(start: TimeInterval, end: TimeInterval)] = []
+            var currentStart: TimeInterval = 0
+
+            for silence in silenceRanges {
+                // Adjust silence boundaries with padding
+                let adjustedSilenceStart = silence.start + padding
+                let adjustedSilenceEnd = max(adjustedSilenceStart, silence.end - padding)
+
+                // Skip if padding makes the silence too short
+                if adjustedSilenceEnd <= adjustedSilenceStart {
+                    continue
+                }
+
+                // Add the non-silent part before this silence
+                if adjustedSilenceStart > currentStart {
+                    keepRanges.append((start: currentStart, end: adjustedSilenceStart))
+                }
+
+                currentStart = adjustedSilenceEnd
+            }
+
+            // Add the final segment after last silence
+            if currentStart < totalDuration {
+                keepRanges.append((start: currentStart, end: totalDuration))
+            }
+
+            guard !keepRanges.isEmpty else {
+                return SkipSilenceResult(
+                    outputURL: sourceURL,
+                    newDuration: 0,
+                    removedRangesCount: silenceRanges.count,
+                    removedDuration: totalDuration,
+                    success: false,
+                    error: AudioEditorError.invalidRange
+                )
+            }
+
+            // Create output file
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(
+                forWriting: outputURL,
+                settings: sourceFile.fileFormat.settings
+            )
+
+            // Write each keep range to output
+            var totalOutputFrames: AVAudioFrameCount = 0
+
+            for range in keepRanges {
+                let startFrame = AVAudioFramePosition(range.start * sampleRate)
+                let endFrame = AVAudioFramePosition(range.end * sampleRate)
+                let frameCount = AVAudioFrameCount(endFrame - startFrame)
+
+                if frameCount > 0 {
+                    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+                    sourceFile.framePosition = startFrame
+                    try sourceFile.read(into: buffer, frameCount: frameCount)
+                    try outputFile.write(from: buffer)
+                    totalOutputFrames += frameCount
+                }
+            }
+
+            let newDuration = Double(totalOutputFrames) / sampleRate
+            let removedDuration = totalDuration - newDuration
+
+            return SkipSilenceResult(
+                outputURL: outputURL,
+                newDuration: newDuration,
+                removedRangesCount: silenceRanges.count,
+                removedDuration: removedDuration,
+                success: true,
+                error: nil
+            )
+        } catch {
+            return SkipSilenceResult(
+                outputURL: sourceURL,
+                newDuration: 0,
+                removedRangesCount: 0,
+                removedDuration: 0,
+                success: false,
+                error: error
+            )
+        }
+    }
+
     // MARK: - Get Audio Duration
 
     /// Get the duration of an audio file

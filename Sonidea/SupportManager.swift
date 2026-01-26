@@ -77,6 +77,7 @@ struct RoadmapItem: Identifiable {
 
 let roadmapItems: [RoadmapItem] = [
     RoadmapItem(title: "AI-powered track analysis that automatically tags recordings"),
+    RoadmapItem(title: "VST3/AU Plugin for easy imports to your DAW"),
     RoadmapItem(title: "Android release"),
     RoadmapItem(title: "More themes"),
     RoadmapItem(title: "Make the best audio capture app in the world")
