@@ -2447,29 +2447,24 @@ struct AlbumSearchRow: View {
             ZStack {
                 Image(systemName: album.isShared ? "person.2.fill" : "square.stack.fill")
                     .font(.system(size: 20))
-                    .foregroundColor(album.isShared ? .blue : .primary)
+                    .foregroundColor(album.isShared ? .sharedAlbumGold : .primary)
                     .frame(width: 36, height: 36)
-                    .background(album.isShared ? Color.blue.opacity(0.15) : Color(.systemGray4))
+                    .background(album.isShared ? Color.sharedAlbumGold.opacity(0.15) : Color(.systemGray4))
                     .cornerRadius(6)
 
                 // Glow effect for shared albums
                 if album.isShared {
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                        .stroke(Color.sharedAlbumGold.opacity(0.5), lineWidth: 2)
                         .frame(width: 36, height: 36)
+                        .shadow(color: .sharedAlbumGold.opacity(0.3), radius: 4, x: 0, y: 0)
                 }
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(album.name)
-                        .font(.body)
-                        .fontWeight(.medium)
+                    AlbumTitleView(album: album, font: .body.weight(.medium), showBadge: true)
                         .lineLimit(1)
-
-                    if album.isShared {
-                        SharedAlbumBadge()
-                    }
                 }
 
                 HStack(spacing: 4) {
@@ -2483,7 +2478,7 @@ struct AlbumSearchRow: View {
                             .foregroundColor(.secondary)
                         Text("\(album.participantCount) participant\(album.participantCount == 1 ? "" : "s")")
                             .font(.caption)
-                            .foregroundColor(.blue)
+                            .foregroundColor(.sharedAlbumGold)
                     }
                 }
             }
@@ -2492,7 +2487,7 @@ struct AlbumSearchRow: View {
 
             Image(systemName: "chevron.right")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(album.isShared ? .sharedAlbumGold.opacity(0.7) : .secondary)
         }
         .padding(.vertical, 6)
     }
@@ -2669,10 +2664,21 @@ struct SearchResultRow: View {
 
                     if let album = album {
                         Text("•").font(.caption).foregroundColor(.secondary)
-                        Text(album.name)
+                        if album.isShared {
+                            HStack(spacing: 3) {
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 8))
+                                Text(album.name)
+                            }
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.sharedAlbumGold)
                             .lineLimit(1)
+                        } else {
+                            Text(album.name)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
 
@@ -4209,8 +4215,7 @@ struct ImportDestinationSheet: View {
                 // Name
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Text(album.name)
-                            .foregroundColor(palette.textPrimary)
+                        AlbumTitleView(album: album, showBadge: true)
                         if isSystem {
                             Image(systemName: "lock.fill")
                                 .font(.caption2)
@@ -4238,7 +4243,9 @@ struct ImportDestinationSheet: View {
     }
 
     private func albumIconName(_ album: Album) -> String {
-        if album.isImportsAlbum {
+        if album.isShared {
+            return "person.2.fill"
+        } else if album.isImportsAlbum {
             return "square.and.arrow.down"
         } else if album.isDraftsAlbum {
             return "doc.text"
@@ -4248,7 +4255,9 @@ struct ImportDestinationSheet: View {
     }
 
     private func albumIconColor(_ album: Album) -> Color {
-        if album.isImportsAlbum {
+        if album.isShared {
+            return .sharedAlbumGold
+        } else if album.isImportsAlbum {
             return .blue
         } else if album.isDraftsAlbum {
             return .orange
@@ -4273,19 +4282,7 @@ struct ExportAlbumPickerSheet: View {
                         dismiss()
                         onSelect(album)
                     } label: {
-                        HStack {
-                            Text(album.name)
-                                .foregroundColor(.primary)
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("\(appState.recordingCount(in: album)) recordings")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(appState.albumTotalSizeFormatted(album))
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        AlbumRowView(album: album)
                     }
                 }
             }

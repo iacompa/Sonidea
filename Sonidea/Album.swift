@@ -324,3 +324,125 @@ struct SharedAlbumParticipant: Identifiable, Codable, Equatable, Hashable {
         return "\(firstInitial)\(lastInitial)".uppercased()
     }
 }
+
+// MARK: - Shared Album Visual Styling
+
+import SwiftUI
+
+/// Consistent gold color for shared albums across the app
+extension Color {
+    static let sharedAlbumGold = Color(red: 0.95, green: 0.78, blue: 0.18)
+    static let sharedAlbumGoldDark = Color(red: 0.85, green: 0.68, blue: 0.13)
+}
+
+/// Reusable view for album titles with shared album gold glow styling
+struct AlbumTitleView: View {
+    let album: Album
+    var font: Font = .body
+    var showBadge: Bool = true
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Album name with conditional gold glow
+            if album.isShared {
+                Text(album.name)
+                    .font(font)
+                    .foregroundColor(.sharedAlbumGold)
+                    .shadow(color: .sharedAlbumGold.opacity(0.7), radius: 6, x: 0, y: 0)
+                    .shadow(color: .sharedAlbumGold.opacity(0.35), radius: 12, x: 0, y: 0)
+                    .accessibilityLabel("\(album.name), shared album")
+            } else {
+                Text(album.name)
+                    .font(font)
+                    .foregroundColor(.primary)
+            }
+
+            // Badges
+            if album.isShared && showBadge {
+                SharedAlbumBadge()
+            } else if album.isSystem {
+                SystemAlbumBadge()
+            }
+        }
+    }
+}
+
+/// Orange "SYSTEM" badge for system albums
+struct SystemAlbumBadge: View {
+    var body: some View {
+        Text("SYSTEM")
+            .font(.caption2)
+            .fontWeight(.bold)
+            .foregroundColor(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.orange.opacity(0.2))
+            .cornerRadius(4)
+    }
+}
+
+/// Complete album row view for pickers/lists with consistent shared album styling
+struct AlbumRowView: View {
+    @Environment(AppState.self) private var appState
+
+    let album: Album
+    var isSelected: Bool = false
+    var showRecordingCount: Bool = true
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                AlbumTitleView(album: album)
+
+                if showRecordingCount {
+                    HStack(spacing: 4) {
+                        Text("\(appState.recordingCount(in: album)) recordings")
+                        Text("•")
+                        Text(appState.albumTotalSizeFormatted(album))
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            }
+
+            Spacer()
+
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .foregroundColor(album.isShared ? .sharedAlbumGold : .blue)
+                    .fontWeight(.semibold)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// Compact album chip for inline display
+struct AlbumChip: View {
+    let album: Album
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if album.isShared {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 10))
+            }
+
+            Text(album.name)
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+        .foregroundColor(album.isShared ? .sharedAlbumGold : .secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(album.isShared ? Color.sharedAlbumGold.opacity(0.12) : Color.secondary.opacity(0.12))
+        )
+        .overlay(
+            Capsule()
+                .stroke(album.isShared ? Color.sharedAlbumGold.opacity(0.3) : Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: album.isShared ? .sharedAlbumGold.opacity(0.2) : .clear, radius: 4, x: 0, y: 0)
+    }
+}

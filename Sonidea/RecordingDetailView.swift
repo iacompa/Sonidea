@@ -3417,6 +3417,8 @@ struct ChooseAlbumSheet: View {
 
     @State private var newAlbumName = ""
     @State private var showCannotDeleteAlert = false
+    @State private var showSharedAlbumWarning = false
+    @State private var pendingAlbumSelection: Album?
 
     var body: some View {
         NavigationStack {
@@ -3424,34 +3426,19 @@ struct ChooseAlbumSheet: View {
                 Section {
                     ForEach(appState.albums) { album in
                         Button {
-                            recording = appState.setAlbum(album, for: recording)
-                            dismiss()
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 6) {
-                                        Text(album.name)
-                                        if album.isSystem {
-                                            Text("SYSTEM")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                                .foregroundColor(.orange)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.orange.opacity(0.2))
-                                                .cornerRadius(4)
-                                        }
-                                    }
-                                    Text("\(appState.recordingCount(in: album)) recordings \u{2022} \(appState.albumTotalSizeFormatted(album))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if recording.albumID == album.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
+                            // Show warning for shared albums if needed
+                            if album.isShared && !album.skipAddRecordingConsent {
+                                pendingAlbumSelection = album
+                                showSharedAlbumWarning = true
+                            } else {
+                                recording = appState.setAlbum(album, for: recording)
+                                dismiss()
                             }
+                        } label: {
+                            AlbumRowView(
+                                album: album,
+                                isSelected: recording.albumID == album.id
+                            )
                         }
                     }
                     .onDelete { offsets in
@@ -3500,6 +3487,21 @@ struct ChooseAlbumSheet: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("The Drafts album is protected and cannot be deleted.")
+            }
+            .alert("Move to Shared Album?", isPresented: $showSharedAlbumWarning) {
+                Button("Cancel", role: .cancel) {
+                    pendingAlbumSelection = nil
+                }
+                Button("Move to Shared Album") {
+                    if let album = pendingAlbumSelection {
+                        recording = appState.setAlbum(album, for: recording)
+                        dismiss()
+                    }
+                }
+            } message: {
+                if let album = pendingAlbumSelection {
+                    Text("This recording will be visible to all \(album.participantCount) participants in \"\(album.name)\". Are you sure?")
+                }
             }
         }
     }

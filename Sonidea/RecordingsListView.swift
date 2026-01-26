@@ -523,10 +523,21 @@ struct RecordingRow: View {
                         Text("•")
                             .font(.subheadline)
                             .foregroundColor(palette.textSecondary)
-                        Text(album.name)
+                        if album.isShared {
+                            HStack(spacing: 3) {
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 10))
+                                Text(album.name)
+                            }
                             .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
+                            .foregroundColor(.sharedAlbumGold)
                             .lineLimit(1)
+                        } else {
+                            Text(album.name)
+                                .font(.subheadline)
+                                .foregroundColor(palette.textSecondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
 
@@ -662,25 +673,14 @@ struct MoveToAlbumSheet: View {
                         dismiss()
                     } label: {
                         HStack {
-                            Image(systemName: "square.stack")
-                                .foregroundColor(.purple)
+                            Image(systemName: album.isShared ? "person.2.fill" : "square.stack")
+                                .foregroundColor(album.isShared ? .sharedAlbumGold : .purple)
                                 .frame(width: 24)
-                            Text(album.name)
-                                .foregroundColor(palette.textPrimary)
-                            if album.isSystem {
-                                Text("SYSTEM")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.orange.opacity(0.2))
-                                    .cornerRadius(4)
-                            }
+                            AlbumTitleView(album: album)
                             Spacer()
                             if recording.albumID == album.id {
                                 Image(systemName: "checkmark")
-                                    .foregroundColor(palette.accent)
+                                    .foregroundColor(album.isShared ? .sharedAlbumGold : palette.accent)
                             }
                         }
                     }
@@ -733,21 +733,10 @@ struct BatchAlbumPickerSheet: View {
                         onComplete()
                     } label: {
                         HStack {
-                            Image(systemName: "square.stack")
-                                .foregroundColor(.purple)
+                            Image(systemName: album.isShared ? "person.2.fill" : "square.stack")
+                                .foregroundColor(album.isShared ? .sharedAlbumGold : .purple)
                                 .frame(width: 24)
-                            Text(album.name)
-                                .foregroundColor(palette.textPrimary)
-                            if album.isSystem {
-                                Text("SYSTEM")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.orange.opacity(0.2))
-                                    .cornerRadius(4)
-                            }
+                            AlbumTitleView(album: album)
                             Spacer()
                         }
                     }

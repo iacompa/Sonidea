@@ -556,23 +556,26 @@ struct DeleteFromSharedAlbumSheet: View {
 
 struct SharedAlbumBadge: View {
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Image(systemName: "person.2.fill")
-                .font(.system(size: 10))
-            Text("Shared")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 8, weight: .bold))
+
+            Text("SHARED")
+                .font(.system(size: 9, weight: .bold))
         }
-        .foregroundColor(.white)
+        .foregroundColor(.sharedAlbumGold)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(
-            LinearGradient(
-                colors: [.blue, .purple],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
+            Capsule()
+                .fill(Color.sharedAlbumGold.opacity(0.12))
+                .shadow(color: .sharedAlbumGold.opacity(0.3), radius: 4, x: 0, y: 0)
         )
-        .cornerRadius(4)
+        .overlay(
+            Capsule()
+                .stroke(Color.sharedAlbumGold.opacity(0.5), lineWidth: 1)
+        )
+        .accessibilityHidden(true)
     }
 }
 
