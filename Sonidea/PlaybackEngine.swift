@@ -39,6 +39,9 @@ final class PlaybackEngine {
 
     private var currentFileURL: URL?
 
+    /// Generation counter to invalidate stale completion handlers after stop/reschedule
+    private var playbackGeneration: Int = 0
+
     init() {}
 
     // MARK: - Public API
@@ -125,6 +128,11 @@ final class PlaybackEngine {
         // playhead drift (UI shows 100% while audio continues from queued segments)
         player.stop()
 
+        // Increment generation to invalidate any pending completion handlers from old segments
+        // This prevents race conditions where old completion handlers corrupt new playback state
+        playbackGeneration += 1
+        let currentGeneration = playbackGeneration
+
         // Schedule from current seek position
         let frameCount = AVAudioFrameCount(audioLengthFrames - seekFrame)
         guard frameCount > 0 else {
@@ -132,7 +140,12 @@ final class PlaybackEngine {
             seekFrame = 0
             currentTime = 0
             let fullFrameCount = AVAudioFrameCount(audioLengthFrames)
-            player.scheduleSegment(file, startingFrame: 0, frameCount: fullFrameCount, at: nil)
+            player.scheduleSegment(file, startingFrame: 0, frameCount: fullFrameCount, at: nil) { [weak self] in
+                Task { @MainActor in
+                    guard let self = self, self.playbackGeneration == currentGeneration else { return }
+                    self.handlePlaybackFinished()
+                }
+            }
             player.play()
             isPlaying = true
             startTimer()
@@ -141,7 +154,10 @@ final class PlaybackEngine {
 
         player.scheduleSegment(file, startingFrame: seekFrame, frameCount: frameCount, at: nil) { [weak self] in
             Task { @MainActor in
-                self?.handlePlaybackFinished()
+                // Only handle completion if this is still the current playback generation
+                // Stale handlers from stopped/rescheduled segments are ignored
+                guard let self = self, self.playbackGeneration == currentGeneration else { return }
+                self.handlePlaybackFinished()
             }
         }
 
