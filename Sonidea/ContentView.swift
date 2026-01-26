@@ -3129,6 +3129,18 @@ struct SettingsSheetView: View {
                         .foregroundColor(palette.textSecondary)
                 }
 
+                Section {
+                    Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
+                        .tint(palette.toggleOnTint)
+                        .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("Smart Detection")
+                        .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Automatically detect audio type (voice, guitar, drums, keys) and set the recording icon.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
                 // MARK: Theme Section
                 Section {
                     ForEach(AppTheme.allCases) { theme in

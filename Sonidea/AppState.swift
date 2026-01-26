@@ -305,6 +305,13 @@ final class AppState {
             }
         }
 
+        // Auto-classify icon if enabled
+        if appSettings.autoSelectIcon {
+            Task {
+                await autoClassifyIcon(recording: recording)
+            }
+        }
+
         return .success(recording)
     }
 
@@ -317,6 +324,20 @@ final class AppState {
             updateTranscript(transcript, for: recording.id)
         } catch {
             print("Auto-transcribe failed: \(error)")
+        }
+    }
+
+    private func autoClassifyIcon(recording: RecordingItem) async {
+        let updated = await AudioIconClassifierManager.shared.classifyAndUpdateIfNeeded(
+            recording: recording,
+            autoSelectEnabled: appSettings.autoSelectIcon
+        )
+
+        // Only update if icon was actually changed
+        if updated.iconName != recording.iconName {
+            await MainActor.run {
+                updateRecording(updated)
+            }
         }
     }
 

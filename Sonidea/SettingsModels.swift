@@ -325,5 +325,8 @@ struct AppSettings: Codable {
     var hasEverMovedRecordButton: Bool = false
     var lastMoveHintShownAt: Date? = nil
 
+    // Auto icon detection (classify audio type post-save)
+    var autoSelectIcon: Bool = true
+
     static let `default` = AppSettings()
 }

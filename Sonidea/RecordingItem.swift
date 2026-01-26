@@ -18,6 +18,14 @@ enum OverdubRole: String, Codable {
     case layer  // A recorded layer on top
 }
 
+// MARK: - Icon Source
+
+/// Source of the recording's icon (auto-detected vs user-selected)
+enum IconSource: String, Codable {
+    case auto   // Automatically detected by classifier
+    case user   // Manually selected by user
+}
+
 // MARK: - Preset Icons for Recordings
 
 /// Preset tintable SF Symbol icons for recordings
@@ -97,6 +105,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     // Preset icon (SF Symbol name)
     var iconName: String?
 
+    // Icon source: "auto" (classifier) or "user" (manual selection)
+    var iconSourceRaw: String?
+
     // Per-recording EQ settings
     var eqSettings: EQSettings?
 
@@ -158,6 +169,17 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
+
+    /// Icon source enum (computed from raw string)
+    var iconSource: IconSource {
+        get {
+            guard let raw = iconSourceRaw else { return .auto }
+            return IconSource(rawValue: raw) ?? .auto
+        }
+        set {
+            iconSourceRaw = newValue.rawValue
+        }
+    }
 
     var isTrashed: Bool {
         trashedAt != nil
@@ -396,6 +418,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         lastPlaybackPosition: TimeInterval = 0,
         iconColorHex: String? = nil,
         iconName: String? = nil,
+        iconSourceRaw: String? = nil,
         eqSettings: EQSettings? = nil,
         projectId: UUID? = nil,
         parentRecordingId: UUID? = nil,
@@ -433,6 +456,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.lastPlaybackPosition = lastPlaybackPosition
         self.iconColorHex = iconColorHex
         self.iconName = iconName
+        self.iconSourceRaw = iconSourceRaw
         self.eqSettings = eqSettings
         self.projectId = projectId
         self.parentRecordingId = parentRecordingId
@@ -458,7 +482,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, fileURL, createdAt, duration, modifiedAt, title, notes, tagIDs, albumID
         case locationLabel, transcript, latitude, longitude, trashedAt
-        case lastPlaybackPosition, iconColorHex, iconName, eqSettings
+        case lastPlaybackPosition, iconColorHex, iconName, iconSourceRaw, eqSettings
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
         case locationModeRaw, locationProofHash, locationProofStatusRaw
@@ -488,6 +512,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         lastPlaybackPosition = try container.decode(TimeInterval.self, forKey: .lastPlaybackPosition)
         iconColorHex = try container.decodeIfPresent(String.self, forKey: .iconColorHex)
         iconName = try container.decodeIfPresent(String.self, forKey: .iconName)
+        // Migration: existing recordings with iconName set by user should be treated as user source
+        // New recordings without iconSourceRaw default to nil (auto classification can run)
+        iconSourceRaw = try container.decodeIfPresent(String.self, forKey: .iconSourceRaw)
         eqSettings = try container.decodeIfPresent(EQSettings.self, forKey: .eqSettings)
 
         // Migration: new fields with defaults for existing recordings
