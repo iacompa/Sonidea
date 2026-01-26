@@ -23,7 +23,7 @@ final class PlaybackEngine {
 
     /// Whether the engine is ready to play
     var isLoaded: Bool {
-        audioFile != nil && audioEngine != nil
+        audioFile != nil && audioEngine != nil && playerNode != nil
     }
 
     private var audioEngine: AVAudioEngine?
