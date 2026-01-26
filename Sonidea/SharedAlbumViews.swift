@@ -831,3 +831,396 @@ struct SharedAlbumRow: View {
         .padding(.vertical, 4)
     }
 }
+
+// MARK: - Shared Album Detail View with Tabs
+
+enum SharedAlbumTab: String, CaseIterable {
+    case recordings
+    case activity
+    case map
+
+    var title: String {
+        switch self {
+        case .recordings: return "Recordings"
+        case .activity: return "Activity"
+        case .map: return "Map"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .recordings: return "waveform"
+        case .activity: return "clock.arrow.circlepath"
+        case .map: return "map"
+        }
+    }
+}
+
+struct SharedAlbumDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let album: Album
+
+    @State private var selectedTab: SharedAlbumTab = .recordings
+    @State private var recordings: [RecordingItem] = []
+    @State private var sharedRecordingInfos: [UUID: SharedRecordingItem] = [:]
+    @State private var activityEvents: [SharedAlbumActivityEvent] = []
+    @State private var trashItems: [SharedAlbumTrashItem] = []
+    @State private var isLoading = true
+
+    // Sheets
+    @State private var showSettings = false
+    @State private var showParticipants = false
+    @State private var showTrash = false
+    @State private var showActivityFull = false
+    @State private var showMap = false
+    @State private var albumSettings: SharedAlbumSettings = .default
+
+    private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
+        recordings.compactMap { recording in
+            guard let info = sharedRecordingInfos[recording.id], info.hasSharedLocation else { return nil }
+            return (recording, info)
+        }
+    }
+
+    private var currentUserId: String? {
+        nil // Would be fetched from CloudKit
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Album header
+                SharedAlbumBanner(album: album)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
+                // Tab bar
+                tabBar
+
+                // Tab content
+                tabContent
+            }
+            .background(palette.background)
+            .navigationTitle(album.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(palette.accent)
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button {
+                            showParticipants = true
+                        } label: {
+                            Label("Participants", systemImage: "person.2")
+                        }
+
+                        if album.canEditSettings {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                        }
+
+                        Button {
+                            showTrash = true
+                        } label: {
+                            Label("Trash (\(trashItems.count))", systemImage: "trash")
+                        }
+
+                        if !album.isOwner {
+                            Divider()
+
+                            Button(role: .destructive) {
+                                // Show leave confirmation
+                            } label: {
+                                Label("Leave Album", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundColor(palette.accent)
+                    }
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                SharedAlbumSettingsView(album: album, settings: $albumSettings)
+            }
+            .sheet(isPresented: $showParticipants) {
+                SharedAlbumParticipantsView(album: album)
+            }
+            .sheet(isPresented: $showTrash) {
+                SharedAlbumTrashView(album: album)
+            }
+            .sheet(isPresented: $showActivityFull) {
+                SharedAlbumActivityView(album: album)
+            }
+            .sheet(isPresented: $showMap) {
+                SharedAlbumMapView(album: album, recordings: recordingsWithLocation)
+            }
+            .onAppear {
+                loadData()
+            }
+        }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(SharedAlbumTab.allCases, id: \.self) { tab in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = tab
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 16))
+
+                        Text(tab.title)
+                            .font(.caption)
+                    }
+                    .foregroundColor(selectedTab == tab ? palette.accent : palette.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        VStack {
+                            Spacer()
+                            if selectedTab == tab {
+                                Rectangle()
+                                    .fill(palette.accent)
+                                    .frame(height: 2)
+                            }
+                        }
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(palette.cardBackground)
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .recordings:
+            recordingsTab
+        case .activity:
+            activityTab
+        case .map:
+            mapTab
+        }
+    }
+
+    private var recordingsTab: some View {
+        Group {
+            if isLoading {
+                ProgressView("Loading recordings...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if recordings.isEmpty {
+                SharedAlbumEmptyState(
+                    isCurrentUserAdmin: album.currentUserRole == .admin,
+                    onAddRecording: {
+                        // Handle add recording
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    // Header stats
+                    SharedRecordingListHeader(
+                        totalCount: recordings.count,
+                        myCount: recordings.filter { sharedRecordingInfos[$0.id]?.creatorId == currentUserId }.count,
+                        othersCount: recordings.filter { sharedRecordingInfos[$0.id]?.creatorId != currentUserId }.count
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+
+                    // Recordings
+                    ForEach(recordings) { recording in
+                        SharedRecordingRow(
+                            recording: recording,
+                            sharedInfo: sharedRecordingInfos[recording.id],
+                            isCurrentUserRecording: sharedRecordingInfos[recording.id]?.creatorId == currentUserId,
+                            onTap: {
+                                // Navigate to recording detail
+                            }
+                        )
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+
+    private var activityTab: some View {
+        Group {
+            if activityEvents.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 48))
+                        .foregroundColor(palette.textTertiary)
+
+                    Text("No Activity Yet")
+                        .font(.headline)
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(activityEvents.prefix(20)) { event in
+                            ActivityEventRow(event: event)
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+
+                            if event.id != activityEvents.prefix(20).last?.id {
+                                Divider()
+                                    .padding(.leading, 60)
+                            }
+                        }
+
+                        if activityEvents.count > 20 {
+                            Button("View All Activity") {
+                                showActivityFull = true
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mapTab: some View {
+        Group {
+            if recordingsWithLocation.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "map")
+                        .font(.system(size: 48))
+                        .foregroundColor(palette.textTertiary)
+
+                    Text("No Location Data")
+                        .font(.headline)
+                        .foregroundColor(palette.textSecondary)
+
+                    Text("Recordings with shared locations will appear here")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textTertiary)
+                        .multilineTextAlignment(.center)
+
+                    Button("Open Full Map") {
+                        showMap = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack {
+                    // Mini map preview
+                    Button {
+                        showMap = true
+                    } label: {
+                        ZStack(alignment: .bottomTrailing) {
+                            // Placeholder for mini map
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.blue.opacity(0.1), .purple.opacity(0.1)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .frame(height: 200)
+                                .overlay(
+                                    VStack {
+                                        Image(systemName: "map.fill")
+                                            .font(.system(size: 40))
+                                            .foregroundColor(palette.accent.opacity(0.5))
+
+                                        Text("\(recordingsWithLocation.count) locations")
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textSecondary)
+                                    }
+                                )
+
+                            // Expand button
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(8)
+                                .padding(8)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding()
+
+                    // Location list
+                    List {
+                        ForEach(recordingsWithLocation, id: \.recording.id) { item in
+                            HStack(spacing: 12) {
+                                Image(systemName: item.sharedInfo.locationSharingMode == .approximate ? "location.circle" : "location.fill")
+                                    .foregroundColor(.purple)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.recording.title)
+                                        .font(.subheadline)
+                                        .foregroundColor(palette.textPrimary)
+
+                                    Text(item.sharedInfo.sharedPlaceName ?? "Unknown location")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+
+                                Spacer()
+
+                                Text(item.sharedInfo.creatorInitials)
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .frame(width: 24, height: 24)
+                                    .background(Circle().fill(palette.accent))
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func loadData() {
+        isLoading = true
+        Task {
+            // Load recordings
+            let albumRecordings = appState.recordings(in: album)
+
+            // Load activity
+            let activity = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 50)
+
+            // Load trash
+            let trash = await appState.sharedAlbumManager.fetchTrashItems(for: album)
+
+            // Load settings
+            let settings = await appState.sharedAlbumManager.fetchAlbumSettings(for: album)
+
+            await MainActor.run {
+                recordings = albumRecordings
+                activityEvents = activity
+                trashItems = trash
+                albumSettings = settings ?? .default
+                isLoading = false
+            }
+        }
+    }
+}

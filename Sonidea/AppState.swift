@@ -770,6 +770,170 @@ final class AppState {
         }
     }
 
+    // MARK: - Enhanced Shared Album Management
+
+    /// Cache for shared recording metadata
+    private(set) var sharedRecordingInfoCache: [UUID: SharedRecordingItem] = [:]
+
+    /// Get shared recording info for a recording (from cache or creates default)
+    func sharedRecordingInfo(for recording: RecordingItem, in album: Album) -> SharedRecordingItem? {
+        guard album.isShared else { return nil }
+
+        if let cached = sharedRecordingInfoCache[recording.id] {
+            return cached
+        }
+
+        // Create default shared recording info
+        return nil
+    }
+
+    /// Update cached shared recording info
+    func updateSharedRecordingInfo(_ info: SharedRecordingItem) {
+        sharedRecordingInfoCache[info.recordingId] = info
+    }
+
+    /// Clear shared recording info cache
+    func clearSharedRecordingInfoCache() {
+        sharedRecordingInfoCache.removeAll()
+    }
+
+    /// Move recording to shared album trash
+    func moveToSharedAlbumTrash(
+        recording: RecordingItem,
+        sharedInfo: SharedRecordingItem,
+        album: Album
+    ) async throws {
+        guard album.isShared else { return }
+
+        let displayName = await sharedAlbumManager.getCurrentUserDisplayName()
+        let userId = await sharedAlbumManager.getCurrentUserId() ?? "unknown"
+
+        let trashItem = try await sharedAlbumManager.moveToTrash(
+            recording: sharedInfo,
+            localRecording: recording,
+            album: album,
+            deletedBy: userId,
+            deletedByDisplayName: displayName
+        )
+
+        // Remove from local recordings
+        recordings.removeAll { $0.id == recording.id }
+        saveRecordings()
+
+        // Clear from cache
+        sharedRecordingInfoCache.removeValue(forKey: recording.id)
+    }
+
+    /// Restore recording from shared album trash
+    func restoreFromSharedAlbumTrash(
+        trashItem: SharedAlbumTrashItem,
+        album: Album
+    ) async throws {
+        guard album.isShared else { return }
+
+        try await sharedAlbumManager.restoreFromTrash(trashItem: trashItem, album: album)
+
+        // The recording will be re-synced from CloudKit
+        // For now, we don't need to do anything local
+    }
+
+    /// Update location sharing for a recording in shared album
+    func updateLocationSharing(
+        for recording: RecordingItem,
+        sharedInfo: SharedRecordingItem,
+        mode: LocationSharingMode,
+        album: Album
+    ) async throws {
+        guard album.isShared else { return }
+
+        try await sharedAlbumManager.updateLocationSharing(
+            recording: sharedInfo,
+            mode: mode,
+            album: album,
+            latitude: recording.latitude,
+            longitude: recording.longitude,
+            placeName: recording.locationLabel
+        )
+
+        // Update cache with new mode
+        var updatedInfo = sharedInfo
+        updatedInfo.locationSharingMode = mode
+        if mode != .none, let lat = recording.latitude, let lon = recording.longitude {
+            let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: mode)
+            updatedInfo.sharedLatitude = approx.latitude
+            updatedInfo.sharedLongitude = approx.longitude
+            updatedInfo.sharedPlaceName = recording.locationLabel
+        } else {
+            updatedInfo.sharedLatitude = nil
+            updatedInfo.sharedLongitude = nil
+            updatedInfo.sharedPlaceName = nil
+        }
+        sharedRecordingInfoCache[recording.id] = updatedInfo
+    }
+
+    /// Mark recording as sensitive in shared album
+    func markRecordingSensitive(
+        recording: RecordingItem,
+        sharedInfo: SharedRecordingItem,
+        isSensitive: Bool,
+        album: Album
+    ) async throws {
+        guard album.isShared else { return }
+
+        try await sharedAlbumManager.markRecordingSensitive(
+            recording: sharedInfo,
+            isSensitive: isSensitive,
+            album: album
+        )
+
+        // Update cache
+        var updatedInfo = sharedInfo
+        updatedInfo.isSensitive = isSensitive
+        updatedInfo.sensitiveApproved = false
+        sharedRecordingInfoCache[recording.id] = updatedInfo
+    }
+
+    /// Get recordings with pending sensitive approval (for admin)
+    func pendingSensitiveApprovals(in album: Album) -> [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
+        guard album.isShared, album.currentUserRole == .admin else { return [] }
+
+        return recordings(in: album).compactMap { recording -> (RecordingItem, SharedRecordingItem)? in
+            guard let info = sharedRecordingInfoCache[recording.id],
+                  info.isSensitive && !info.sensitiveApproved else {
+                return nil
+            }
+            return (recording, info)
+        }
+    }
+
+    /// Refresh shared album data from CloudKit
+    func refreshSharedAlbumData(for album: Album) async {
+        guard album.isShared else { return }
+
+        // Fetch fresh settings
+        if let settings = await sharedAlbumManager.fetchAlbumSettings(for: album) {
+            var updatedAlbum = album
+            updatedAlbum.sharedSettings = settings
+            updateSharedAlbum(updatedAlbum)
+        }
+
+        // Fetch participants
+        let participants = await sharedAlbumManager.fetchParticipants(for: album)
+        if !participants.isEmpty {
+            var updatedAlbum = album
+            updatedAlbum.participants = participants
+            updatedAlbum.participantCount = participants.count
+            updateSharedAlbum(updatedAlbum)
+        }
+
+        // Purge expired trash items
+        do {
+            try await sharedAlbumManager.purgeExpiredTrashItems(for: album)
+        } catch {
+            print("Failed to purge expired trash items: \(error)")
+        }
+    }
+
     private func migrateRecordingsToDrafts() {
         let didMigrate = UserDefaults.standard.bool(forKey: draftsMigrationKey)
         guard !didMigrate else { return }
