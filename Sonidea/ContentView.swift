@@ -3049,17 +3049,54 @@ struct SettingsSheetView: View {
                 // MARK: - Shared Albums Section
                 Section {
                     Button { showCreateSharedAlbumSheet = true } label: {
-                        HStack {
-                            Image(systemName: "person.2.fill")
-                                .foregroundColor(palette.accent)
-                                .frame(width: 24)
-                            Text("Create Shared Album")
-                                .foregroundColor(palette.textPrimary)
+                        HStack(spacing: 12) {
+                            // Gold gradient icon
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color(red: 1.0, green: 0.84, blue: 0.0), Color(red: 0.85, green: 0.65, blue: 0.13)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 32, height: 32)
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Create Shared Album")
+                                    .font(.headline)
+                                    .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
+                                Text("Collaborate with others")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+
                             Spacer()
+
+                            // Premium badge
+                            Text("NEW")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color(red: 1.0, green: 0.84, blue: 0.0), Color(red: 0.85, green: 0.65, blue: 0.13)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .cornerRadius(4)
+
                             Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
                         }
+                        .padding(.vertical, 4)
                     }
                     .listRowBackground(palette.cardBackground)
 
@@ -3067,22 +3104,71 @@ struct SettingsSheetView: View {
                     if !appState.sharedAlbums.isEmpty {
                         HStack {
                             Image(systemName: "square.stack.fill")
-                                .foregroundColor(palette.textSecondary)
+                                .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
                                 .frame(width: 24)
-                            Text("Shared Albums")
+                            Text("Your Shared Albums")
                                 .foregroundColor(palette.textPrimary)
                             Spacer()
                             Text("\(appState.sharedAlbums.count)")
-                                .foregroundColor(palette.textSecondary)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color(red: 0.85, green: 0.65, blue: 0.13))
+                                .cornerRadius(10)
                         }
                         .listRowBackground(palette.cardBackground)
                     }
+
+                    // Debug mode toggle
+                    #if DEBUG
+                    Toggle(isOn: Binding(
+                        get: { appState.isSharedAlbumsDebugMode },
+                        set: { newValue in
+                            if newValue {
+                                appState.enableSharedAlbumsDebugMode()
+                            } else {
+                                appState.disableSharedAlbumsDebugMode()
+                            }
+                        }
+                    )) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "ant.fill")
+                                .foregroundColor(.purple)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Demo Mode")
+                                    .foregroundColor(palette.textPrimary)
+                                Text("Test UI without iCloud")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                        }
+                    }
+                    .tint(.purple)
+                    .listRowBackground(palette.cardBackground)
+                    #endif
                 } header: {
-                    Text("Collaboration")
-                        .foregroundColor(palette.textSecondary)
+                    HStack {
+                        Text("Collaboration")
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        Image(systemName: "sparkles")
+                            .font(.caption)
+                            .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0))
+                    }
                 } footer: {
-                    Text("Collaborate on albums with up to 5 people. Only audio files can be shared.")
+                    #if DEBUG
+                    if appState.isSharedAlbumsDebugMode {
+                        Text("Demo mode active - showing sample shared album data. Disable to remove demo content.")
+                            .foregroundColor(.purple)
+                    } else {
+                        Text("Collaborate on albums with up to 5 people. Share audio recordings in real-time with role-based permissions.")
+                            .foregroundColor(palette.textSecondary)
+                    }
+                    #else
+                    Text("Collaborate on albums with up to 5 people. Share audio recordings in real-time with role-based permissions.")
                         .foregroundColor(palette.textSecondary)
+                    #endif
                 }
 
                 Section {

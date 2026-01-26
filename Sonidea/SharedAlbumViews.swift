@@ -877,6 +877,8 @@ struct SharedAlbumDetailView: View {
     @State private var showActivityFull = false
     @State private var showMap = false
     @State private var albumSettings: SharedAlbumSettings = .default
+    @State private var selectedRecording: RecordingItem?
+    @State private var selectedSharedInfo: SharedRecordingItem?
 
     private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.compactMap { recording in
@@ -966,6 +968,13 @@ struct SharedAlbumDetailView: View {
             .sheet(isPresented: $showMap) {
                 SharedAlbumMapView(album: album, recordings: recordingsWithLocation)
             }
+            .sheet(item: $selectedRecording) { recording in
+                SharedRecordingDetailView(
+                    recording: recording,
+                    sharedInfo: selectedSharedInfo,
+                    album: album
+                )
+            }
             .onAppear {
                 loadData()
             }
@@ -1050,7 +1059,8 @@ struct SharedAlbumDetailView: View {
                             sharedInfo: sharedRecordingInfos[recording.id],
                             isCurrentUserRecording: sharedRecordingInfos[recording.id]?.creatorId == currentUserId,
                             onTap: {
-                                // Navigate to recording detail
+                                selectedRecording = recording
+                                selectedSharedInfo = sharedRecordingInfos[recording.id]
                             }
                         )
                     }
@@ -1205,22 +1215,455 @@ struct SharedAlbumDetailView: View {
             // Load recordings
             let albumRecordings = appState.recordings(in: album)
 
-            // Load activity
-            let activity = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 50)
+            // In debug mode, use cached shared recording info
+            if appState.isSharedAlbumsDebugMode {
+                await MainActor.run {
+                    recordings = albumRecordings
+                    // Copy from appState cache
+                    for recording in albumRecordings {
+                        if let info = appState.sharedRecordingInfoCache[recording.id] {
+                            sharedRecordingInfos[recording.id] = info
+                        }
+                    }
+                    activityEvents = appState.debugMockActivityFeed()
+                    trashItems = appState.debugMockTrashItems()
+                    albumSettings = album.sharedSettings ?? .default
+                    isLoading = false
+                }
+            } else {
+                // Load activity
+                let activity = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 50)
 
-            // Load trash
-            let trash = await appState.sharedAlbumManager.fetchTrashItems(for: album)
+                // Load trash
+                let trash = await appState.sharedAlbumManager.fetchTrashItems(for: album)
 
-            // Load settings
-            let settings = await appState.sharedAlbumManager.fetchAlbumSettings(for: album)
+                // Load settings
+                let settings = await appState.sharedAlbumManager.fetchAlbumSettings(for: album)
 
-            await MainActor.run {
-                recordings = albumRecordings
-                activityEvents = activity
-                trashItems = trash
-                albumSettings = settings ?? .default
-                isLoading = false
+                await MainActor.run {
+                    recordings = albumRecordings
+                    activityEvents = activity
+                    trashItems = trash
+                    albumSettings = settings ?? .default
+                    isLoading = false
+                }
             }
         }
     }
 }
+
+// MARK: - Shared Recording Detail View
+
+struct SharedRecordingDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+
+    let recording: RecordingItem
+    let sharedInfo: SharedRecordingItem?
+    let album: Album
+
+    @State private var isPlaying = false
+    @State private var playbackProgress: Double = 0
+    @State private var showDemoAlert = false
+
+    private var isDemoRecording: Bool {
+        appState.isSharedAlbumsDebugMode && !FileManager.default.fileExists(atPath: recording.fileURL.path)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Recording artwork/icon
+                    recordingHeader
+
+                    // Info section
+                    infoSection
+
+                    // Creator info
+                    if let info = sharedInfo {
+                        creatorSection(info: info)
+                    }
+
+                    // Playback controls
+                    playbackSection
+
+                    // Badges
+                    if let info = sharedInfo {
+                        badgesSection(info: info)
+                    }
+
+                    // Location
+                    if let info = sharedInfo, info.hasSharedLocation {
+                        locationSection(info: info)
+                    }
+
+                    // Notes
+                    if !recording.notes.isEmpty {
+                        notesSection
+                    }
+                }
+                .padding()
+            }
+            .background(palette.background)
+            .navigationTitle("Recording Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(palette.accent)
+                }
+            }
+            .alert("Demo Recording", isPresented: $showDemoAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("This is a demo recording for testing purposes. Playback is not available for demo content.")
+            }
+        }
+    }
+
+    private var recordingHeader: some View {
+        VStack(spacing: 16) {
+            // Large icon
+            ZStack {
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(
+                        LinearGradient(
+                            colors: [palette.accent.opacity(0.3), palette.accent.opacity(0.1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 120, height: 120)
+
+                Image(systemName: recording.presetIcon.systemName)
+                    .font(.system(size: 48))
+                    .foregroundColor(palette.accent)
+
+                // Demo badge
+                if isDemoRecording {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("DEMO")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.purple)
+                                .cornerRadius(4)
+                        }
+                        Spacer()
+                    }
+                    .frame(width: 120, height: 120)
+                    .padding(8)
+                }
+            }
+
+            // Title
+            Text(recording.title)
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(palette.textPrimary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var infoSection: some View {
+        HStack(spacing: 24) {
+            InfoItem(
+                icon: "clock",
+                value: recording.formattedDuration,
+                label: "Duration"
+            )
+
+            InfoItem(
+                icon: "calendar",
+                value: recording.createdAt.formatted(date: .abbreviated, time: .omitted),
+                label: "Recorded"
+            )
+
+            if !recording.locationLabel.isEmpty {
+                InfoItem(
+                    icon: "location",
+                    value: recording.locationLabel,
+                    label: "Location"
+                )
+            }
+        }
+        .padding()
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func creatorSection(info: SharedRecordingItem) -> some View {
+        HStack(spacing: 12) {
+            // Avatar
+            ZStack {
+                Circle()
+                    .fill(palette.accent.opacity(0.2))
+                    .frame(width: 44, height: 44)
+
+                Text(info.creatorInitials)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(palette.accent)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Shared by")
+                    .font(.caption)
+                    .foregroundColor(palette.textSecondary)
+
+                Text(info.creatorDisplayName)
+                    .font(.headline)
+                    .foregroundColor(palette.textPrimary)
+            }
+
+            Spacer()
+
+            if info.isVerified {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                    Text("Verified")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+        }
+        .padding()
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private var playbackSection: some View {
+        VStack(spacing: 16) {
+            // Progress bar
+            VStack(spacing: 4) {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(palette.textTertiary.opacity(0.3))
+                            .frame(height: 4)
+
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(palette.accent)
+                            .frame(width: geometry.size.width * playbackProgress, height: 4)
+                    }
+                }
+                .frame(height: 4)
+
+                HStack {
+                    Text(formatTime(playbackProgress * recording.duration))
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .monospacedDigit()
+
+                    Spacer()
+
+                    Text(formatTime(recording.duration))
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .monospacedDigit()
+                }
+            }
+
+            // Playback controls
+            HStack(spacing: 32) {
+                Button {
+                    // Skip backward
+                    if isDemoRecording {
+                        showDemoAlert = true
+                    }
+                } label: {
+                    Image(systemName: "gobackward.15")
+                        .font(.title2)
+                        .foregroundColor(palette.textPrimary)
+                }
+
+                Button {
+                    if isDemoRecording {
+                        showDemoAlert = true
+                    } else {
+                        isPlaying.toggle()
+                    }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(palette.accent)
+                            .frame(width: 64, height: 64)
+
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title)
+                            .foregroundColor(.white)
+                    }
+                }
+
+                Button {
+                    // Skip forward
+                    if isDemoRecording {
+                        showDemoAlert = true
+                    }
+                } label: {
+                    Image(systemName: "goforward.30")
+                        .font(.title2)
+                        .foregroundColor(palette.textPrimary)
+                }
+            }
+        }
+        .padding()
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func badgesSection(info: SharedRecordingItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Attributes")
+                .font(.headline)
+                .foregroundColor(palette.textPrimary)
+
+            FlowLayout(spacing: 8) {
+                if info.wasImported {
+                    BadgeChip(icon: "square.and.arrow.down", text: "Imported", color: .blue)
+                }
+
+                if info.recordedWithHeadphones {
+                    BadgeChip(icon: "headphones", text: "Headphones", color: .purple)
+                }
+
+                if info.isSensitive {
+                    BadgeChip(icon: "eye.slash.fill", text: "Sensitive", color: .orange)
+                }
+
+                if info.isVerified {
+                    BadgeChip(icon: "checkmark.seal.fill", text: "Verified", color: .green)
+                }
+
+                if info.locationSharingMode != .none {
+                    BadgeChip(
+                        icon: info.locationSharingMode == .approximate ? "location.circle" : "location.fill",
+                        text: info.locationSharingMode == .approximate ? "Approximate Location" : "Precise Location",
+                        color: .teal
+                    )
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func locationSection(info: SharedRecordingItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "map")
+                    .foregroundColor(palette.accent)
+                Text("Location")
+                    .font(.headline)
+                    .foregroundColor(palette.textPrimary)
+            }
+
+            if let placeName = info.sharedPlaceName {
+                HStack(spacing: 8) {
+                    Image(systemName: info.locationSharingMode == .approximate ? "location.circle" : "location.fill")
+                        .foregroundColor(palette.textSecondary)
+
+                    Text(placeName)
+                        .font(.body)
+                        .foregroundColor(palette.textPrimary)
+
+                    if info.locationSharingMode == .approximate {
+                        Text("(~500m)")
+                            .font(.caption)
+                            .foregroundColor(palette.textTertiary)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "note.text")
+                    .foregroundColor(palette.accent)
+                Text("Notes")
+                    .font(.headline)
+                    .foregroundColor(palette.textPrimary)
+            }
+
+            Text(recording.notes)
+                .font(.body)
+                .foregroundColor(palette.textSecondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func formatTime(_ seconds: TimeInterval) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return String(format: "%d:%02d", mins, secs)
+    }
+}
+
+// MARK: - Helper Views for Detail
+
+struct InfoItem: View {
+    @Environment(\.themePalette) private var palette
+
+    let icon: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundColor(palette.accent)
+
+            Text(value)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(palette.textPrimary)
+                .lineLimit(1)
+
+            Text(label)
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct BadgeChip: View {
+    let icon: String
+    let text: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption)
+            Text(text)
+                .font(.caption)
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.15))
+        .cornerRadius(8)
+    }
+}
+
+// FlowLayout is defined in RecordingDetailView.swift

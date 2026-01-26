@@ -165,10 +165,18 @@ struct SharedAlbumTrashView: View {
     private func loadTrashItems() {
         isLoading = true
         Task {
-            let items = await appState.sharedAlbumManager.fetchTrashItems(for: album)
-            await MainActor.run {
-                trashItems = items
-                isLoading = false
+            // Use mock data in debug mode
+            if appState.isSharedAlbumsDebugMode {
+                await MainActor.run {
+                    trashItems = appState.debugMockTrashItems()
+                    isLoading = false
+                }
+            } else {
+                let items = await appState.sharedAlbumManager.fetchTrashItems(for: album)
+                await MainActor.run {
+                    trashItems = items
+                    isLoading = false
+                }
             }
         }
     }

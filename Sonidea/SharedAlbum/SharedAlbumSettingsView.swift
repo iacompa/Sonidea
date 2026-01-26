@@ -18,10 +18,114 @@ struct SharedAlbumSettingsView: View {
 
     @State private var isSaving = false
     @State private var showSaveConfirmation = false
+    @State private var showShareSheet = false
+    @State private var showStopSharingAlert = false
+    @State private var showCopiedToast = false
+    @State private var showParticipantsSheet = false
 
     var body: some View {
         NavigationStack {
             Form {
+                // MARK: - Sharing Management
+                Section {
+                    // Share link
+                    if let shareURL = album.shareURL {
+                        Button {
+                            UIPasteboard.general.string = shareURL.absoluteString
+                            showCopiedToast = true
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+                            // Auto-dismiss toast
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                showCopiedToast = false
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "link")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Copy Invite Link")
+                                        .foregroundColor(palette.textPrimary)
+                                    Text(shareURL.absoluteString)
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if showCopiedToast {
+                                    Text("Copied!")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                } else {
+                                    Image(systemName: "doc.on.doc")
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                        }
+
+                        Button {
+                            showShareSheet = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "square.and.arrow.up")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+                                Text("Share Invite Link")
+                                    .foregroundColor(palette.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                        }
+                    }
+
+                    // Manage participants
+                    Button {
+                        showParticipantsSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "person.2.fill")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Manage Participants")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Text("\(album.participantCount)")
+                                .foregroundColor(palette.textSecondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+
+                    // Stop sharing (owner only)
+                    if album.isOwner {
+                        Button(role: .destructive) {
+                            showStopSharingAlert = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "stop.circle.fill")
+                                    .foregroundColor(.red)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Stop Sharing")
+                                        .foregroundColor(.red)
+                                    Text("Remove all participants and make album private")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Label("Sharing", systemImage: "person.2")
+                } footer: {
+                    Text("Share the invite link to add new participants to this album.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
                 // MARK: - Deletion Permissions
                 Section {
                     Toggle(isOn: $settings.allowMembersToDelete) {
@@ -139,6 +243,41 @@ struct SharedAlbumSettingsView: View {
                 }
             } message: {
                 Text("Album settings have been updated.")
+            }
+            .alert("Stop Sharing?", isPresented: $showStopSharingAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Stop Sharing", role: .destructive) {
+                    stopSharing()
+                }
+            } message: {
+                Text("All participants will lose access to this album. Recordings will remain on your device.")
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let shareURL = album.shareURL {
+                    ShareSheet(items: [shareURL])
+                }
+            }
+            .sheet(isPresented: $showParticipantsSheet) {
+                SharedAlbumParticipantsView(album: album)
+            }
+        }
+    }
+
+    private func stopSharing() {
+        isSaving = true
+        Task {
+            do {
+                try await appState.sharedAlbumManager.stopSharing(album)
+                appState.removeSharedAlbum(album)
+                await MainActor.run {
+                    isSaving = false
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    appState.sharedAlbumManager.error = error.localizedDescription
+                }
             }
         }
     }

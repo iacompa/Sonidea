@@ -1763,3 +1763,306 @@ extension AppState {
         UserDefaults.standard.set(true, forKey: PendingActionKeys.pendingStartRecording)
     }
 }
+
+// MARK: - Debug Mode for Shared Albums Testing
+
+extension AppState {
+    private static let sharedAlbumsDebugModeKey = "sharedAlbumsDebugMode"
+    private static let debugSharedAlbumIdKey = "debugSharedAlbumId"
+
+    /// Whether debug mode is enabled for shared albums
+    var isSharedAlbumsDebugMode: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.sharedAlbumsDebugModeKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.sharedAlbumsDebugModeKey) }
+    }
+
+    /// The debug shared album ID (stored to maintain consistency)
+    private var debugSharedAlbumId: UUID {
+        if let idString = UserDefaults.standard.string(forKey: Self.debugSharedAlbumIdKey),
+           let id = UUID(uuidString: idString) {
+            return id
+        }
+        let newId = UUID()
+        UserDefaults.standard.set(newId.uuidString, forKey: Self.debugSharedAlbumIdKey)
+        return newId
+    }
+
+    /// Enable debug mode and create mock shared album
+    func enableSharedAlbumsDebugMode() {
+        isSharedAlbumsDebugMode = true
+        createMockSharedAlbum()
+    }
+
+    /// Disable debug mode and remove mock data
+    func disableSharedAlbumsDebugMode() {
+        isSharedAlbumsDebugMode = false
+        removeMockSharedAlbum()
+    }
+
+    /// Create a mock shared album with sample data
+    private func createMockSharedAlbum() {
+        let albumId = debugSharedAlbumId
+
+        // Check if already exists
+        if albums.contains(where: { $0.id == albumId }) {
+            return
+        }
+
+        // Create mock participants
+        let participants = [
+            SharedAlbumParticipant(
+                id: "user_001",
+                displayName: "You (Admin)",
+                role: .admin,
+                acceptanceStatus: .accepted,
+                joinedAt: Date().addingTimeInterval(-86400 * 7),
+                avatarInitials: "YO"
+            ),
+            SharedAlbumParticipant(
+                id: "user_002",
+                displayName: "Sarah Johnson",
+                role: .member,
+                acceptanceStatus: .accepted,
+                joinedAt: Date().addingTimeInterval(-86400 * 5),
+                avatarInitials: "SJ"
+            ),
+            SharedAlbumParticipant(
+                id: "user_003",
+                displayName: "Mike Chen",
+                role: .member,
+                acceptanceStatus: .accepted,
+                joinedAt: Date().addingTimeInterval(-86400 * 3),
+                avatarInitials: "MC"
+            ),
+            SharedAlbumParticipant(
+                id: "user_004",
+                displayName: "Emily Davis",
+                role: .viewer,
+                acceptanceStatus: .pending,
+                joinedAt: nil,
+                avatarInitials: "ED"
+            )
+        ]
+
+        // Create the shared album
+        let sharedAlbum = Album(
+            id: albumId,
+            name: "Demo Shared Album",
+            createdAt: Date().addingTimeInterval(-86400 * 7),
+            isSystem: false,
+            isShared: true,
+            shareURL: URL(string: "https://www.icloud.com/share/demo"),
+            participantCount: participants.count,
+            isOwner: true,
+            cloudKitShareRecordName: "demo_share_record",
+            skipAddRecordingConsent: false,
+            sharedSettings: SharedAlbumSettings(
+                allowMembersToDelete: true,
+                trashRestorePermission: .anyParticipant,
+                trashRetentionDays: 14,
+                defaultLocationSharingMode: .approximate,
+                allowMembersToShareLocation: true,
+                requireSensitiveApproval: false
+            ),
+            currentUserRole: .admin,
+            participants: participants
+        )
+
+        albums.append(sharedAlbum)
+        saveAlbums()
+
+        // Create mock recordings
+        createMockRecordingsForDebugAlbum(albumId: albumId)
+
+        // Create mock shared recording info
+        createMockSharedRecordingInfo(albumId: albumId)
+    }
+
+    /// Create mock recordings for the debug shared album
+    private func createMockRecordingsForDebugAlbum(albumId: UUID) {
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        let mockRecordings: [(title: String, duration: TimeInterval, daysAgo: Int, lat: Double?, lon: Double?, notes: String)] = [
+            ("Team Brainstorm Session", 847.5, 1, 37.7749, -122.4194, "Weekly team meeting - discussed Q2 roadmap"),
+            ("Interview with Dr. Smith", 1523.0, 2, 37.7849, -122.4094, "Expert interview for research project"),
+            ("Field Notes - Park Visit", 324.0, 3, 37.7694, -122.4862, "Nature sounds and observations"),
+            ("Quick Voice Memo", 45.0, 4, nil, nil, "Reminder about tomorrow's presentation"),
+            ("Client Feedback Call", 1892.0, 5, 37.7849, -122.4294, "Quarterly review with client"),
+            ("Music Idea #7", 128.0, 6, nil, nil, "Melody idea for new project")
+        ]
+
+        for (index, mock) in mockRecordings.enumerated() {
+            let recordingId = UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index + 100))")!
+
+            // Create a placeholder file URL (won't actually play)
+            let fileURL = documentsURL.appendingPathComponent("demo_recording_\(index).m4a")
+
+            let recording = RecordingItem(
+                id: recordingId,
+                fileURL: fileURL,
+                createdAt: Date().addingTimeInterval(-86400 * Double(mock.daysAgo)),
+                duration: mock.duration,
+                title: mock.title,
+                notes: mock.notes,
+                tagIDs: [],
+                albumID: albumId,
+                locationLabel: mock.lat != nil ? "San Francisco, CA" : "",
+                transcript: "",
+                latitude: mock.lat,
+                longitude: mock.lon,
+                trashedAt: nil,
+                lastPlaybackPosition: 0,
+                iconColorHex: nil,
+                iconName: nil
+            )
+
+            recordings.append(recording)
+        }
+
+        saveRecordings()
+    }
+
+    /// Create mock shared recording info for debug recordings
+    private func createMockSharedRecordingInfo(albumId: UUID) {
+        let albumRecordings = recordings.filter { $0.albumID == albumId }
+
+        let creators = [
+            ("user_001", "You", "YO"),
+            ("user_002", "Sarah Johnson", "SJ"),
+            ("user_003", "Mike Chen", "MC")
+        ]
+
+        for (index, recording) in albumRecordings.enumerated() {
+            let creator = creators[index % creators.count]
+
+            let locationMode: LocationSharingMode = recording.latitude != nil ? .approximate : .none
+
+            let sharedInfo = SharedRecordingItem(
+                id: UUID(),
+                recordingId: recording.id,
+                albumId: albumId,
+                creatorId: creator.0,
+                creatorDisplayName: creator.1,
+                createdAt: recording.createdAt,
+                wasImported: index == 1,
+                recordedWithHeadphones: index == 2,
+                isSensitive: index == 3,
+                sensitiveApproved: index == 3,
+                sensitiveApprovedBy: index == 3 ? "user_001" : nil,
+                locationSharingMode: locationMode,
+                sharedLatitude: locationMode != .none ? recording.latitude : nil,
+                sharedLongitude: locationMode != .none ? recording.longitude : nil,
+                sharedPlaceName: locationMode != .none ? "San Francisco, CA" : nil,
+                isVerified: index < 3,
+                verifiedAt: index < 3 ? recording.createdAt : nil
+            )
+
+            sharedRecordingInfoCache[recording.id] = sharedInfo
+        }
+    }
+
+    /// Remove mock shared album and associated data
+    private func removeMockSharedAlbum() {
+        let albumId = debugSharedAlbumId
+
+        // Remove the album
+        albums.removeAll { $0.id == albumId }
+        saveAlbums()
+
+        // Remove associated recordings
+        let recordingIds = recordings.filter { $0.albumID == albumId }.map { $0.id }
+        recordings.removeAll { $0.albumID == albumId }
+        saveRecordings()
+
+        // Clear cached shared info
+        for id in recordingIds {
+            sharedRecordingInfoCache.removeValue(forKey: id)
+        }
+    }
+
+    /// Get mock activity feed for debug mode
+    func debugMockActivityFeed() -> [SharedAlbumActivityEvent] {
+        guard isSharedAlbumsDebugMode else { return [] }
+
+        let albumId = debugSharedAlbumId
+        let albumRecordings = recordings.filter { $0.albumID == albumId }
+
+        var events: [SharedAlbumActivityEvent] = []
+
+        // Generate mock activity events
+        let activities: [(type: ActivityEventType, actorId: String, actorName: String, hoursAgo: Int)] = [
+            (.recordingAdded, "user_002", "Sarah Johnson", 2),
+            (.recordingAdded, "user_003", "Mike Chen", 5),
+            (.locationEnabled, "user_002", "Sarah Johnson", 6),
+            (.participantJoined, "user_003", "Mike Chen", 72),
+            (.recordingAdded, "user_001", "You", 96),
+            (.participantJoined, "user_002", "Sarah Johnson", 120),
+            (.settingAllowDeletesChanged, "user_001", "You", 168)
+        ]
+
+        for (index, activity) in activities.enumerated() {
+            let event = SharedAlbumActivityEvent(
+                id: UUID(),
+                albumId: albumId,
+                timestamp: Date().addingTimeInterval(-3600 * Double(activity.hoursAgo)),
+                actorId: activity.actorId,
+                actorDisplayName: activity.actorName,
+                eventType: activity.type,
+                targetRecordingId: activity.type == .recordingAdded ? albumRecordings[safe: index % albumRecordings.count]?.id : nil,
+                targetRecordingTitle: activity.type == .recordingAdded ? albumRecordings[safe: index % albumRecordings.count]?.title : nil,
+                targetParticipantId: activity.type == .participantJoined ? activity.actorId : nil,
+                targetParticipantName: activity.type == .participantJoined ? activity.actorName : nil,
+                oldValue: activity.type == .settingAllowDeletesChanged ? "Off" : nil,
+                newValue: activity.type == .settingAllowDeletesChanged ? "On" : nil
+            )
+            events.append(event)
+        }
+
+        return events.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// Get mock trash items for debug mode
+    func debugMockTrashItems() -> [SharedAlbumTrashItem] {
+        guard isSharedAlbumsDebugMode else { return [] }
+
+        let albumId = debugSharedAlbumId
+
+        return [
+            SharedAlbumTrashItem(
+                id: UUID(),
+                recordingId: UUID(),
+                albumId: albumId,
+                title: "Deleted Meeting Notes",
+                duration: 456.0,
+                creatorId: "user_002",
+                creatorDisplayName: "Sarah Johnson",
+                deletedBy: "user_001",
+                deletedByDisplayName: "You",
+                deletedAt: Date().addingTimeInterval(-86400 * 2),
+                originalCreatedAt: Date().addingTimeInterval(-86400 * 10),
+                audioAssetReference: nil
+            ),
+            SharedAlbumTrashItem(
+                id: UUID(),
+                recordingId: UUID(),
+                albumId: albumId,
+                title: "Old Voice Memo",
+                duration: 89.0,
+                creatorId: "user_003",
+                creatorDisplayName: "Mike Chen",
+                deletedBy: "user_003",
+                deletedByDisplayName: "Mike Chen",
+                deletedAt: Date().addingTimeInterval(-86400 * 12),
+                originalCreatedAt: Date().addingTimeInterval(-86400 * 20),
+                audioAssetReference: nil
+            )
+        ]
+    }
+}
+
+// Safe array subscript extension
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
