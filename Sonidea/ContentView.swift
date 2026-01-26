@@ -3095,12 +3095,14 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
 
-                    HStack {
-                        Text("Playback Speed")
-                            .foregroundColor(palette.textPrimary)
-                        Spacer()
-                        Text(String(format: "%.1fx", appState.appSettings.playbackSpeed))
-                            .foregroundColor(palette.textSecondary)
+                    Picker("Playback Speed", selection: $appState.appSettings.playbackSpeed) {
+                        Text("0.5x").tag(Float(0.5))
+                        Text("0.75x").tag(Float(0.75))
+                        Text("1.0x").tag(Float(1.0))
+                        Text("1.25x").tag(Float(1.25))
+                        Text("1.5x").tag(Float(1.5))
+                        Text("1.75x").tag(Float(1.75))
+                        Text("2.0x").tag(Float(2.0))
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {

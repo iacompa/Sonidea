@@ -108,7 +108,6 @@ struct RecordingDetailView: View {
     @State private var showSkipSilenceResult = false  // Toast for skip silence result
     @State private var skipSilenceResultMessage = ""  // Message for skip silence toast
     @State private var silenceMode: SilenceMode = .idle  // 2-step silence removal state
-    @State private var showCutConfirmation = false  // Confirmation dialog for Cut
 
     // Pro waveform editor state
     @State private var highResWaveformData: WaveformData?
@@ -490,19 +489,6 @@ struct RecordingDetailView: View {
             } message: {
                 Text("Recording over a track requires headphones to prevent feedback. Plug in headphones or connect a supported headset, then try again.")
             }
-            .confirmationDialog(
-                "Cut Selection",
-                isPresented: $showCutConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Cut", role: .destructive) {
-                    executeCut()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                let duration = selectionEnd - selectionStart
-                Text("Remove \(String(format: "%.2f", duration))s of audio from the recording? This can be undone.")
-            }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {
                     versionSavedToast
@@ -568,8 +554,12 @@ struct RecordingDetailView: View {
             // When editing: Undo/Redo on left, Done on right
             if !isLoadingWaveform && !waveformSamples.isEmpty {
                 HStack {
-                    // Undo/Redo buttons (left side, only in edit mode)
-                    if isEditingWaveform {
+                    // Left side: Skip Silence toggle (non-edit) or Undo/Redo (edit mode)
+                    if !isEditingWaveform {
+                        // Skip Silence toggle for playback (non-destructive)
+                        SkipSilenceToggle(skipSilenceManager: skipSilenceManager)
+                    } else {
+                        // Undo/Redo buttons (edit mode only)
                         HStack(spacing: 8) {
                             Button {
                                 performUndo()
@@ -801,10 +791,12 @@ struct RecordingDetailView: View {
                     }
 
                     // Selection time display with nudge controls (0.01s precision)
+                    // Center shows live playhead time during playback/scrubbing
                     SelectionTimeDisplay(
                         selectionStart: $selectionStart,
                         selectionEnd: $selectionEnd,
-                        duration: effectiveEditDuration
+                        duration: effectiveEditDuration,
+                        playheadPosition: editPlayheadPosition
                     )
 
                     // Edit actions: Trim, Cut, Skip Silence, Marker, Precision (Undo/Redo now in top bar)
@@ -1099,6 +1091,9 @@ struct RecordingDetailView: View {
         isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
+        // Capture original duration before trim for feedback notification
+        let originalDuration = playback.duration > 0 ? playback.duration : (pendingDuration ?? currentRecording.duration)
+
         Task {
             let result = await AudioEditor.shared.trim(
                 sourceURL: sourceURL,
@@ -1128,6 +1123,11 @@ struct RecordingDetailView: View {
 
                     // Reload playback
                     playback.load(url: result.outputURL)
+
+                    // Show success feedback (same pattern as Cut)
+                    let trimmedAmount = originalDuration - result.newDuration
+                    skipSilenceResultMessage = String(format: "Trimmed %.1fs of audio", trimmedAmount)
+                    showSkipSilenceResult = true
                 }
                 isProcessingEdit = false
             }
@@ -1136,8 +1136,8 @@ struct RecordingDetailView: View {
 
     private func performCut() {
         guard canPerformCut else { return }
-        // Show confirmation dialog before cutting
-        showCutConfirmation = true
+        // Execute cut immediately (undo is available if needed)
+        executeCut()
     }
 
     private func executeCut() {
@@ -1701,11 +1701,11 @@ struct RecordingDetailView: View {
                         .padding(.leading, CardStyle.horizontalPadding)
                 }
 
-                // Row 2: Album
+                // Row 2: Album (with gold glow styling for shared albums)
                 PickerRow(
                     label: "ALBUM",
                     value: appState.album(for: currentRecording.albumID)?.name ?? "None",
-                    valueColor: appState.album(for: currentRecording.albumID) != nil ? palette.textPrimary : palette.textSecondary,
+                    accessory: albumRowAccessory,
                     showDivider: true,
                     action: { showChooseAlbum = true }
                 )
@@ -1828,6 +1828,40 @@ struct RecordingDetailView: View {
             return project.title
         }
         return "None"
+    }
+
+    /// Custom accessory view for Album row (gold glow for shared albums)
+    private var albumRowAccessory: AnyView? {
+        guard let album = appState.album(for: currentRecording.albumID) else {
+            // No album - show "None" in secondary color
+            return AnyView(
+                Text("None")
+                    .font(.system(size: 16))
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
+            )
+        }
+
+        if album.isShared {
+            // Shared album - gold glow styling (matches AlbumTitleView)
+            return AnyView(
+                Text(album.name)
+                    .font(.system(size: 16))
+                    .foregroundColor(.sharedAlbumGold)
+                    .shadow(color: Color.sharedAlbumGold.opacity(0.7), radius: 6, x: 0, y: 0)
+                    .shadow(color: Color.sharedAlbumGold.opacity(0.35), radius: 12, x: 0, y: 0)
+                    .lineLimit(1)
+                    .accessibilityLabel("\(album.name), shared album")
+            )
+        } else {
+            // Normal album - standard styling
+            return AnyView(
+                Text(album.name)
+                    .font(.system(size: 16))
+                    .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
+            )
+        }
     }
 
     /// Custom accessory view for Project row (shows version badge if in project)

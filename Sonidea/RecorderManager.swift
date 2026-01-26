@@ -583,7 +583,22 @@ final class RecorderManager: NSObject {
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
         }
 
-        let duration = accumulatedDuration
+        // Get actual duration from the audio file, not wall clock time
+        // Wall clock accumulation can differ from actual audio frames due to buffer latency
+        let duration: TimeInterval
+        if fileVerified {
+            do {
+                let audioFile = try AVAudioFile(forReading: fileURL)
+                let actualDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+                print("✅ [RecorderManager] Actual file duration: \(actualDuration)s (wall clock was: \(accumulatedDuration)s)")
+                duration = actualDuration
+            } catch {
+                print("⚠️ [RecorderManager] Could not read file for duration, using wall clock: \(error.localizedDescription)")
+                duration = accumulatedDuration
+            }
+        } else {
+            duration = accumulatedDuration
+        }
         let createdAt = Date()
 
         // Capture location data

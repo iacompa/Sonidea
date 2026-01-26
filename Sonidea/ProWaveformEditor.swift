@@ -287,16 +287,7 @@ struct ProWaveformEditor: View {
                         onMarkerTap: onMarkerTap
                     )
 
-                    // Playhead (centered white line)
-                    PlayheadLineView(
-                        playheadPosition: $playheadPosition,
-                        timeline: timeline,
-                        duration: duration,
-                        isPrecisionMode: isPrecisionMode,
-                        width: width,
-                        height: waveformHeight,
-                        palette: palette
-                    )
+                    // NOTE: Playhead moved to overlay outside clipped container to prevent clipping at edges
 
                     // Selection handles
                     SelectionHandleView(
@@ -346,6 +337,20 @@ struct ProWaveformEditor: View {
             .frame(height: waveformHeight)
             .background(palette.inputBackground.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            // Playhead overlay - rendered outside clipped container to prevent edge clipping
+            .overlay {
+                GeometryReader { overlayGeometry in
+                    PlayheadLineView(
+                        playheadPosition: $playheadPosition,
+                        timeline: timeline,
+                        duration: duration,
+                        isPrecisionMode: isPrecisionMode,
+                        width: overlayGeometry.size.width,
+                        height: waveformHeight,
+                        palette: palette
+                    )
+                }
+            }
 
             // Zoom indicator
             if timeline.zoomScale > 1.05 {
@@ -763,28 +768,39 @@ struct PlayheadLineView: View {
     // Precision mode multiplier (0.25 = 4x finer control)
     private let precisionMultiplier: CGFloat = 0.25
 
+    // Hit target width for easier grabbing (44pt is Apple's minimum recommended)
+    private let hitTargetWidth: CGFloat = 44
+
     private let impactGenerator = UIImpactFeedbackGenerator(style: .light)
     private let selectionGenerator = UISelectionFeedbackGenerator()
 
     var body: some View {
+        // Use actual time-to-x mapping (no artificial inset)
+        // Playhead is in an overlay outside the clipped container, so knob won't be clipped
         let x = timeline.timeToX(playheadPosition, width: width)
 
-        if x >= -20 && x <= width + 20 {
+        if x >= -hitTargetWidth && x <= width + hitTargetWidth {
             ZStack {
+                // Invisible expanded hit target for easier grabbing
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: hitTargetWidth, height: height)
+                    .contentShape(Rectangle())
+
                 // Main line
                 Rectangle()
                     .fill(Color.white)
                     .frame(width: 2, height: height)
 
-                // Top handle
+                // Top handle (knob)
                 Circle()
                     .fill(Color.white)
                     .frame(width: 16, height: 16)
                     .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
                     .offset(y: -height / 2 + 8)
             }
-            // Use .position() to center the playhead exactly at x, matching marker positioning
-            .frame(width: 20, height: height)
+            // Use .position() to center the playhead exactly at x
+            .frame(width: hitTargetWidth, height: height)
             .position(x: x, y: height / 2)
             .highPriorityGesture(dragGesture)
             .zIndex(100)

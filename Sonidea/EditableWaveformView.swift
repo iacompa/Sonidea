@@ -885,15 +885,12 @@ struct SelectionTimeDisplay: View {
     @Binding var selectionStart: TimeInterval
     @Binding var selectionEnd: TimeInterval
     let duration: TimeInterval
+    let playheadPosition: TimeInterval
 
     @Environment(\.themePalette) private var palette
 
     private let nudgeStep: TimeInterval = 0.01
     private let impactGenerator = UIImpactFeedbackGenerator(style: .light)
-
-    private var selectionDuration: TimeInterval {
-        selectionEnd - selectionStart
-    }
 
     private var minimumGap: TimeInterval { 0.05 }
 
@@ -907,18 +904,14 @@ struct SelectionTimeDisplay: View {
                 palette: palette
             )
 
-            // Duration badge in center - clean typography, no blocky highlight
-            VStack(spacing: 2) {
-                Text("DURATION")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(palette.textTertiary)
-
-                Text(formatTime(selectionDuration))
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .foregroundColor(palette.accent)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            // Playhead time in center - shows current position during playback/scrubbing
+            Text(formatTime(playheadPosition))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundColor(palette.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .accessibilityLabel("Playhead time")
+                .accessibilityValue(formatTimeForAccessibility(playheadPosition))
 
             // End time with nudge
             SelectionEndpointControl(
@@ -956,6 +949,17 @@ struct SelectionTimeDisplay: View {
         let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
         return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
+
+    private func formatTimeForAccessibility(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
+        if minutes > 0 {
+            return "\(minutes) minutes, \(seconds) seconds, \(centiseconds) hundredths"
+        } else {
+            return "\(seconds) seconds, \(centiseconds) hundredths"
+        }
+    }
 }
 
 // MARK: - Selection Endpoint Control
@@ -978,25 +982,17 @@ struct SelectionEndpointControl: View {
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .foregroundColor(palette.textPrimary)
 
-            // Nudge buttons
+            // Nudge buttons with press-and-hold auto-repeat
             HStack(spacing: 2) {
-                Button {
-                    onNudge(-nudgeStep)
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 26, height: 22)
-                }
-                .buttonStyle(NudgeButtonStyle())
+                RepeatableNudgeButton(
+                    systemImage: "minus",
+                    onTrigger: { onNudge(-nudgeStep) }
+                )
 
-                Button {
-                    onNudge(nudgeStep)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 26, height: 22)
-                }
-                .buttonStyle(NudgeButtonStyle())
+                RepeatableNudgeButton(
+                    systemImage: "plus",
+                    onTrigger: { onNudge(nudgeStep) }
+                )
             }
         }
         .frame(maxWidth: .infinity)
@@ -1008,6 +1004,76 @@ struct SelectionEndpointControl: View {
         let seconds = Int(time) % 60
         let centiseconds = Int((time.truncatingRemainder(dividingBy: 1)) * 100)
         return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
+    }
+}
+
+// MARK: - Repeatable Nudge Button
+
+/// A button that triggers once on tap, and auto-repeats while held down
+struct RepeatableNudgeButton: View {
+    let systemImage: String
+    let onTrigger: () -> Void
+
+    @Environment(\.themePalette) private var palette
+    @State private var isPressed = false
+    @State private var repeatTask: Task<Void, Never>?
+
+    // Timing configuration
+    private let initialDelay: TimeInterval = 0.3      // Delay before repeat starts
+    private let initialInterval: TimeInterval = 0.15  // Starting repeat interval
+    private let minInterval: TimeInterval = 0.05      // Fastest repeat interval
+    private let acceleration: TimeInterval = 0.01     // How much faster each repeat
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 10, weight: .bold))
+            .frame(width: 26, height: 22)
+            .foregroundColor(palette.accent)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(palette.accent.opacity(isPressed ? 0.25 : 0.15))
+            )
+            .scaleEffect(isPressed ? 0.95 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: isPressed)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !isPressed else { return }
+                        isPressed = true
+                        // Trigger once immediately on press
+                        onTrigger()
+                        // Start repeat task
+                        startRepeating()
+                    }
+                    .onEnded { _ in
+                        stopRepeating()
+                    }
+            )
+    }
+
+    private func startRepeating() {
+        repeatTask?.cancel()
+        repeatTask = Task {
+            // Wait initial delay before starting repeat
+            try? await Task.sleep(nanoseconds: UInt64(initialDelay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+
+            var currentInterval = initialInterval
+            while !Task.isCancelled {
+                await MainActor.run {
+                    onTrigger()
+                }
+                try? await Task.sleep(nanoseconds: UInt64(currentInterval * 1_000_000_000))
+                // Accelerate (decrease interval) up to minimum
+                currentInterval = max(minInterval, currentInterval - acceleration)
+            }
+        }
+    }
+
+    private func stopRepeating() {
+        isPressed = false
+        repeatTask?.cancel()
+        repeatTask = nil
     }
 }
 
@@ -1063,7 +1129,8 @@ struct NudgeButtonStyle: ButtonStyle {
         SelectionTimeDisplay(
             selectionStart: .constant(10),
             selectionEnd: .constant(40),
-            duration: 60
+            duration: 60,
+            playheadPosition: 25
         )
     }
     .padding()
