@@ -270,10 +270,12 @@ struct RecordingDetailView: View {
                     .padding()
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .onTapGesture {
-                    // Tap outside to dismiss keyboard
-                    isNotesFocused = false
-                }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        // Tap outside to dismiss keyboard (uses simultaneousGesture to not block child buttons)
+                        isNotesFocused = false
+                    }
+                )
             }
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
@@ -379,6 +381,10 @@ struct RecordingDetailView: View {
                 }
             }
             .onChange(of: playback.currentTime) { _, currentTime in
+                // Sync edit playhead with playback time when playing in edit mode
+                if isEditingWaveform && playback.isPlaying {
+                    editPlayheadPosition = currentTime
+                }
                 // Skip silence during playback
                 if playback.isPlaying, let skipTo = skipSilenceManager.shouldSkip(at: currentTime) {
                     playback.seek(to: skipTo)
@@ -663,12 +669,19 @@ struct RecordingDetailView: View {
                                 silenceMode = .idle  // Clear any highlighted silence
                                 isEditingWaveform = false
                             } else {
-                                // Enter edit mode - capture playhead position BEFORE pausing
-                                // This ensures the marker is placed where the user was listening
+                                // Enter edit mode - ensure playback is loaded for accurate duration
+                                // This prevents waveform timeline using stale currentRecording.duration
+                                if !playback.isLoaded {
+                                    let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                                    playback.load(url: audioURL)
+                                }
+
+                                // Capture playhead position BEFORE pausing
                                 let capturedTime = playback.currentTime
                                 playback.pause()
                                 selectionStart = 0
-                                selectionEnd = effectiveEditDuration
+                                // Use actual playback duration for accurate timeline (not stored duration)
+                                selectionEnd = playback.duration > 0 ? playback.duration : currentRecording.duration
                                 // Set playhead to captured position (quantized to 0.01s)
                                 editPlayheadPosition = (capturedTime / 0.01).rounded() * 0.01
                                 isEditingWaveform = true
@@ -905,15 +918,20 @@ struct RecordingDetailView: View {
 
                 // Play/Pause (centered)
                 Button {
-                    if isEditingWaveform && !playback.isPlaying {
-                        // In edit mode: ensure engine is loaded and seek to playhead before playing
-                        if !playback.isLoaded {
-                            let audioURL = pendingAudioEdit ?? currentRecording.fileURL
-                            playback.load(url: audioURL)
+                    if isEditingWaveform {
+                        if playback.isPlaying {
+                            // Pause playback
+                            playback.pause()
+                        } else {
+                            // In edit mode: ensure engine is loaded and seek to playhead before playing
+                            if !playback.isLoaded {
+                                let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                                playback.load(url: audioURL)
+                            }
+                            // Seek to the editor playhead position, then play
+                            playback.seek(to: editPlayheadPosition)
+                            playback.play()
                         }
-                        // Seek to the editor playhead position, then play
-                        playback.seek(to: editPlayheadPosition)
-                        playback.play()
                     } else {
                         playback.togglePlayPause()
                     }

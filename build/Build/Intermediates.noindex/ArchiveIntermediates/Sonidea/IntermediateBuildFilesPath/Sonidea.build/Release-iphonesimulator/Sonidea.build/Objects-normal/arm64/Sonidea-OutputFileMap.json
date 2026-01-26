@@ -1,0 +1,296 @@
+{
+  "" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary.dia",
+    "emit-module-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary-emit-module.dia",
+    "pch" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Sonidea-primary.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/Album.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Album.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Album.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Album.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AppState.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppState.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppState.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppState.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AppearanceMode.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppearanceMode.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppearanceMode.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AppearanceMode.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioDebug.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioEditor.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioExporter.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioSessionManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioWaveformExtractor.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/CalendarView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/CalendarView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/CalendarView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/CalendarView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ContentView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ContentView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ContentView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ContentView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/DeepLinks.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/DeepLinks.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/DeepLinks.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/DeepLinks.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/EQGraphView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EQGraphView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EQGraphView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EQGraphView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/EditHistory.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditHistory.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditHistory.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditHistory.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/EditableWaveformView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditableWaveformView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditableWaveformView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/EditableWaveformView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/FileHasher.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/FileHasher.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/FileHasher.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/FileHasher.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/JournalView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/JournalView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/JournalView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/JournalView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/LocationManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/LocationManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/LocationManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/LocationManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/MapView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/MapView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/MapView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/MapView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/Marker.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Marker.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Marker.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Marker.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/OverdubEngine.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubEngine.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubEngine.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubEngine.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/OverdubGroup.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubGroup.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubGroup.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubGroup.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/OverdubSessionView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubSessionView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubSessionView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/OverdubSessionView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/PlaybackEngine.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackEngine.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackEngine.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackEngine.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/PlaybackManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/PlaybackManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ProWaveformEditor.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProWaveformEditor.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProWaveformEditor.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProWaveformEditor.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/Project.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Project.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Project.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Project.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ProjectDetailView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProjectDetailView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProjectDetailView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProjectDetailView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ProofManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ProofModels.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofModels.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofModels.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ProofModels.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/QuickHelpSheet.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/QuickHelpSheet.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/QuickHelpSheet.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/QuickHelpSheet.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecorderManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecorderManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecorderManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecorderManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingActivityAttributes.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingActivityAttributes.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingActivityAttributes.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingActivityAttributes.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingControlWidget.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingControlWidget.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingControlWidget.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingControlWidget.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingDetailView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingDetailView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingDetailView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingDetailView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingGridView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingGridView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingGridView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingGridView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingItem.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingItem.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingItem.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingItem.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingsListView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SettingsModels.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ShareSheet.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SkipSilenceManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SkipSilenceManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SkipSilenceManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SkipSilenceManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SonideaApp.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SonideaApp.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SonideaApp.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SonideaApp.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/StartRecordingIntent.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StartRecordingIntent.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StartRecordingIntent.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StartRecordingIntent.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/StopRecordingIntent.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StopRecordingIntent.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StopRecordingIntent.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StopRecordingIntent.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/StorageFormatter.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StorageFormatter.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StorageFormatter.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/StorageFormatter.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SupportManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SupportManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SupportManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SupportManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/Tag.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Tag.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Tag.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Tag.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/TagManagerView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TagManagerView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TagManagerView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TagManagerView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/Theme.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Theme.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Theme.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/Theme.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/TimelineItem.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TimelineItem.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TimelineItem.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TimelineItem.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/TipJarView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TipJarView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TipJarView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TipJarView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/TranscriptionManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TranscriptionManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TranscriptionManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/TranscriptionManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/WaveformSampler.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformSampler.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformSampler.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformSampler.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/WaveformView.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformView.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformView.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/WaveformView.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ZoomableWaveformEditor.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ZoomableWaveformEditor.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ZoomableWaveformEditor.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/ZoomableWaveformEditor.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/iCloud/SyncModels.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SyncModels.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SyncModels.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/SyncModels.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/iCloud/iCloudSyncManager.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/iCloudSyncManager.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/iCloudSyncManager.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/iCloudSyncManager.o"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "index-unit-output-path" : "/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/ArchiveIntermediates/Sonidea/IntermediateBuildFilesPath/Sonidea.build/Release-iphonesimulator/Sonidea.build/Objects-normal/arm64/GeneratedAssetSymbols.o"
+  }
+}

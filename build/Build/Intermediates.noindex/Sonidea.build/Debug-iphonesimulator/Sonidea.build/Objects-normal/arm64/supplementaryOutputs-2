@@ -1,0 +1,37 @@
+{
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioDebug.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioDebug.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioEditor.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioEditor.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioExporter.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioExporter.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioSessionManager.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioSessionManager.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/AudioWaveformExtractor.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/AudioWaveformExtractor.swiftdeps"
+  }
+}

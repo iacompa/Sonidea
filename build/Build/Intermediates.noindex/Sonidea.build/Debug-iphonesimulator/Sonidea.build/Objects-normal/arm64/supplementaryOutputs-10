@@ -1,0 +1,30 @@
+{
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/RecordingsListView.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/RecordingsListView.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SettingsModels.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SettingsModels.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/ShareSheet.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/ShareSheet.swiftdeps"
+  },
+  "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/SilenceDebugStrip.swift" : {
+    "const-values" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SilenceDebugStrip.swiftconstvalues",
+    "dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SilenceDebugStrip.d",
+    "diagnostics" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SilenceDebugStrip.dia",
+    "object" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SilenceDebugStrip.o",
+    "swift-dependencies" : "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/build/Build/Intermediates.noindex/Sonidea.build/Debug-iphonesimulator/Sonidea.build/Objects-normal/arm64/SilenceDebugStrip.swiftdeps"
+  }
+}

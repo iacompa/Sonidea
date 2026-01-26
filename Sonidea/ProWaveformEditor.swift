@@ -371,6 +371,11 @@ struct ProWaveformEditor: View {
             selectionGenerator.prepare()
         }
         .onChange(of: currentTime) { _, newTime in
+            // Sync playhead position with playback time when playing
+            if isPlaying {
+                playheadPosition = newTime
+            }
+            // Auto-scroll to keep playhead visible when zoomed
             if isPlaying && timeline.zoomScale > 1.0 {
                 timeline.ensureVisible(newTime, padding: timeline.visibleDuration * 0.2)
             }

@@ -1,0 +1,56 @@
+{
+  "source": "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/StopRecordingIntent.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Stop Recording",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 15
+        }
+      },
+      {
+        "comment": "",
+        "key": "Stop and save the current recording",
+        "location": {
+          "startingColumn": 48,
+          "startingLine": 16
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pause Recording",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 50
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pause the current recording",
+        "location": {
+          "startingColumn": 48,
+          "startingLine": 51
+        }
+      },
+      {
+        "comment": "",
+        "key": "Resume Recording",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 67
+        }
+      },
+      {
+        "comment": "",
+        "key": "Resume the paused recording",
+        "location": {
+          "startingColumn": 48,
+          "startingLine": 68
+        }
+      }
+    ]
+  },
+  "version": 1
+}

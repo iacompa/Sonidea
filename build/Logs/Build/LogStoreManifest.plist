@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>12</integer>
+	<key>logs</key>
+	<dict>
+		<key>31FF10F7-B29B-4E53-895B-8423EE081C37</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>31FF10F7-B29B-4E53-895B-8423EE081C37.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>S</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>Sonidea project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>Sonidea</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Cleaning project Sonidea with scheme Sonidea</string>
+			<key>timeStartedRecording</key>
+			<real>790995071.22981596</real>
+			<key>timeStoppedRecording</key>
+			<real>790995071.46223199</real>
+			<key>title</key>
+			<string>Cleaning project Sonidea with scheme Sonidea</string>
+			<key>uniqueIdentifier</key>
+			<string>31FF10F7-B29B-4E53-895B-8423EE081C37</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

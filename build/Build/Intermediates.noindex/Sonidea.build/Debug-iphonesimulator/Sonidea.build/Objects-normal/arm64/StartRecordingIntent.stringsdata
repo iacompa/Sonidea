@@ -1,0 +1,32 @@
+{
+  "source": "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/Sonidea/StartRecordingIntent.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Start Recording",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 13
+        }
+      },
+      {
+        "comment": "",
+        "key": "Start a new voice recording in Sonidea",
+        "location": {
+          "startingColumn": 48,
+          "startingLine": 14
+        }
+      },
+      {
+        "comment": "",
+        "key": "Start Recording",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 38
+        }
+      }
+    ]
+  },
+  "version": 1
+}

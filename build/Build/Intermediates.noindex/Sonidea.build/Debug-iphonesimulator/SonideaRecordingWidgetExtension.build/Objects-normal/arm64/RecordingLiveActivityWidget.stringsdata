@@ -1,0 +1,48 @@
+{
+  "source": "/Users/michael/Documents/💻 Business/Vibe Code Files/Voice memo app premium/xCode VoiceMemoPro/VoiceMemoPro/SonideaRecordingWidget/RecordingLiveActivityWidget.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Recording",
+        "location": {
+          "startingColumn": 58,
+          "startingLine": 29
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paused",
+        "location": {
+          "startingColumn": 72,
+          "startingLine": 29
+        }
+      },
+      {
+        "comment": "",
+        "key": "Sonidea",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 122
+        }
+      },
+      {
+        "comment": "",
+        "key": "Recording",
+        "location": {
+          "startingColumn": 54,
+          "startingLine": 118
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paused",
+        "location": {
+          "startingColumn": 68,
+          "startingLine": 118
+        }
+      }
+    ]
+  },
+  "version": 1
+}

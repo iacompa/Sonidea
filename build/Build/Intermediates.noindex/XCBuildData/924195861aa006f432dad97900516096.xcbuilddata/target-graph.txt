@@ -1,0 +1,4 @@
+Target dependency graph (2 targets)
+Target 'Sonidea' in project 'Sonidea'
+➜ Explicit dependency on target 'SonideaRecordingWidgetExtension' in project 'Sonidea'
+Target 'SonideaRecordingWidgetExtension' in project 'Sonidea' (no dependencies)
