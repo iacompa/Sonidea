@@ -51,6 +51,7 @@ final class AppState {
     let supportManager = SupportManager()
     let syncManager = iCloudSyncManager()
     let proofManager = ProofManager()
+    let sharedAlbumManager = SharedAlbumManager()
 
     private(set) var nextRecordingNumber: Int = 1
 
@@ -100,6 +101,9 @@ final class AppState {
 
         // Connect sync manager
         syncManager.appState = self
+
+        // Connect shared album manager
+        sharedAlbumManager.appState = self
     }
 
     // MARK: - Record Button Position Management
@@ -658,6 +662,112 @@ final class AppState {
     /// Check if Imports album exists
     var hasImportsAlbum: Bool {
         albums.contains(where: { $0.id == Album.importsID })
+    }
+
+    // MARK: - Shared Album Management
+
+    /// Get all shared albums
+    var sharedAlbums: [Album] {
+        albums.filter { $0.isShared }
+    }
+
+    /// Get non-shared albums (for album picker sections)
+    var personalAlbums: [Album] {
+        albums.filter { !$0.isShared }
+    }
+
+    /// Add a newly created shared album
+    func addSharedAlbum(_ album: Album) {
+        albums.append(album)
+        saveAlbums()
+
+        // Trigger iCloud sync
+        triggerSyncForAlbum(album)
+    }
+
+    /// Remove a shared album (when leaving or owner stops sharing)
+    func removeSharedAlbum(_ album: Album) {
+        guard album.isShared else { return }
+
+        let albumId = album.id
+        albums.removeAll { $0.id == albumId }
+
+        // Remove recordings associated with this shared album from local state
+        // (They live in CloudKit shared zone, not locally persisted)
+        recordings.removeAll { $0.albumID == albumId }
+
+        saveAlbums()
+        saveRecordings()
+    }
+
+    /// Update shared album properties (participant count, etc.)
+    func updateSharedAlbum(_ album: Album) {
+        guard let index = albums.firstIndex(where: { $0.id == album.id }) else { return }
+        albums[index] = album
+        saveAlbums()
+    }
+
+    /// Check if recording can be added to album (handles shared album consent)
+    func canAddRecordingToAlbum(_ album: Album, skipConsent: Bool = false) -> Bool {
+        // For shared albums, check if consent is required
+        if album.isShared && !album.skipAddRecordingConsent && !skipConsent {
+            return false  // Need to show consent sheet
+        }
+        return true
+    }
+
+    /// Update shared album consent preference
+    func setSkipConsentForAlbum(_ album: Album, skip: Bool) {
+        guard let index = albums.firstIndex(where: { $0.id == album.id }) else { return }
+        albums[index].skipAddRecordingConsent = skip
+        saveAlbums()
+    }
+
+    /// Add recording to shared album (with CloudKit sync)
+    func addRecordingToSharedAlbum(_ recording: RecordingItem, album: Album) {
+        guard album.isShared else {
+            // Not shared, use regular method
+            _ = setAlbum(album, for: recording)
+            return
+        }
+
+        // Update local state
+        var updated = recording
+        updated.albumID = album.id
+        updated.modifiedAt = Date()
+        updateRecording(updated)
+
+        // Sync to CloudKit shared zone
+        Task {
+            do {
+                try await sharedAlbumManager.addRecordingToSharedAlbum(recording: updated, album: album)
+            } catch {
+                print("Failed to sync recording to shared album: \(error)")
+            }
+        }
+    }
+
+    /// Delete recording from shared album (deletes for everyone)
+    func deleteRecordingFromSharedAlbum(_ recording: RecordingItem, album: Album) {
+        guard album.isShared else {
+            // Not shared, use regular delete
+            moveToTrash(recording)
+            return
+        }
+
+        // Remove from local state
+        let recordingId = recording.id
+        recordings.removeAll { $0.id == recordingId }
+        saveRecordings()
+
+        // Delete from CloudKit shared zone
+        Task {
+            do {
+                try await sharedAlbumManager.deleteRecordingFromSharedAlbum(recordingId: recordingId, album: album)
+            } catch {
+                print("Failed to delete recording from shared album: \(error)")
+            }
+        }
     }
 
     private func migrateRecordingsToDrafts() {

@@ -2444,22 +2444,48 @@ struct AlbumSearchRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "square.stack.fill")
-                .font(.system(size: 20))
-                .foregroundColor(.primary)
-                .frame(width: 36, height: 36)
-                .background(Color(.systemGray4))
-                .cornerRadius(6)
+            ZStack {
+                Image(systemName: album.isShared ? "person.2.fill" : "square.stack.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(album.isShared ? .blue : .primary)
+                    .frame(width: 36, height: 36)
+                    .background(album.isShared ? Color.blue.opacity(0.15) : Color(.systemGray4))
+                    .cornerRadius(6)
+
+                // Glow effect for shared albums
+                if album.isShared {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                        .frame(width: 36, height: 36)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(album.name)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(album.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
 
-                Text("\(recordingCount) recording\(recordingCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    if album.isShared {
+                        SharedAlbumBadge()
+                    }
+                }
+
+                HStack(spacing: 4) {
+                    Text("\(recordingCount) recording\(recordingCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if album.isShared {
+                        Text("•")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("\(album.participantCount) participant\(album.participantCount == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
             }
 
             Spacer()
@@ -2482,6 +2508,8 @@ struct AlbumDetailSheet: View {
 
     @State private var selectedTagIDs: Set<UUID> = []
     @State private var selectedRecording: RecordingItem?
+    @State private var showLeaveSheet = false
+    @State private var showManageSheet = false
 
     private var albumRecordings: [RecordingItem] {
         let recordings = appState.recordings(in: album)
@@ -2494,58 +2522,94 @@ struct AlbumDetailSheet: View {
             ZStack {
                 Color(.systemBackground).ignoresSafeArea()
 
-                VStack(spacing: 16) {
-                    if !appState.tags.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(appState.tags) { tag in
-                                    TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
-                                        if selectedTagIDs.contains(tag.id) {
-                                            selectedTagIDs.remove(tag.id)
-                                        } else {
-                                            selectedTagIDs.insert(tag.id)
+                VStack(spacing: 0) {
+                    // Shared album banner at top
+                    if album.isShared {
+                        SharedAlbumBanner(album: album)
+                    }
+
+                    VStack(spacing: 16) {
+                        if !appState.tags.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(appState.tags) { tag in
+                                        TagFilterChip(tag: tag, isSelected: selectedTagIDs.contains(tag.id)) {
+                                            if selectedTagIDs.contains(tag.id) {
+                                                selectedTagIDs.remove(tag.id)
+                                            } else {
+                                                selectedTagIDs.insert(tag.id)
+                                            }
                                         }
                                     }
                                 }
+                                .padding(.horizontal)
                             }
-                            .padding(.horizontal)
                         }
-                    }
 
-                    if albumRecordings.isEmpty {
-                        Spacer()
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform.circle")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text(selectedTagIDs.isEmpty ? "No recordings in this album" : "No recordings match selected tags")
-                                .font(.headline)
-                        }
-                        Spacer()
-                    } else {
-                        List {
-                            ForEach(albumRecordings) { recording in
-                                SearchResultRow(recording: recording)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { selectedRecording = recording }
-                                    .listRowBackground(Color.clear)
+                        if albumRecordings.isEmpty {
+                            Spacer()
+                            VStack(spacing: 12) {
+                                Image(systemName: album.isShared ? "person.2.wave.2" : "waveform.circle")
+                                    .font(.system(size: 48))
+                                    .foregroundColor(.secondary)
+                                Text(selectedTagIDs.isEmpty ? (album.isShared ? "No recordings in this shared album" : "No recordings in this album") : "No recordings match selected tags")
+                                    .font(.headline)
+                                if album.isShared && selectedTagIDs.isEmpty {
+                                    Text("Add recordings to share with collaborators")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
                             }
+                            Spacer()
+                        } else {
+                            List {
+                                ForEach(albumRecordings) { recording in
+                                    SearchResultRow(recording: recording)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { selectedRecording = recording }
+                                        .listRowBackground(Color.clear)
+                                }
+                            }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
                         }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
                     }
+                    .padding(.top)
                 }
-                .padding(.top)
             }
             .navigationTitle(album.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if album.isShared {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Menu {
+                            if album.isOwner {
+                                Button {
+                                    showManageSheet = true
+                                } label: {
+                                    Label("Manage Sharing", systemImage: "person.badge.plus")
+                                }
+                            } else {
+                                Button(role: .destructive) {
+                                    showLeaveSheet = true
+                                } label: {
+                                    Label("Leave Album", systemImage: "person.badge.minus")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
             .sheet(item: $selectedRecording) { recording in
                 RecordingDetailView(recording: recording)
+            }
+            .sheet(isPresented: $showLeaveSheet) {
+                LeaveSharedAlbumSheet(album: album)
             }
         }
     }
@@ -2657,6 +2721,7 @@ struct SettingsSheetView: View {
     @State private var showStorageEstimateSheet = false
     @State private var showSiriShortcutsHelp = false
     @State private var showGuide = false
+    @State private var showCreateSharedAlbumSheet = false
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -2981,6 +3046,45 @@ struct SettingsSheetView: View {
                         .foregroundColor(palette.textSecondary)
                 }
 
+                // MARK: - Shared Albums Section
+                Section {
+                    Button { showCreateSharedAlbumSheet = true } label: {
+                        HStack {
+                            Image(systemName: "person.2.fill")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Create Shared Album")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    // Show existing shared albums count
+                    if !appState.sharedAlbums.isEmpty {
+                        HStack {
+                            Image(systemName: "square.stack.fill")
+                                .foregroundColor(palette.textSecondary)
+                                .frame(width: 24)
+                            Text("Shared Albums")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Text("\(appState.sharedAlbums.count)")
+                                .foregroundColor(palette.textSecondary)
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    }
+                } header: {
+                    Text("Collaboration")
+                        .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Collaborate on albums with up to 5 people. Only audio files can be shared.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
                 Section {
                     Button { showTagManager = true } label: {
                         HStack {
@@ -3210,6 +3314,9 @@ struct SettingsSheetView: View {
             }
             .sheet(isPresented: $showSiriShortcutsHelp) {
                 SiriShortcutsHelpSheet()
+            }
+            .sheet(isPresented: $showCreateSharedAlbumSheet) {
+                CreateSharedAlbumSheet()
             }
         }
     }
