@@ -476,6 +476,11 @@ actor AudioWaveformExtractor {
         silenceCache.removeValue(forKey: url)
     }
 
+    /// Clear only silence cache for a specific URL (keeps waveform cache)
+    func clearSilenceCache(for url: URL) {
+        silenceCache.removeValue(forKey: url)
+    }
+
     /// Clear all caches
     func clearAllCaches() {
         waveformCache.removeAll()

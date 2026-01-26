@@ -108,6 +108,7 @@ struct RecordingDetailView: View {
     @State private var showSkipSilenceResult = false  // Toast for skip silence result
     @State private var skipSilenceResultMessage = ""  // Message for skip silence toast
     @State private var silenceMode: SilenceMode = .idle  // 2-step silence removal state
+    @State private var showCutConfirmation = false  // Confirmation dialog for Cut
 
     // Pro waveform editor state
     @State private var highResWaveformData: WaveformData?
@@ -468,6 +469,19 @@ struct RecordingDetailView: View {
             } message: {
                 Text("Recording over a track requires headphones to prevent feedback. Plug in headphones or connect a supported headset, then try again.")
             }
+            .confirmationDialog(
+                "Cut Selection",
+                isPresented: $showCutConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Cut", role: .destructive) {
+                    executeCut()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                let duration = selectionEnd - selectionStart
+                Text("Remove \(String(format: "%.2f", duration))s of audio from the recording? This can be undone.")
+            }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {
                     versionSavedToast
@@ -565,29 +579,67 @@ struct RecordingDetailView: View {
                                 .fill(palette.stroke.opacity(0.3))
                                 .frame(width: 1, height: 20)
 
-                            // Skip Silence button (2-step flow)
-                            Button {
-                                switch silenceMode {
-                                case .idle:
-                                    highlightSilentParts()
-                                case .highlighted:
-                                    removeSilentParts()
-                                }
-                            } label: {
+                            // Skip Silence button (2-step flow) with Cancel option
+                            if case .highlighted = silenceMode {
+                                // Two-button layout when highlighting is active
                                 HStack(spacing: 4) {
-                                    Image(systemName: silenceMode == .idle ? "waveform.path" : "scissors")
-                                        .font(.system(size: 12, weight: .medium))
-                                    Text(silenceMode == .idle ? "Highlight Silent Parts" : "Remove Silent Parts")
-                                        .font(.system(size: 11, weight: .medium))
+                                    // Remove button (destructive)
+                                    Button {
+                                        removeSilentParts()
+                                    } label: {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "scissors")
+                                                .font(.system(size: 11, weight: .medium))
+                                            Text("Remove")
+                                                .font(.system(size: 11, weight: .medium))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .frame(height: 28)
+                                        .background(Color.red)
+                                        .cornerRadius(6)
+                                    }
+                                    .disabled(isProcessingEdit)
+
+                                    // Cancel button (neutral)
+                                    Button {
+                                        silenceMode = .idle
+                                        silenceRMSMeter.clear()
+                                    } label: {
+                                        Text("Cancel")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(palette.textSecondary)
+                                            .padding(.horizontal, 8)
+                                            .frame(height: 28)
+                                            .background(palette.inputBackground)
+                                            .cornerRadius(6)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
+                                            )
+                                    }
+                                    .disabled(isProcessingEdit)
                                 }
-                                .foregroundColor(isProcessingEdit ? palette.textTertiary : (silenceMode == .idle ? palette.accent : .white))
-                                .padding(.horizontal, 8)
-                                .frame(height: 28)
-                                .background(isProcessingEdit ? palette.inputBackground : (silenceMode == .idle ? palette.accent.opacity(0.15) : Color.red))
-                                .cornerRadius(6)
+                            } else {
+                                // Single button when idle
+                                Button {
+                                    highlightSilentParts()
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "waveform.path")
+                                            .font(.system(size: 12, weight: .medium))
+                                        Text("Highlight Silent Parts")
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .foregroundColor(isProcessingEdit ? palette.textTertiary : palette.accent)
+                                    .padding(.horizontal, 8)
+                                    .frame(height: 28)
+                                    .background(isProcessingEdit ? palette.inputBackground : palette.accent.opacity(0.15))
+                                    .cornerRadius(6)
+                                }
+                                .disabled(isProcessingEdit)
+                                .accessibilityLabel("Highlight Silent Parts")
                             }
-                            .disabled(isProcessingEdit)
-                            .accessibilityLabel(silenceMode == .idle ? "Highlight Silent Parts" : "Remove Silent Parts")
                         }
                     }
 
@@ -1016,7 +1068,11 @@ struct RecordingDetailView: View {
 
     private func performCut() {
         guard canPerformCut else { return }
+        // Show confirmation dialog before cutting
+        showCutConfirmation = true
+    }
 
+    private func executeCut() {
         // Reset silence highlight (ranges invalidated by edit)
         silenceMode = .idle
 
@@ -1026,20 +1082,22 @@ struct RecordingDetailView: View {
 
         isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let cutStart = selectionStart
+        let cutEnd = selectionEnd
 
         Task {
             let result = await AudioEditor.shared.cut(
                 sourceURL: sourceURL,
-                startTime: selectionStart,
-                endTime: selectionEnd
+                startTime: cutStart,
+                endTime: cutEnd
             )
 
             await MainActor.run {
                 if result.success {
                     // Update markers to match new timeline (remove cut region, shift after)
                     editedMarkers = editedMarkers.afterCut(
-                        removingStart: selectionStart,
-                        removingEnd: selectionEnd
+                        removingStart: cutStart,
+                        removingEnd: cutEnd
                     )
 
                     // Store pending edit
@@ -1056,6 +1114,11 @@ struct RecordingDetailView: View {
 
                     // Reload playback
                     playback.load(url: result.outputURL)
+
+                    // Show success feedback
+                    let cutDuration = cutEnd - cutStart
+                    skipSilenceResultMessage = String(format: "Cut %.1fs of audio", cutDuration)
+                    showSkipSilenceResult = true
                 }
                 isProcessingEdit = false
             }
@@ -1071,6 +1134,9 @@ struct RecordingDetailView: View {
         let detectionThreshold: Float = -45.0
 
         Task {
+            // Clear silence cache to ensure fresh detection with current parameters
+            AudioWaveformExtractor.shared.clearSilenceCache(for: sourceURL)
+
             // Detect silence ranges (minimum 0.5s, threshold -45dB)
             let silenceRanges = try? await AudioWaveformExtractor.shared.detectSilence(
                 from: sourceURL,

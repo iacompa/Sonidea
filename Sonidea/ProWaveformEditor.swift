@@ -1137,11 +1137,13 @@ struct SilenceHighlightOverlay: View {
                             .frame(height: 2)
                         : nil
                     )
-                    .position(x: startX + rangeWidth / 2, y: height / 2)
+                    // CRITICAL: contentShape MUST be before position() to set hit area correctly
+                    // After position(), the view's frame becomes the full container width
                     .contentShape(Rectangle())
                     .onTapGesture {
                         onTap?(selectableRange.id)
                     }
+                    .position(x: startX + rangeWidth / 2, y: height / 2)
             }
         }
     }

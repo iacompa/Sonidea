@@ -2701,6 +2701,189 @@ struct SearchResultRow: View {
     }
 }
 
+// MARK: - Help Topic (Single Source of Truth for Guide and Settings Info)
+
+enum HelpTopic: String, Identifiable, CaseIterable {
+    case iCloud
+    case collaboration
+    case tags
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .iCloud: return "iCloud Sync"
+        case .collaboration: return "Shared Albums"
+        case .tags: return "Tags"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .iCloud: return "icloud"
+        case .collaboration: return "person.2.fill"
+        case .tags: return "tag"
+        }
+    }
+
+    /// Content used by both Guide view and Settings info sheets
+    var content: [(heading: String?, bullets: [String])] {
+        switch self {
+        case .iCloud:
+            return [
+                (nil, [
+                    "Sync recordings, tags, albums, and projects across all your devices.",
+                    "Changes made on one device appear automatically on others.",
+                    "Ensure iCloud is enabled in your device Settings for Sonidea."
+                ]),
+                ("Troubleshooting", [
+                    "If sync seems stuck, try toggling iCloud off and on.",
+                    "Large recordings may take time to upload on slow connections.",
+                    "Check iCloud storage isn't full."
+                ])
+            ]
+        case .collaboration:
+            return [
+                (nil, [
+                    "Share albums with specific people via iCloud.",
+                    "Shared albums sync audio recordings only (no photos/videos).",
+                    "You cannot convert an existing album—create a new Shared Album first."
+                ]),
+                ("Roles", [
+                    "Admin: Full control—invite/remove people, change settings, delete any recording.",
+                    "Member: Add recordings, edit own recordings; delete permission depends on settings.",
+                    "Viewer: Listen only, cannot add or delete."
+                ]),
+                ("Safety", [
+                    "Deletions move to Shared Album Trash for 7–30 days before permanent removal.",
+                    "Activity tab shows who added, deleted, or modified recordings.",
+                    "Only share with people you trust."
+                ])
+            ]
+        case .tags:
+            return [
+                (nil, [
+                    "Tags help you organize and find recordings quickly.",
+                    "Add multiple tags to any recording.",
+                    "Filter your library by tag to focus on specific topics."
+                ]),
+                ("Tips", [
+                    "Use consistent naming for easy filtering.",
+                    "Create tags for projects, moods, or categories.",
+                    "Tags sync across all your devices via iCloud."
+                ])
+            ]
+        }
+    }
+}
+
+// MARK: - Settings Section Header with Info Icon
+
+struct SettingsSectionHeader: View {
+    let title: String
+    let topic: HelpTopic?
+    let onInfoTap: (() -> Void)?
+    var isGold: Bool = false
+
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundColor(isGold ? Color.sharedAlbumGold : palette.textSecondary)
+
+            if let _ = topic, let onTap = onInfoTap {
+                Button {
+                    onTap()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(isGold ? Color.sharedAlbumGold.opacity(0.8) : palette.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+
+            Spacer()
+
+            // Optional sparkles for Collaboration
+            if isGold {
+                Image(systemName: "sparkles")
+                    .font(.caption)
+                    .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0))
+            }
+        }
+    }
+}
+
+// MARK: - Help Sheet View
+
+struct HelpSheetView: View {
+    let topic: HelpTopic
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Header
+                    HStack(spacing: 12) {
+                        Image(systemName: topic.icon)
+                            .font(.title2)
+                            .foregroundColor(topic == .collaboration ? Color.sharedAlbumGold : palette.accent)
+                            .frame(width: 40, height: 40)
+                            .background(
+                                Circle()
+                                    .fill(topic == .collaboration ? Color.sharedAlbumGold.opacity(0.15) : palette.accent.opacity(0.15))
+                            )
+
+                        Text(topic.title)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(palette.textPrimary)
+                    }
+                    .padding(.bottom, 8)
+
+                    // Content sections
+                    ForEach(Array(topic.content.enumerated()), id: \.offset) { _, section in
+                        VStack(alignment: .leading, spacing: 12) {
+                            if let heading = section.heading {
+                                Text(heading)
+                                    .font(.headline)
+                                    .foregroundColor(palette.textPrimary)
+                            }
+
+                            ForEach(section.bullets, id: \.self) { bullet in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text("•")
+                                        .foregroundColor(palette.textSecondary)
+                                    Text(bullet)
+                                        .font(.subheadline)
+                                        .foregroundColor(palette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(minLength: 40)
+                }
+                .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle(topic.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Settings Sheet
 struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
@@ -2729,6 +2912,7 @@ struct SettingsSheetView: View {
     @State private var showGuide = false
     @State private var showCreateSharedAlbumSheet = false
     @State private var isResetButtonAnimating = false
+    @State private var activeHelpTopic: HelpTopic?
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -3058,8 +3242,11 @@ struct SettingsSheetView: View {
                         .listRowBackground(palette.cardBackground)
                     }
                 } header: {
-                    Text("iCloud")
-                        .foregroundColor(palette.textSecondary)
+                    SettingsSectionHeader(
+                        title: "iCloud",
+                        topic: .iCloud,
+                        onInfoTap: { activeHelpTopic = .iCloud }
+                    )
                 } footer: {
                     Text("Sync recordings, tags, albums, and projects across all your devices.")
                         .foregroundColor(palette.textSecondary)
@@ -3167,14 +3354,12 @@ struct SettingsSheetView: View {
                     .listRowBackground(palette.cardBackground)
                     #endif
                 } header: {
-                    HStack {
-                        Text("Collaboration")
-                            .foregroundColor(palette.textSecondary)
-                        Spacer()
-                        Image(systemName: "sparkles")
-                            .font(.caption)
-                            .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0))
-                    }
+                    SettingsSectionHeader(
+                        title: "Collaboration",
+                        topic: .collaboration,
+                        onInfoTap: { activeHelpTopic = .collaboration },
+                        isGold: true
+                    )
                 } footer: {
                     #if DEBUG
                     if appState.isSharedAlbumsDebugMode {
@@ -3207,8 +3392,11 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Tags")
-                        .foregroundColor(palette.textSecondary)
+                    SettingsSectionHeader(
+                        title: "Tags",
+                        topic: .tags,
+                        onInfoTap: { activeHelpTopic = .tags }
+                    )
                 }
 
                 Section {
@@ -3357,6 +3545,9 @@ struct SettingsSheetView: View {
             .tint(palette.accent)
             .sheet(isPresented: $showGuide) {
                 GuideView()
+            }
+            .sheet(item: $activeHelpTopic) { topic in
+                HelpSheetView(topic: topic)
             }
             .sheet(isPresented: $showMicrophoneSheet) {
                 MicrophoneSelectorSheet()

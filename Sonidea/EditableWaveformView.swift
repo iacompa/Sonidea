@@ -726,6 +726,8 @@ struct EditActionButton: View {
                     .font(.system(size: 12, weight: .semibold))
                 Text(label)
                     .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
