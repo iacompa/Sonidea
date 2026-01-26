@@ -250,7 +250,6 @@ struct RecordingDetailView: View {
         if playback.duration > 0 {
             return playback.duration
         }
-        // Fallback to recording's stored duration
         return currentRecording.duration
     }
 
@@ -392,6 +391,13 @@ struct RecordingDetailView: View {
                 // Update silence debug strip RMS meter during playback/scrubbing
                 if case .highlighted = silenceMode {
                     silenceRMSMeter.updateRMS(at: currentTime)
+                }
+            }
+            .onChange(of: playback.isPlaying) { oldValue, newValue in
+                // When playback stops, sync final position to edit playhead
+                // This catches the case where playback finishes naturally
+                if isEditingWaveform && oldValue == true && newValue == false {
+                    editPlayheadPosition = playback.currentTime
                 }
             }
             .onChange(of: silenceMode) { _, newMode in
@@ -713,8 +719,8 @@ struct RecordingDetailView: View {
                         .frame(height: isEditingWaveform ? expandedWaveformHeight : compactWaveformHeight)
                 } else if isEditingWaveform {
                     // Edit mode: Show loading indicator if high-res waveform not yet loaded
-                    // This prevents blank waveform when entering Edit mode before async load completes
-                    if highResWaveformData == nil {
+                    // OR if playback duration is not available (prevents duration mismatch)
+                    if highResWaveformData == nil || playback.duration <= 0 {
                         VStack(spacing: 12) {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: palette.accent))
@@ -730,12 +736,19 @@ struct RecordingDetailView: View {
                                 print("🎨 [Waveform] Loading view appeared - triggering load")
                                 loadHighResWaveform(force: true)
                             }
+                            // Ensure playback is loaded to get accurate duration
+                            if playback.duration <= 0 && !playback.isLoaded {
+                                let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                                playback.load(url: audioURL)
+                            }
                         }
                     } else {
                         // Pro-level waveform editor with Voice Memos-style dense bars, timeline, pinch-to-zoom, and pan
+                        // CRITICAL: Use playback.duration directly to ensure timeline matches actual audio
+                        let editorDuration = playback.duration > 0 ? playback.duration : effectiveEditDuration
                         ProWaveformEditor(
                         waveformData: highResWaveformData,
-                        duration: effectiveEditDuration,
+                        duration: editorDuration,
                         selectionStart: $selectionStart,
                         selectionEnd: $selectionEnd,
                         playheadPosition: $editPlayheadPosition,
@@ -758,7 +771,8 @@ struct RecordingDetailView: View {
                     )
                     // Force fresh @State when duration changes to fix stale WaveformTimeline.duration
                     // WaveformTimeline.duration is a `let` constant, so @State must be recreated
-                    .id("waveform-\(currentRecording.id)-\(Int(effectiveEditDuration * 1000))")
+                    // Use playback.duration directly in ID to ensure recreation when actual duration is known
+                    .id("waveform-\(currentRecording.id)-\(Int(playback.duration * 1000))")
                     }
                 } else {
                     // Normal playback waveform

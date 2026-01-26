@@ -14,8 +14,8 @@ import UIKit
 /// Represents the visible portion of the waveform timeline
 @Observable
 final class WaveformTimeline {
-    /// Total duration of the audio
-    let duration: TimeInterval
+    /// Total duration of the audio (mutable to allow sync with playback engine)
+    var duration: TimeInterval
 
     /// Current zoom level (1.0 = full width, higher = more zoomed in)
     /// NOTE: No didSet - clamping happens at call sites to avoid recursion with @Observable
@@ -369,6 +369,10 @@ struct ProWaveformEditor: View {
         .onAppear {
             impactGenerator.prepare()
             selectionGenerator.prepare()
+            // Sync timeline duration on appear (in case @State wasn't recreated properly)
+            if abs(timeline.duration - duration) > 0.001 {
+                timeline.duration = max(0.01, duration)
+            }
         }
         .onChange(of: currentTime) { _, newTime in
             // Sync playhead position with playback time when playing
@@ -378,6 +382,13 @@ struct ProWaveformEditor: View {
             // Auto-scroll to keep playhead visible when zoomed
             if isPlaying && timeline.zoomScale > 1.0 {
                 timeline.ensureVisible(newTime, padding: timeline.visibleDuration * 0.2)
+            }
+        }
+        .onChange(of: duration) { _, newDuration in
+            // Sync timeline duration with playback duration
+            // This ensures playhead position calculation uses correct duration
+            if abs(timeline.duration - newDuration) > 0.001 {
+                timeline.duration = max(0.01, newDuration)
             }
         }
     }

@@ -96,7 +96,7 @@ final class PlaybackEngine {
             currentTime = 0
             seekFrame = 0
 
-            print("✅ [PlaybackEngine] Audio file loaded: duration=\(duration)s, sampleRate=\(audioSampleRate)")
+            print("✅ [PlaybackEngine] Audio file loaded: duration=\(duration)s, sampleRate=\(audioSampleRate), frames=\(audioLengthFrames)")
 
             setupAudioEngine(format: file.processingFormat)
         } catch {
@@ -140,7 +140,7 @@ final class PlaybackEngine {
             seekFrame = 0
             currentTime = 0
             let fullFrameCount = AVAudioFrameCount(audioLengthFrames)
-            player.scheduleSegment(file, startingFrame: 0, frameCount: fullFrameCount, at: nil) { [weak self] in
+            player.scheduleSegment(file, startingFrame: 0, frameCount: fullFrameCount, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 Task { @MainActor in
                     guard let self = self, self.playbackGeneration == currentGeneration else { return }
                     self.handlePlaybackFinished()
@@ -152,7 +152,9 @@ final class PlaybackEngine {
             return
         }
 
-        player.scheduleSegment(file, startingFrame: seekFrame, frameCount: frameCount, at: nil) { [weak self] in
+        // Use .dataPlayedBack to get callback when audio actually plays through speakers
+        // Default (.dataConsumed) fires ~1 second early due to audio buffer latency
+        player.scheduleSegment(file, startingFrame: seekFrame, frameCount: frameCount, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
                 // Only handle completion if this is still the current playback generation
                 // Stale handlers from stopped/rescheduled segments are ignored
@@ -359,9 +361,14 @@ final class PlaybackEngine {
     }
 
     private func handlePlaybackFinished() {
-        isPlaying = false
-        currentTime = 0
-        seekFrame = 0
+        // CRITICAL: Set currentTime BEFORE isPlaying = false
+        // This ensures onChange handlers can update UI (they check isPlaying)
+        // Setting to END position ensures playhead shows 100% when done
+        currentTime = duration
+        seekFrame = audioLengthFrames
         stopTimer()
+
+        // Set isPlaying LAST so observers see the final currentTime while still "playing"
+        isPlaying = false
     }
 }
