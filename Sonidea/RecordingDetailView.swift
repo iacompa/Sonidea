@@ -120,10 +120,7 @@ struct RecordingDetailView: View {
 
     // Waveform height constants
     private let compactWaveformHeight: CGFloat = 100
-    private let expandedWaveformHeight: CGFloat = 240  // Base height for edit mode
-    private let minEditWaveformHeight: CGFloat = 150   // Minimum height when adjusting
-    private let maxEditWaveformHeight: CGFloat = 400   // Maximum height when adjusting
-    @State private var editWaveformHeightAdjustment: CGFloat = 0  // User adjustment via drag
+    private let expandedWaveformHeight: CGFloat = 250  // Edit mode: 2.5x details height
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
@@ -266,11 +263,6 @@ struct RecordingDetailView: View {
         return currentRecording.duration
     }
 
-    /// Current edit mode waveform height (base + user adjustment)
-    private var currentEditWaveformHeight: CGFloat {
-        let height = expandedWaveformHeight + editWaveformHeightAdjustment
-        return min(maxEditWaveformHeight, max(minEditWaveformHeight, height))
-    }
 
     /// Accessibility label for the suggested icons strip
     private var suggestedIconsAccessibilityLabel: String {
@@ -610,51 +602,6 @@ struct RecordingDetailView: View {
         .padding(.bottom, 100)  // Higher position so it doesn't overlap playback controls
     }
 
-    // MARK: - Waveform Height Resize Handle
-    // TODO: Fix jitter/flicker when dragging to resize waveform height.
-    // Attempted fixes: .animation(nil), .transaction(disablesAnimations), .drawingGroup(), .geometryGroup(),
-    // using geometry.size.height instead of waveformHeight param, removing double .frame().
-    // Issue persists - likely caused by Canvas redraw or GeometryReader timing. Investigate further.
-
-    @State private var heightDragStartAdjustment: CGFloat = 0
-    @State private var isDraggingHeight: Bool = false
-
-    private var waveformHeightResizeHandle: some View {
-        VStack(spacing: 0) {
-            // Drag handle indicator
-            Capsule()
-                .fill(palette.textTertiary)
-                .frame(width: 40, height: 4)
-                .padding(.vertical, 2)
-        }
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    isDraggingHeight = true
-                    let delta = value.translation.height
-                    let newAdjustment = heightDragStartAdjustment + delta
-                    // Clamp to valid range
-                    let minAdj = minEditWaveformHeight - expandedWaveformHeight
-                    let maxAdj = maxEditWaveformHeight - expandedWaveformHeight
-                    // Use transaction to disable animation during drag (prevents shake/jiggle)
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        editWaveformHeightAdjustment = min(maxAdj, max(minAdj, newAdjustment))
-                    }
-                }
-                .onEnded { _ in
-                    isDraggingHeight = false
-                    heightDragStartAdjustment = editWaveformHeightAdjustment
-                }
-        )
-        .onAppear {
-            heightDragStartAdjustment = editWaveformHeightAdjustment
-        }
-    }
-
     // MARK: - Playback Section
 
     private var playbackSection: some View {
@@ -856,7 +803,7 @@ struct RecordingDetailView: View {
                         currentTime: playback.currentTime,
                         isPlaying: playback.isPlaying,
                         isPrecisionMode: $isPrecisionMode,
-                        waveformHeight: currentEditWaveformHeight,
+                        waveformHeight: expandedWaveformHeight,
                         onSeek: { time in
                             playback.seek(to: time)
                         },
@@ -868,10 +815,7 @@ struct RecordingDetailView: View {
                         onSilenceRangeTap: { id in
                             toggleSilenceRange(id: id)
                         },
-                        onResetAll: {
-                            // Reset height adjustment when user taps reset
-                            editWaveformHeightAdjustment = 0
-                        }
+                        onResetAll: nil
                     )
                     // Force fresh @State when duration changes to fix stale WaveformTimeline.duration
                     // WaveformTimeline.duration is a `let` constant, so @State must be recreated
@@ -890,19 +834,7 @@ struct RecordingDetailView: View {
                     .frame(height: compactWaveformHeight)
                 }
             }
-            .transaction { transaction in
-                // Disable ALL animations during height drag to prevent jitter
-                if isDraggingHeight {
-                    transaction.disablesAnimations = true
-                }
-            }
-            .animation(isDraggingHeight ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
             .padding(.top, 8)  // Only top padding; bottom gap comes from VStack spacing
-
-            // Edit mode: Height resize handle
-            if isEditingWaveform && highResWaveformData != nil {
-                waveformHeightResizeHandle
-            }
 
             // Edit mode: Selection info and actions
             if isEditingWaveform {
@@ -3595,9 +3527,9 @@ private struct MainIconGridItem: View {
 
                     Image(systemName: icon.sfSymbol)
                         .font(.system(size: 22))
-                        .foregroundColor(isMainIcon ? .white : tintColor)
+                        .foregroundColor(isMainIcon ? .white : palette.textPrimary)
                         .frame(width: 44, height: 44)
-                        .background(isMainIcon ? tintColor : tintColor.opacity(0.12))
+                        .background(isMainIcon ? tintColor : palette.surface)
                         .cornerRadius(10)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)

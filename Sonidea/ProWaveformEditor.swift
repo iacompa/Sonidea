@@ -285,7 +285,7 @@ struct ProWaveformEditor: View {
             // Main waveform area
             GeometryReader { geometry in
                 let width = geometry.size.width
-                let height = geometry.size.height  // Use actual geometry height to avoid mismatch
+                let height = waveformHeight  // Use known height, not geometry (avoids feedback loop during resize)
 
                 ZStack(alignment: .leading) {
                     // Waveform bars
@@ -382,22 +382,16 @@ struct ProWaveformEditor: View {
             .frame(height: waveformHeight)
             .background(palette.inputBackground.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .drawingGroup()  // Rasterize entire waveform area to GPU texture
-            .animation(nil, value: waveformHeight)  // Prevent jitter during height resize drag
             // Playhead overlay - rendered outside clipped container to prevent edge clipping
-            // Uses same GeometryReader as main content to avoid timing mismatch
             .overlay {
                 GeometryReader { overlayGeometry in
-                    let overlayWidth = overlayGeometry.size.width
-                    let overlayHeight = overlayGeometry.size.height
-
                     PlayheadLineView(
                         playheadPosition: $playheadPosition,
                         timeline: timeline,
                         duration: duration,
                         isPrecisionMode: isPrecisionMode,
-                        width: overlayWidth,
-                        height: overlayHeight,
+                        width: overlayGeometry.size.width,
+                        height: waveformHeight,
                         palette: palette
                     )
                     .transaction { t in t.disablesAnimations = true }
@@ -421,8 +415,7 @@ struct ProWaveformEditor: View {
                 .padding(.top, 8)
             }
         }
-        .geometryGroup()  // Isolate geometry changes to prevent layout propagation
-        .animation(nil, value: waveformHeight)  // Prevent jitter on entire editor during height drag
+        .animation(nil, value: waveformHeight)
         // Tooltip overlay - rendered at VStack level so it can appear above the waveform
         .overlay(alignment: .top) {
             GeometryReader { geometry in
@@ -666,29 +659,56 @@ struct TimeRulerBar: View {
         }
     }
 
+    /// Compact tick label formatter — removes redundant leading zeros.
+    /// Rules:
+    ///   time == 0        → "0"
+    ///   time < 1s        → ".300" / ".020" (leading-dot milliseconds)
+    ///   1s ..< 60s       → "1" / "20" / "5.3" (seconds, with fraction when zoomed)
+    ///   60s ..< 3600s    → "1:05" (M:SS)
+    ///   >= 3600s         → "1:02:03" (H:MM:SS)
     private func formatTime(_ time: TimeInterval) -> String {
+        // Snap near-zero to exactly 0
+        if abs(time) < 0.0005 { return "0" }
+
         let totalSeconds = Int(time)
-        let minutes = totalSeconds / 60
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
         let seconds = totalSeconds % 60
         let fraction = time.truncatingRemainder(dividingBy: 1)
 
-        // Show milliseconds when zoomed in enough
-        if timeline.visibleDuration < 0.2 {
-            // Extreme zoom: show milliseconds (0:00.005)
-            let milliseconds = Int(fraction * 1000)
-            return String(format: "%d:%02d.%03d", minutes, seconds, milliseconds)
-        } else if timeline.visibleDuration < 1 {
-            // Very high zoom: show centiseconds (0:00.05)
-            let centiseconds = Int(fraction * 100)
-            return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
-        } else if timeline.visibleDuration < 5 {
-            // High zoom: show tenths (0:00.5)
-            let tenths = Int(fraction * 10)
-            if tenths > 0 {
-                return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+        // >= 1 hour
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+
+        // >= 1 minute
+        if minutes > 0 {
+            return String(format: "%d:%02d", minutes, seconds)
+        }
+
+        // Sub-second (no whole seconds)
+        if totalSeconds == 0 {
+            if timeline.visibleDuration < 0.2 {
+                return String(format: ".%03d", Int(fraction * 1000))
+            } else if timeline.visibleDuration < 1 {
+                return String(format: ".%02d", Int(fraction * 100))
+            } else {
+                return String(format: ".%d", Int(fraction * 10))
             }
         }
-        return String(format: "%d:%02d", minutes, seconds)
+
+        // 1s–59s: show whole seconds, add fraction when zoomed
+        if timeline.visibleDuration < 0.2 {
+            let ms = Int(fraction * 1000)
+            return ms > 0 ? String(format: "%d.%03d", seconds, ms) : "\(seconds)"
+        } else if timeline.visibleDuration < 1 {
+            let cs = Int(fraction * 100)
+            return cs > 0 ? String(format: "%d.%02d", seconds, cs) : "\(seconds)"
+        } else if timeline.visibleDuration < 5 {
+            let tenths = Int(fraction * 10)
+            return tenths > 0 ? String(format: "%d.%d", seconds, tenths) : "\(seconds)"
+        }
+        return "\(seconds)"
     }
 }
 

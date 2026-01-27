@@ -16,6 +16,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
     case logicPro
     case fruity
     case avid
+    case dynamite
 
     var id: String { rawValue }
 
@@ -27,17 +28,19 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .logicPro: return "Logic"
         case .fruity: return "Fruity"
         case .avid: return "AVID"
+        case .dynamite: return "Dynamite"
         }
     }
 
     var subtitle: String {
         switch self {
         case .system: return "Default iOS appearance"
-        case .angstRobot: return "Inspired by Ableton Live AngstRobot"
+        case .angstRobot: return "Inspired by Ableton Live"
         case .cream: return "Warm light tones"
         case .logicPro: return "Inspired by Logic Pro."
         case .fruity: return "Inspired by FL Studio."
         case .avid: return "Inspired by Pro Tools."
+        case .dynamite: return "Bold charcoal with red and blue"
         }
     }
 
@@ -56,6 +59,8 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
             return ThemePalette.fruity
         case .avid:
             return ThemePalette.avid
+        case .dynamite:
+            return ThemePalette.dynamite
         }
     }
 
@@ -68,6 +73,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .logicPro: return .dark
         case .fruity: return .dark
         case .avid: return .dark
+        case .dynamite: return .dark
         }
     }
 
@@ -77,7 +83,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .system:
             return false  // System themes keep red
-        case .angstRobot, .cream, .logicPro, .fruity, .avid:
+        case .angstRobot, .cream, .logicPro, .fruity, .avid, .dynamite:
             return true   // Custom themes use accent
         }
     }
@@ -88,7 +94,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .system:
             return false
-        case .angstRobot, .cream, .logicPro, .fruity, .avid:
+        case .angstRobot, .cream, .logicPro, .fruity, .avid, .dynamite:
             return true
         }
     }
@@ -103,7 +109,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
             return .light  // Light background needs light scheme (dark status bar)
         case .logicPro:
             return .light  // Light toolbar on dark canvas
-        case .angstRobot, .fruity, .avid:
+        case .angstRobot, .fruity, .avid, .dynamite:
             return .dark   // Dark backgrounds need dark scheme (light status bar)
         }
     }
@@ -534,6 +540,57 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: Color.fromHex("#E9EEF4"),
         toolbarTextSecondary: Color.fromHex("#AEBBCC"),
         waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18)  // Teal selection
+    )
+
+    // MARK: - Dynamite (Charcoal + Red/Blue) Palette
+
+    static let dynamite = ThemePalette(
+        background: Color.fromHex("#383838"),               // Charcoal dark gray
+        surface: Color.fromHex("#424242"),                  // Slightly lighter surface
+        surfaceRaised: Color.fromHex("#4A4A4A"),            // Elevated panels
+        groupedBackground: Color.fromHex("#383838"),
+        secondaryGroupedBackground: Color.fromHex("#424242"),
+
+        textPrimary: Color.white,
+        textSecondary: Color.white.opacity(0.70),
+        textTertiary: Color.white.opacity(0.45),
+
+        separator: Color.white.opacity(0.12),
+        stroke: Color.white.opacity(0.15),
+
+        accent: Color.fromHex("#2786BE"),                   // Blue needle/line
+        recordButton: Color.fromHex("#F62E38"),             // Red wave
+        useMaterials: false,
+
+        listRowBackground: Color.clear,
+        cardBackground: Color.fromHex("#424242"),
+        inputBackground: Color.fromHex("#4A4A4A"),
+        navigationBarBackground: Color.fromHex("#383838"),
+        sheetBackground: Color.fromHex("#424242"),
+
+        primaryButtonBackground: Color.fromHex("#2786BE"),  // Blue
+        primaryButtonForeground: Color.white,
+        secondaryButtonBackground: Color.fromHex("#4A4A4A"),
+        secondaryButtonForeground: Color.fromHex("#2786BE"),
+
+        chipBackground: Color.fromHex("#4A4A4A"),
+        chipForeground: Color.fromHex("#2786BE"),
+        chipStroke: Color.fromHex("#2786BE").opacity(0.3),
+        chipSelectedBackground: Color.fromHex("#2786BE"),
+        chipSelectedForeground: Color.white,
+
+        sliderTint: Color.fromHex("#2786BE"),
+        toggleOnTint: Color.fromHex("#F33B42"),             // Red companion for toggles
+
+        titleFontDesign: .default,
+        numericFontDesign: .monospaced,
+
+        liveRecordingAccent: Color.fromHex("#F62E38"),      // Red for recording UI
+
+        toolbarColorScheme: nil,
+        toolbarTextPrimary: nil,
+        toolbarTextSecondary: nil,
+        waveformSelectionBackground: Color.fromHex("#2786BE").opacity(0.20)  // Blue selection
     )
 }
 

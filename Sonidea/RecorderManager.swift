@@ -262,16 +262,38 @@ final class RecorderManager: NSObject {
     func startRecording() {
         guard recordingState == .idle else { return }
 
-        do {
-            try AudioSessionManager.shared.configureForRecording(
-                quality: qualityPreset,
-                settings: appSettings
-            )
-        } catch {
-            print("Failed to set up audio session: \(error)")
-            return
-        }
+        let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
 
+        if isBluetooth {
+            // Bluetooth needs async route stabilization
+            Task { @MainActor in
+                do {
+                    try await AudioSessionManager.shared.configureForRecording(
+                        quality: qualityPreset,
+                        settings: appSettings
+                    )
+                } catch {
+                    print("Failed to set up audio session: \(error)")
+                    return
+                }
+                self.continueStartRecording()
+            }
+        } else {
+            // Wired/built-in: synchronous path (no wait needed)
+            do {
+                try AudioSessionManager.shared.configureForRecording(
+                    quality: qualityPreset,
+                    settings: appSettings
+                ) as Void
+            } catch {
+                print("Failed to set up audio session: \(error)")
+                return
+            }
+            continueStartRecording()
+        }
+    }
+
+    private func continueStartRecording() {
         // Request location at start of recording
         requestLocationIfNeeded()
 

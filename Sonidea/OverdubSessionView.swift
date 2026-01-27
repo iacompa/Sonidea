@@ -38,6 +38,7 @@ struct OverdubSessionView: View {
     @State private var errorMessage: String?
     @State private var showErrorAlert = false
 
+    @State private var isStartingRecording = false  // Brief wait during Bluetooth route setup
     @State private var offsetSliderValue: Double = 0 // For sync adjustment
     @State private var showOffsetSlider = false
 
@@ -131,24 +132,38 @@ struct OverdubSessionView: View {
     // MARK: - Status Bar
 
     private var statusBar: some View {
-        HStack {
-            // Headphones indicator
-            HStack(spacing: 6) {
-                Image(systemName: AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "headphones" : "headphones.slash")
-                    .font(.system(size: 14))
-                    .foregroundColor(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? .green : .red)
+        VStack(spacing: 4) {
+            HStack {
+                // Headphones indicator
+                HStack(spacing: 6) {
+                    Image(systemName: AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "headphones" : "headphones.slash")
+                        .font(.system(size: 14))
+                        .foregroundColor(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? .green : .red)
 
-                Text(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "Connected" : "No Headphones")
+                    Text(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "Connected" : "No Headphones")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+
+                Spacer()
+
+                // Current output
+                Text(AudioSessionManager.shared.currentOutputName())
                     .font(.caption)
-                    .foregroundColor(palette.textSecondary)
+                    .foregroundColor(palette.textTertiary)
             }
 
-            Spacer()
-
-            // Current output
-            Text(AudioSessionManager.shared.currentOutputName())
-                .font(.caption)
+            // Bluetooth latency warning (non-blocking, subtle)
+            if AudioSessionManager.shared.isBluetoothOutput() {
+                HStack(spacing: 4) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 9))
+                    Text("Bluetooth adds delay. For zero-latency monitoring, use wired headphones.")
+                        .font(.system(size: 11))
+                }
                 .foregroundColor(palette.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -316,21 +331,29 @@ struct OverdubSessionView: View {
                     startRecording()
                 } label: {
                     HStack {
-                        Image(systemName: "record.circle")
-                            .font(.system(size: 20))
-                        Text("Record Layer \(existingLayers.count + 1)")
-                            .fontWeight(.semibold)
+                        if isStartingRecording {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(0.8)
+                            Text("Starting…")
+                                .fontWeight(.semibold)
+                        } else {
+                            Image(systemName: "record.circle")
+                                .font(.system(size: 20))
+                            Text("Record Layer \(existingLayers.count + 1)")
+                                .fontWeight(.semibold)
+                        }
                     }
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(isPrepared ? Color.red : Color.red.opacity(0.4))
+                            .fill(isPrepared && !isStartingRecording ? Color.red : Color.red.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!isPrepared)
+                .disabled(!isPrepared || isStartingRecording)
                 .opacity(isPrepared ? 1.0 : 0.6)
 
                 if !isPrepared {
@@ -643,18 +666,14 @@ struct OverdubSessionView: View {
     }
 
     private func startRecording() {
-        print("🎙️ [OverdubSessionView] startRecording() called")
-
         // Check max layers
         guard existingLayers.count < OverdubGroup.maxLayers else {
-            print("⚠️ [OverdubSessionView] Max layers reached")
             showMaxLayersAlert = true
             return
         }
 
         // Check headphones
         guard AudioSessionManager.shared.isHeadphoneMonitoringActive() else {
-            print("⚠️ [OverdubSessionView] No headphones connected")
             showHeadphonesAlert = true
             return
         }
@@ -662,20 +681,22 @@ struct OverdubSessionView: View {
         // Generate file URL for new layer
         let layerURL = generateLayerFileURL()
         recordedLayerURL = layerURL
-        print("🎙️ [OverdubSessionView] Recording to: \(layerURL.lastPathComponent)")
+        isStartingRecording = true
 
-        do {
-            try engine.startRecording(
-                outputURL: layerURL,
-                quality: appState.appSettings.recordingQuality
-            )
-            isRecording = true
-            print("✅ [OverdubSessionView] Recording started successfully")
-        } catch {
-            errorMessage = "Failed to start recording: \(error.localizedDescription)"
-            showErrorAlert = true
-            recordedLayerURL = nil
-            print("❌ [OverdubSessionView] Failed to start recording: \(error)")
+        Task {
+            do {
+                try await engine.startRecording(
+                    outputURL: layerURL,
+                    quality: appState.appSettings.recordingQuality
+                )
+                isRecording = true
+                isStartingRecording = false
+            } catch {
+                errorMessage = error.localizedDescription
+                showErrorAlert = true
+                recordedLayerURL = nil
+                isStartingRecording = false
+            }
         }
     }
 
@@ -761,14 +782,17 @@ struct OverdubSessionView: View {
     }
 
     private func handleRouteChange(_ notification: Notification) {
-        // Check if headphones were disconnected
         if !AudioSessionManager.shared.isHeadphoneMonitoringActive() {
+            // Headphones disconnected — stop everything
             if isRecording {
-                // Stop recording immediately
                 stopRecording()
             }
             engine.stop()
+            isPrepared = false
             showHeadphonesAlert = true
+        } else if !isPrepared && !isRecording {
+            // Headphones reconnected — re-prepare engine
+            prepareEngine()
         }
     }
 

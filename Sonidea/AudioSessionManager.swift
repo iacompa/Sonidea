@@ -150,17 +150,18 @@ final class AudioSessionManager {
 
     // MARK: - Session Configuration
 
-    /// Configure audio session for recording with specified quality preset
-    func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) throws {
+    /// Configure audio session for recording with specified quality preset.
+    /// For Bluetooth: waits for HFP route stabilization to avoid invalid input format.
+    func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) async throws {
         let session = AVAudioSession.sharedInstance()
 
+        // Use .allowBluetooth (HFP, supports mic) and .allowBluetoothA2DP (output).
+        // .playAndRecord with .allowBluetooth will negotiate HFP when input is needed.
         var options: AVAudioSession.CategoryOptions = [
             .defaultToSpeaker,
-            .allowBluetooth
+            .allowBluetooth,
+            .allowBluetoothA2DP
         ]
-
-        // Add A2DP support if available (iOS 10+)
-        options.insert(.allowBluetoothA2DP)
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
 
@@ -168,13 +169,22 @@ final class AudioSessionManager {
         let requestedSampleRate = quality.sampleRate
         try? session.setPreferredSampleRate(requestedSampleRate)
 
-        // Force mono input - we only record mono for best quality on mobile devices
+        // Force mono input
         try? session.setPreferredInputNumberOfChannels(1)
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
-        // Store actual sample rate (may differ from requested if hardware doesn't support it)
+        // Wait for Bluetooth HFP route stabilization if needed.
+        // A2DP→HFP transition takes ~200-500ms; without this, inputNode format may be invalid.
+        if isBluetoothOutput() {
+            #if DEBUG
+            print("🔄 [AudioSession] Bluetooth detected — waiting for HFP route stabilization")
+            #endif
+            try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+        }
+
+        // Store actual sample rate
         actualSampleRate = session.sampleRate
 
         if actualSampleRate != requestedSampleRate {
@@ -187,9 +197,30 @@ final class AudioSessionManager {
         // Refresh inputs after activation
         refreshAvailableInputs()
 
-        // Log the configured route for debugging
         logCurrentRoute(context: "configureForRecording")
 
+        isRecordingActive = true
+    }
+
+    /// Synchronous variant for non-Bluetooth paths (backwards compatibility)
+    func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) throws {
+        let session = AVAudioSession.sharedInstance()
+
+        var options: AVAudioSession.CategoryOptions = [
+            .defaultToSpeaker,
+            .allowBluetooth,
+            .allowBluetoothA2DP
+        ]
+
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
+        try? session.setPreferredSampleRate(quality.sampleRate)
+        try? session.setPreferredInputNumberOfChannels(1)
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+        actualSampleRate = session.sampleRate
+        applyPreferredInput(from: settings)
+        refreshAvailableInputs()
+        logCurrentRoute(context: "configureForRecording")
         isRecordingActive = true
     }
 
@@ -296,6 +327,20 @@ final class AudioSessionManager {
             }
         }
 
+        return false
+    }
+
+    /// Check if the current output route is Bluetooth (AirPods, BT headphones, etc.)
+    func isBluetoothOutput() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        for output in session.currentRoute.outputs {
+            switch output.portType {
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                return true
+            default:
+                continue
+            }
+        }
         return false
     }
 

@@ -237,8 +237,10 @@ final class OverdubEngine {
 
     // MARK: - Recording Control
 
-    /// Start recording a new layer while playing the base
-    func startRecording(outputURL: URL, quality: RecordingQualityPreset) throws {
+    /// Start recording a new layer while playing the base.
+    /// For Bluetooth: re-activates the session and waits for route stabilization
+    /// to avoid error 560226676 (invalid input format during HFP transition).
+    func startRecording(outputURL: URL, quality: RecordingQualityPreset) async throws {
         guard let engine = audioEngine else {
             throw OverdubEngineError.engineNotPrepared
         }
@@ -248,50 +250,83 @@ final class OverdubEngine {
             throw OverdubEngineError.headphonesRequired
         }
 
-        // Get audio session for validation
         let session = AVAudioSession.sharedInstance()
 
+        // --- Ensure output directory exists and handle file collisions ---
+        let outputDir = outputURL.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: outputDir.path) {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        }
+        var finalURL = outputURL
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            // Append UUID to avoid collision
+            let stem = finalURL.deletingPathExtension().lastPathComponent
+            let ext = finalURL.pathExtension
+            finalURL = outputDir.appendingPathComponent("\(stem)_\(UUID().uuidString.prefix(6)).\(ext)")
+        }
+
+        // --- Re-activate session to ensure Bluetooth HFP route is stable ---
+        // When switching from A2DP to HFP, iOS needs time to negotiate the route.
+        // Re-setting the category + activating forces the route transition now.
+        let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
+        if isBluetooth {
+            #if DEBUG
+            print("🔄 [OverdubEngine] Bluetooth detected — re-activating session for HFP route")
+            #endif
+            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+            // Wait for route to stabilize (HFP negotiation takes ~200-500ms)
+            try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+        }
+
         #if DEBUG
-        // Log audio session state for debugging
         print("🎙️ [OverdubEngine] Starting recording - Debug info:")
         print("   Session category: \(session.category.rawValue)")
-        print("   Session mode: \(session.mode.rawValue)")
         print("   Session sample rate: \(session.sampleRate)")
-        print("   IO buffer duration: \(session.ioBufferDuration)")
-        print("   Input channels: \(session.inputNumberOfChannels)")
-        print("   Output channels: \(session.outputNumberOfChannels)")
         print("   Route inputs: \(session.currentRoute.inputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
         print("   Route outputs: \(session.currentRoute.outputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
         #endif
 
         // Verify we have a valid input route
         if session.currentRoute.inputs.isEmpty {
+            if isBluetooth {
+                throw OverdubEngineError.recordingFailed("Can't record with this Bluetooth device — it doesn't support microphone input. Try using wired headphones or AirPods.")
+            }
             throw OverdubEngineError.recordingFailed("No audio input available. Please check your microphone connection.")
         }
 
-        // Get input node and validate its format
+        // Stop and reset the engine to pick up the new route/format
+        // This is critical for Bluetooth: the input node format is stale until the engine restarts.
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine.reset()
+
+        // Get input node and validate its format AFTER engine reset
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         #if DEBUG
-        print("   Input node format: \(inputFormat)")
-        print("   Input format sample rate: \(inputFormat.sampleRate)")
-        print("   Input format channels: \(inputFormat.channelCount)")
+        print("   Input format after reset: sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)")
         #endif
 
-        // Validate input format - error 560226676 occurs when format is invalid
+        // Validate input format
         guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
-            throw OverdubEngineError.recordingFailed("Invalid audio input format. Sample rate: \(inputFormat.sampleRate), channels: \(inputFormat.channelCount). Try disconnecting and reconnecting your audio device.")
+            if isBluetooth {
+                throw OverdubEngineError.recordingFailed("Can't start recording with this Bluetooth route. Try disconnecting Bluetooth or use wired headphones.")
+            }
+            throw OverdubEngineError.recordingFailed("Invalid audio input format. Try disconnecting and reconnecting your audio device.")
         }
 
         // Create recording file with validated format
-        let settings = recordingSettings(for: quality)
+        let fileSettings = recordingSettings(for: quality)
 
         let file: AVAudioFile
         do {
             file = try AVAudioFile(
-                forWriting: outputURL,
-                settings: settings,
+                forWriting: finalURL,
+                settings: fileSettings,
                 commonFormat: inputFormat.commonFormat,
                 interleaved: inputFormat.isInterleaved
             )
@@ -299,55 +334,37 @@ final class OverdubEngine {
             #if DEBUG
             print("❌ [OverdubEngine] Failed to create audio file: \(error)")
             if let nsError = error as NSError? {
-                print("   Error domain: \(nsError.domain)")
-                print("   Error code: \(nsError.code)")
-                print("   User info: \(nsError.userInfo)")
+                print("   Error domain: \(nsError.domain), code: \(nsError.code)")
             }
             #endif
             throw OverdubEngineError.recordingFailed("Could not create recording file: \(error.localizedDescription)")
         }
 
         self.recordingFile = file
-        self.recordingFileURL = outputURL
+        self.recordingFileURL = finalURL
 
-        // Install tap on input to record - use the validated input format
-        do {
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
-                do {
-                    try file.write(from: buffer)
-                } catch {
-                    print("❌ [OverdubEngine] Error writing buffer: \(error)")
-                }
-
-                // Update meter
-                Task { @MainActor in
-                    self?.updateMeterFromBuffer(buffer)
-                }
+        // Install tap on input to record
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+            do {
+                try file.write(from: buffer)
+            } catch {
+                print("❌ [OverdubEngine] Error writing buffer: \(error)")
             }
-        } catch {
-            #if DEBUG
-            print("❌ [OverdubEngine] Failed to install tap: \(error)")
-            #endif
-            throw OverdubEngineError.recordingFailed("Could not access microphone: \(error.localizedDescription)")
+
+            Task { @MainActor in
+                self?.updateMeterFromBuffer(buffer)
+            }
         }
 
-        // Start engine if not running
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                // Clean up tap before throwing
-                inputNode.removeTap(onBus: 0)
-                #if DEBUG
-                print("❌ [OverdubEngine] Failed to start engine: \(error)")
-                if let nsError = error as NSError? {
-                    print("   Error domain: \(nsError.domain)")
-                    print("   Error code: \(nsError.code)")
-                    print("   User info: \(nsError.userInfo)")
-                }
-                #endif
-                throw OverdubEngineError.recordingFailed("Could not start audio engine: \(error.localizedDescription)")
-            }
+        // Start engine
+        do {
+            try engine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            #if DEBUG
+            print("❌ [OverdubEngine] Failed to start engine: \(error)")
+            #endif
+            throw OverdubEngineError.recordingFailed("Could not start audio engine: \(error.localizedDescription)")
         }
 
         // Start playback of base and layers
@@ -359,7 +376,7 @@ final class OverdubEngine {
         state = .recording
         startTimer()
 
-        print("🎙️ [OverdubEngine] Started recording to: \(outputURL.lastPathComponent)")
+        print("🎙️ [OverdubEngine] Started recording to: \(finalURL.lastPathComponent)")
     }
 
     /// Stop recording and return the recorded duration
