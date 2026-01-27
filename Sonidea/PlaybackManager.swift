@@ -26,9 +26,7 @@ final class PlaybackManager: NSObject {
     func load(url: URL) {
         stop()
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
+            try AudioSessionManager.shared.configureForPlayback()
 
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.delegate = self
@@ -60,6 +58,7 @@ final class PlaybackManager: NSObject {
         currentTime = 0
         duration = 0
         stopTimer()
+        AudioSessionManager.shared.deactivate()
     }
 
     func togglePlayPause() {
@@ -97,8 +96,9 @@ extension PlaybackManager: @preconcurrency AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
             self.isPlaying = false
-            self.currentTime = 0
+            self.currentTime = self.duration
             self.stopTimer()
+            AudioSessionManager.shared.deactivate()
         }
     }
 }

@@ -440,8 +440,10 @@ final class AppState {
     }
 
     func emptyTrash() {
-        for recording in trashedRecordings {
+        let trashed = trashedRecordings
+        for recording in trashed {
             try? FileManager.default.removeItem(at: recording.fileURL)
+            triggerSyncForDeletion(recording.id)
         }
         recordings.removeAll { $0.isTrashed }
         saveRecordings()
@@ -451,6 +453,7 @@ final class AppState {
         let toDelete = recordings.filter { $0.shouldPurge }
         for recording in toDelete {
             try? FileManager.default.removeItem(at: recording.fileURL)
+            triggerSyncForDeletion(recording.id)
         }
         recordings.removeAll { $0.shouldPurge }
         if !toDelete.isEmpty {

@@ -239,7 +239,7 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
     }
 
     // Well-known system album IDs
-    static let draftsID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    static let draftsID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let importsID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 
     static let drafts = Album(

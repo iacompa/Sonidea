@@ -98,7 +98,7 @@ struct OverdubSessionView: View {
             .alert("Headphones Required", isPresented: $showHeadphonesAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they provide zero-latency monitoring and perfect sync. Bluetooth headphones will work but introduce a noticeable audio delay.")
+                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they typically provide lower latency and more consistent timing. Bluetooth headphones will work but may introduce noticeable audio delay.")
             }
             .alert("Maximum Layers Reached", isPresented: $showMaxLayersAlert) {
                 Button("OK", role: .cancel) {}

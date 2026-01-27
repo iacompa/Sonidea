@@ -348,6 +348,7 @@ struct ZoomableWaveformEditor: View {
     // MARK: - Coordinate Conversion
 
     private func xToTime(_ x: CGFloat, width: CGFloat) -> TimeInterval {
+        guard width > 0 else { return 0 }
         let progress = x / width
         let time = timelineState.visibleStartTime + (Double(progress) * timelineState.visibleDuration)
         return Swift.max(0, Swift.min(time, duration))

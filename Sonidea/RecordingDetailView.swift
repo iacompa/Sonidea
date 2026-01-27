@@ -543,7 +543,7 @@ struct RecordingDetailView: View {
             .alert("Headphones Required", isPresented: $showHeadphonesRequiredAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they provide zero-latency monitoring and perfect sync. Bluetooth headphones will work but introduce a noticeable audio delay.")
+                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they typically provide lower latency and more consistent timing. Bluetooth headphones will work but may introduce noticeable audio delay.")
             }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {

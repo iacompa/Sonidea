@@ -857,6 +857,9 @@ final class RecorderManager: NSObject {
 
         resetState()
         clearInProgressRecording()
+
+        // Deactivate audio session when discarding
+        AudioSessionManager.shared.deactivate()
     }
 
     /// Reset all recording state

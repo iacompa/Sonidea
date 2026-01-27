@@ -32,7 +32,7 @@ final class WaveformTimeline {
 
     /// Duration currently visible based on zoom
     var visibleDuration: TimeInterval {
-        duration / Double(zoomScale)
+        duration / Double(max(zoomScale, 0.01))
     }
 
     /// Seconds per point (pixel) at current zoom - useful for determining precision
@@ -799,7 +799,7 @@ struct WaveformBarsView: View {
                 var centerLine = Path()
                 centerLine.move(to: CGPoint(x: 0, y: centerY))
                 centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
-                context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
+                context.stroke(centerLine, with: .color(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.12)), lineWidth: 0.5)
             }
 
             // === 2. Draw Waveform (vertical bars with optional selection coloring) ===

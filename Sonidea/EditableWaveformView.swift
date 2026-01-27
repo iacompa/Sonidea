@@ -51,10 +51,12 @@ struct EditableWaveformView: View {
     // Drag state for left handle
     @State private var leftHandleDragStartTime: TimeInterval = 0
     @State private var leftHandleDragStartX: CGFloat = 0
+    @State private var isLeftHandleDragging = false
 
     // Drag state for right handle
     @State private var rightHandleDragStartTime: TimeInterval = 0
     @State private var rightHandleDragStartX: CGFloat = 0
+    @State private var isRightHandleDragging = false
 
     // Marker drag state
     @State private var draggingMarkerId: UUID?
@@ -407,7 +409,8 @@ struct EditableWaveformView: View {
             DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
                     // Initialize on first change
-                    if leftHandleDragStartTime == 0 && leftHandleDragStartX == 0 {
+                    if !isLeftHandleDragging {
+                        isLeftHandleDragging = true
                         leftHandleDragStartTime = selectionStart
                         leftHandleDragStartX = value.startLocation.x
                         impactGenerator.impactOccurred(intensity: 0.5)
@@ -440,6 +443,7 @@ struct EditableWaveformView: View {
                     selectionStart = newTime
                 }
                 .onEnded { _ in
+                    isLeftHandleDragging = false
                     leftHandleDragStartTime = 0
                     leftHandleDragStartX = 0
                     impactGenerator.impactOccurred(intensity: 0.3)
@@ -464,7 +468,8 @@ struct EditableWaveformView: View {
             DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
                     // Initialize on first change
-                    if rightHandleDragStartTime == 0 && rightHandleDragStartX == 0 {
+                    if !isRightHandleDragging {
+                        isRightHandleDragging = true
                         rightHandleDragStartTime = selectionEnd
                         rightHandleDragStartX = value.startLocation.x
                         impactGenerator.impactOccurred(intensity: 0.5)
@@ -497,6 +502,7 @@ struct EditableWaveformView: View {
                     selectionEnd = newTime
                 }
                 .onEnded { _ in
+                    isRightHandleDragging = false
                     rightHandleDragStartTime = 0
                     rightHandleDragStartX = 0
                     impactGenerator.impactOccurred(intensity: 0.3)

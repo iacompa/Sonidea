@@ -37,6 +37,7 @@ struct WaveformData: Equatable {
     /// - Parameter viewWidth: Width of the view in points
     /// - Returns: The LOD level index and samples array
     func lodLevel(for zoomScale: CGFloat, viewWidth: CGFloat) -> (level: Int, samples: [Float]) {
+        guard duration > 0, zoomScale > 0 else { return (0, lodLevels.first ?? []) }
         // Calculate how many seconds are visible
         let visibleDuration = duration / Double(zoomScale)
 

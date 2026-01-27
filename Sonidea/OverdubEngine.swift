@@ -222,6 +222,7 @@ final class OverdubEngine {
             player.stop()
         }
         audioEngine?.stop()
+        AudioSessionManager.shared.deactivate()
         stopTimer()
         currentPlaybackTime = 0
         recordingDuration = 0
@@ -329,6 +330,19 @@ final class OverdubEngine {
             engine.stop()
         }
         engine.reset()
+
+        // Re-attach and re-connect player nodes (engine.reset() detaches all nodes)
+        let mainMixer = engine.mainMixerNode
+        if let basePlayer = basePlayerNode, let baseFile = baseAudioFile {
+            engine.attach(basePlayer)
+            engine.connect(basePlayer, to: mainMixer, format: baseFile.processingFormat)
+        }
+        for (index, layerPlayer) in layerPlayerNodes.enumerated() {
+            guard index < layerAudioFiles.count else { continue }
+            let layerFile = layerAudioFiles[index]
+            engine.attach(layerPlayer)
+            engine.connect(layerPlayer, to: mainMixer, format: layerFile.processingFormat)
+        }
 
         // Get input node and validate its format AFTER engine reset
         let inputNode = engine.inputNode

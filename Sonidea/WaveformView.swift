@@ -19,6 +19,7 @@ struct WaveformView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
+    @State private var initialPinchZoom: CGFloat = 1.0
 
     /// Convenience initializer for backward compatibility (envelope only)
     init(samples: [Float], progress: Double = 0, zoomScale: Binding<CGFloat>) {
@@ -64,8 +65,14 @@ struct WaveformView: View {
             .gesture(
                 MagnificationGesture()
                     .onChanged { value in
-                        let newScale = zoomScale * value
+                        if initialPinchZoom == 1.0 {
+                            initialPinchZoom = zoomScale
+                        }
+                        let newScale = initialPinchZoom * value
                         zoomScale = min(max(newScale, minZoom), maxZoom)
+                    }
+                    .onEnded { _ in
+                        initialPinchZoom = 1.0
                     }
             )
         }
@@ -122,7 +129,7 @@ struct WaveformCanvas: View {
             var centerLine = Path()
             centerLine.move(to: CGPoint(x: 0, y: centerY))
             centerLine.addLine(to: CGPoint(x: size.width, y: centerY))
-            context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
+            context.stroke(centerLine, with: .color(isDarkMode ? Color.white.opacity(0.15) : Color.black.opacity(0.12)), lineWidth: 0.5)
 
             // === 2. Draw Waveform ===
             // Use envelope samples for reliable display - mirrored around center line

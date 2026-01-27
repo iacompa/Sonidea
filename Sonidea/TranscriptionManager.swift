@@ -112,18 +112,24 @@ final class TranscriptionManager {
 
         // Perform recognition
         return try await withCheckedThrowingContinuation { continuation in
+            var hasResumed = false
             recognizer.recognitionTask(with: request) { result, error in
+                guard !hasResumed else { return }
+
                 if let error = error {
+                    hasResumed = true
                     continuation.resume(throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
                     return
                 }
 
                 guard let result = result else {
+                    hasResumed = true
                     continuation.resume(throwing: TranscriptionError.recognitionFailed("No result returned"))
                     return
                 }
 
                 if result.isFinal {
+                    hasResumed = true
                     let transcript = result.bestTranscription.formattedString
                     continuation.resume(returning: transcript)
                 }
