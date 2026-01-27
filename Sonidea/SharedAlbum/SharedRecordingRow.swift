@@ -91,7 +91,7 @@ struct SharedRecordingRow: View {
                 )
 
             // Icon
-            Image(systemName: recording.presetIcon.systemName)
+            Image(systemName: recording.displayIconSymbol)
                 .font(.system(size: 18))
                 .foregroundColor(recording.iconSymbolColor(for: colorScheme))
 

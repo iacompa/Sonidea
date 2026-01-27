@@ -2913,6 +2913,7 @@ struct SettingsSheetView: View {
     @State private var showCreateSharedAlbumSheet = false
     @State private var isResetButtonAnimating = false
     @State private var activeHelpTopic: HelpTopic?
+    @State private var showAutoIconInfo = false
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -3068,6 +3069,16 @@ struct SettingsSheetView: View {
                         }
                     }
                     .listRowBackground(palette.cardBackground)
+
+                    // Recording Mode (informational - mono only)
+                    HStack {
+                        Text("Recording Mode")
+                            .foregroundStyle(palette.textPrimary)
+                        Spacer()
+                        Text("Mono")
+                            .foregroundStyle(palette.textSecondary)
+                    }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     HStack {
                         Text("Recording")
@@ -3083,8 +3094,11 @@ struct SettingsSheetView: View {
                     }
                     .textCase(nil)
                 } footer: {
-                    Text(appState.appSettings.recordingQuality.description)
-                        .foregroundColor(palette.textSecondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(appState.appSettings.recordingQuality.description)
+                        Text("Mono recording captures the best quality on mobile devices. Stereo, Dual-Mono, and Spatial modes may be added in a future update.")
+                    }
+                    .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -3130,9 +3144,20 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
-                        .tint(palette.toggleOnTint)
-                        .listRowBackground(palette.cardBackground)
+                    HStack {
+                        Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
+                            .tint(palette.toggleOnTint)
+
+                        Button {
+                            showAutoIconInfo = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 18))
+                                .foregroundColor(palette.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listRowBackground(palette.cardBackground)
                 } header: {
                     Text("Smart Detection")
                         .foregroundColor(palette.textSecondary)
@@ -3627,6 +3652,11 @@ struct SettingsSheetView: View {
             }
             .sheet(isPresented: $showCreateSharedAlbumSheet) {
                 CreateSharedAlbumSheet()
+            }
+            .sheet(isPresented: $showAutoIconInfo) {
+                AutoIconInfoSheet()
+                    .presentationDetents([.height(280)])
+                    .presentationDragIndicator(.visible)
             }
         }
     }

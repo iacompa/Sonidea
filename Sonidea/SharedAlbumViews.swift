@@ -1346,7 +1346,7 @@ struct SharedRecordingDetailView: View {
                     )
                     .frame(width: 120, height: 120)
 
-                Image(systemName: recording.presetIcon.systemName)
+                Image(systemName: recording.displayIconSymbol)
                     .font(.system(size: 48))
                     .foregroundColor(palette.accent)
 

@@ -615,7 +615,7 @@ struct RecordingIconTile: View {
     let colorScheme: ColorScheme
 
     var body: some View {
-        Image(systemName: recording.presetIcon.systemName)
+        Image(systemName: recording.displayIconSymbol)
             .font(.system(size: 24))
             .foregroundColor(recording.iconSymbolColor(for: colorScheme))
             .frame(width: 44, height: 44)

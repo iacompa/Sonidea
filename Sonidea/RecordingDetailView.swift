@@ -39,6 +39,7 @@ private struct RecordingSnapshot: Equatable {
     let longitude: Double?
     let iconColorHex: String?
     let iconName: String?
+    let secondaryIcons: [String]?
     let fileURL: URL
     let duration: TimeInterval
     let markers: [Marker]
@@ -54,6 +55,7 @@ private struct RecordingSnapshot: Equatable {
         self.longitude = recording.longitude
         self.iconColorHex = recording.iconColorHex
         self.iconName = recording.iconName
+        self.secondaryIcons = recording.secondaryIcons
         self.fileURL = recording.fileURL
         self.duration = recording.duration
         self.markers = recording.markers
@@ -151,8 +153,10 @@ struct RecordingDetailView: View {
 
     // Icon picker state
     @State private var showIconPicker = false
-    @State private var editedIcon: PresetIcon
+    @State private var editedIconSymbol: String  // SF Symbol name (main icon)
     @State private var iconWasModified = false
+    @State private var editedSecondaryIcons: [String]  // Secondary icons for top bar (max 2)
+    @State private var secondaryIconsWasModified = false
 
     // Playback error state
     @State private var showPlaybackError = false
@@ -172,7 +176,8 @@ struct RecordingDetailView: View {
         _editedLocationLabel = State(initialValue: recording.locationLabel)
         _currentRecording = State(initialValue: recording)
         _editedIconColor = State(initialValue: recording.iconColor)
-        _editedIcon = State(initialValue: recording.presetIcon)
+        _editedIconSymbol = State(initialValue: recording.iconName ?? recording.presetIcon.systemName)
+        _editedSecondaryIcons = State(initialValue: recording.secondaryIcons ?? [])
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
         _editedMarkers = State(initialValue: recording.markers)
         _selectionEnd = State(initialValue: recording.duration)
@@ -194,7 +199,10 @@ struct RecordingDetailView: View {
             snapshotRecording.iconColorHex = editedIconColor.toHex()
         }
         if iconWasModified {
-            snapshotRecording.iconName = editedIcon.rawValue
+            snapshotRecording.iconName = editedIconSymbol
+        }
+        if secondaryIconsWasModified {
+            snapshotRecording.secondaryIcons = editedSecondaryIcons.isEmpty ? nil : editedSecondaryIcons
         }
         snapshotRecording.markers = editedMarkers
         if let pendingURL = pendingAudioEdit {
@@ -215,6 +223,8 @@ struct RecordingDetailView: View {
                 lastPlaybackPosition: 0,
                 iconColorHex: snapshotRecording.iconColorHex,
                 iconName: snapshotRecording.iconName,
+                iconSourceRaw: snapshotRecording.iconSourceRaw,
+                secondaryIcons: snapshotRecording.secondaryIcons,
                 eqSettings: snapshotRecording.eqSettings,
                 projectId: snapshotRecording.projectId,
                 parentRecordingId: snapshotRecording.parentRecordingId,
@@ -252,6 +262,39 @@ struct RecordingDetailView: View {
         return currentRecording.duration
     }
 
+    /// Accessibility label for the suggested icons strip
+    private var suggestedIconsAccessibilityLabel: String {
+        // Priority 1: Pinned icons
+        if !editedSecondaryIcons.isEmpty {
+            let labels = editedSecondaryIcons.prefix(3).enumerated().map { index, symbol in
+                let iconDef = IconCatalog.allIcons.first { $0.sfSymbol == symbol }
+                let name = iconDef?.displayName ?? "Icon"
+                let prefix = index == 0 ? "Pinned" : "Also pinned"
+                return "\(prefix): \(name)"
+            }
+            return labels.joined(separator: "; ")
+        }
+
+        // Priority 2: Predictions
+        let predictions = (currentRecording.iconPredictions ?? [])
+            .filter { $0.confidence >= IconPrediction.suggestionThreshold }
+            .prefix(3)
+
+        if predictions.isEmpty {
+            let iconDef = IconCatalog.allIcons.first { $0.sfSymbol == editedIconSymbol }
+            return "Icon: \(iconDef?.displayName ?? "Recording")"
+        }
+
+        let labels = predictions.enumerated().map { index, pred in
+            let iconDef = IconCatalog.allIcons.first { $0.sfSymbol == pred.iconSymbol }
+            let name = iconDef?.displayName ?? "Icon"
+            let pct = Int(pred.confidence * 100)
+            let prefix = index == 0 ? "Primary" : "Suggested"
+            return "\(prefix): \(name), \(pct)%"
+        }
+        return labels.joined(separator: "; ")
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -275,7 +318,7 @@ struct RecordingDetailView: View {
                     }
                 )
             }
-            .navigationTitle("Details")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -295,15 +338,17 @@ struct RecordingDetailView: View {
                         }
                         .disabled(isExporting)
 
-                        // Icon picker button
+                        // Main icon + up to 2 secondary icons strip
                         Button {
                             showIconPicker = true
                         } label: {
-                            Image(systemName: editedIcon.systemName)
-                                .font(.system(size: 16))
-                                .foregroundColor(editedIconColor)
-                                .frame(width: 24, height: 24)
+                            TopBarSuggestedIcons(
+                                mainIcon: editedIconSymbol,
+                                secondaryIcons: editedSecondaryIcons,
+                                tintColor: editedIconColor
+                            )
                         }
+                        .accessibilityLabel(suggestedIconsAccessibilityLabel)
 
                         // Icon color indicator
                         Button {
@@ -453,10 +498,19 @@ struct RecordingDetailView: View {
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showIconPicker) {
-                IconPickerSheet(selectedIcon: $editedIcon, tintColor: editedIconColor, onIconChanged: {
-                    iconWasModified = true
-                })
-                .presentationDetents([.height(380)])
+                IconPickerSheet(
+                    selectedIconSymbol: $editedIconSymbol,
+                    secondaryIcons: $editedSecondaryIcons,
+                    tintColor: editedIconColor,
+                    suggestions: currentRecording.iconPredictions ?? [],
+                    onIconChanged: {
+                        iconWasModified = true
+                    },
+                    onSecondaryIconsChanged: {
+                        secondaryIconsWasModified = true
+                    }
+                )
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showLocationEditor) {
@@ -2278,7 +2332,12 @@ struct RecordingDetailView: View {
         }
         // Only update iconName if user explicitly changed it via IconPicker
         if iconWasModified {
-            updated.iconName = editedIcon.rawValue
+            updated.iconName = editedIconSymbol
+            updated.iconSource = .user  // Mark as user-set to prevent auto-override
+        }
+        // Save secondary icons if modified
+        if secondaryIconsWasModified {
+            updated.secondaryIcons = editedSecondaryIcons.isEmpty ? nil : editedSecondaryIcons
         }
         // Otherwise preserve the original iconColorHex (already in currentRecording)
         updated.eqSettings = localEQSettings
@@ -2310,6 +2369,8 @@ struct RecordingDetailView: View {
                 lastPlaybackPosition: 0,  // Reset playback position after edit
                 iconColorHex: updated.iconColorHex,
                 iconName: updated.iconName,
+                iconSourceRaw: updated.iconSourceRaw,  // Preserve icon source
+                secondaryIcons: updated.secondaryIcons,  // Preserve secondary icons
                 eqSettings: updated.eqSettings,
                 projectId: updated.projectId,
                 parentRecordingId: updated.parentRecordingId,
@@ -3053,74 +3114,462 @@ struct IconColorPickerSheet: View {
 
 // MARK: - Icon Picker Sheet
 
+/// Suggestion type for visual highlighting
+enum IconSuggestionType {
+    case none
+    case primary    // Strong highlight (first suggestion)
+    case secondary  // Subtle highlight (2nd/3rd suggestion)
+}
+
+// MARK: - Top Bar Suggested Icons
+
+/// Compact icon strip for the navigation bar showing 1-3 icons
+/// Shows: main icon (always first) + up to 2 secondary icons
+struct TopBarSuggestedIcons: View {
+    let mainIcon: String
+    let secondaryIcons: [String]
+    let tintColor: Color
+
+    /// Icons to display: main icon first, then up to 2 secondary icons
+    private var displayIcons: [(symbol: String, isMain: Bool)] {
+        var icons: [(symbol: String, isMain: Bool)] = [(symbol: mainIcon, isMain: true)]
+
+        // Add up to 2 secondary icons (that aren't the same as main)
+        for secondary in secondaryIcons.prefix(2) where secondary != mainIcon {
+            icons.append((symbol: secondary, isMain: false))
+        }
+
+        return icons
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(displayIcons.enumerated()), id: \.offset) { _, item in
+                TopBarIconItem(
+                    symbol: item.symbol,
+                    isMain: item.isMain,
+                    tintColor: tintColor
+                )
+            }
+        }
+    }
+}
+
+/// Individual icon item in the top bar strip - plain tintable SF Symbol
+private struct TopBarIconItem: View {
+    let symbol: String
+    let isMain: Bool
+    let tintColor: Color
+
+    /// Icon size: main icon slightly larger
+    private var iconSize: CGFloat {
+        isMain ? 20 : 17
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: iconSize, weight: isMain ? .semibold : .regular))
+            .foregroundColor(tintColor)
+    }
+}
+
 struct IconPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
 
-    @Binding var selectedIcon: PresetIcon
+    @Binding var selectedIconSymbol: String  // Main icon
+    @Binding var secondaryIcons: [String]    // Up to 2 secondary icons
     let tintColor: Color
-    let onIconChanged: () -> Void
+    let suggestions: [IconPrediction]
+    let onIconChanged: () -> Void            // Called when main icon changes
+    let onSecondaryIconsChanged: () -> Void  // Called when secondary icons change
+
+    @State private var searchText = ""
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
+    private let maxSecondaryIcons = 2
+
+    /// Primary suggestion (highest confidence)
+    private var primarySuggestion: IconPrediction? {
+        suggestions.first
+    }
+
+    /// Secondary suggestions (2nd and 3rd highest confidence)
+    private var secondarySuggestions: [IconPrediction] {
+        Array(suggestions.dropFirst().prefix(2))
+    }
+
+    /// Check if an icon is a secondary icon
+    private func isSecondary(_ symbol: String) -> Bool {
+        secondaryIcons.contains(symbol)
+    }
+
+    /// Toggle secondary icon status
+    private func toggleSecondary(_ symbol: String) {
+        if let index = secondaryIcons.firstIndex(of: symbol) {
+            secondaryIcons.remove(at: index)
+            onSecondaryIconsChanged()
+        } else if secondaryIcons.count < maxSecondaryIcons && symbol != selectedIconSymbol {
+            secondaryIcons.append(symbol)
+            onSecondaryIconsChanged()
+        }
+    }
+
+    /// Set icon as main icon
+    private func setAsMainIcon(_ symbol: String) {
+        // Remove from secondary if it was there
+        if let index = secondaryIcons.firstIndex(of: symbol) {
+            secondaryIcons.remove(at: index)
+            onSecondaryIconsChanged()
+        }
+        selectedIconSymbol = symbol
+        onIconChanged()
+    }
+
+    /// Get the suggestion type for an icon symbol
+    private func suggestionType(for symbol: String) -> IconSuggestionType {
+        if symbol == primarySuggestion?.iconSymbol {
+            return .primary
+        } else if secondarySuggestions.contains(where: { $0.iconSymbol == symbol }) {
+            return .secondary
+        }
+        return .none
+    }
+
+    /// Suggested icons as IconDefinitions (for display)
+    private var suggestedIcons: [IconDefinition] {
+        suggestions.compactMap { prediction in
+            IconCatalog.allIcons.first { $0.sfSymbol == prediction.iconSymbol }
+        }
+    }
+
+    /// Filtered icons based on search
+    private var filteredCategories: [(category: IconCategory, icons: [IconDefinition])] {
+        if searchText.isEmpty {
+            return IconCatalog.iconsByCategory
+        }
+        let query = searchText.lowercased()
+        return IconCatalog.iconsByCategory.compactMap { (category, icons) in
+            let filtered = icons.filter { icon in
+                icon.displayName.lowercased().contains(query) ||
+                category.rawValue.lowercased().contains(query)
+            }
+            return filtered.isEmpty ? nil : (category: category, icons: filtered)
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 palette.background.ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    // Current icon preview
-                    HStack {
-                        Text("Selected Icon")
-                            .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
-                        Spacer()
-                        Image(systemName: selectedIcon.systemName)
-                            .font(.system(size: 28))
-                            .foregroundColor(tintColor)
-                            .frame(width: 44, height: 44)
-                            .background(tintColor.opacity(0.15))
-                            .cornerRadius(8)
-                    }
-                    .padding(.horizontal)
-
-                    // Icon grid (3 rows of 5)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
-                        ForEach(PresetIcon.allCases, id: \.self) { icon in
-                            Button {
-                                selectedIcon = icon
-                                onIconChanged()
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Image(systemName: icon.systemName)
-                                        .font(.system(size: 24))
-                                        .foregroundColor(selectedIcon == icon ? .white : tintColor)
-                                        .frame(width: 48, height: 48)
-                                        .background(selectedIcon == icon ? tintColor : tintColor.opacity(0.15))
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(selectedIcon == icon ? tintColor : Color.clear, lineWidth: 2)
-                                        )
-
-                                    Text(icon.displayName)
-                                        .font(.caption2)
-                                        .foregroundColor(palette.textSecondary)
-                                        .lineLimit(1)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        // Suggested section (only show when not searching and has suggestions)
+                        if !suggestedIcons.isEmpty && searchText.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                // Section header with sparkle
+                                HStack(spacing: 6) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(palette.accent)
+                                    Text("Suggested")
+                                        .font(.headline)
+                                        .foregroundColor(palette.textPrimary)
                                 }
+                                .padding(.horizontal)
+
+                                // Suggested icons grid
+                                LazyVGrid(columns: columns, spacing: 8) {
+                                    ForEach(suggestedIcons) { icon in
+                                        MainIconGridItem(
+                                            icon: icon,
+                                            isMainIcon: selectedIconSymbol == icon.sfSymbol,
+                                            isSecondaryIcon: isSecondary(icon.sfSymbol),
+                                            canAddSecondary: secondaryIcons.count < maxSecondaryIcons,
+                                            suggestionType: suggestionType(for: icon.sfSymbol),
+                                            tintColor: tintColor,
+                                            palette: palette,
+                                            onTap: {
+                                                setAsMainIcon(icon.sfSymbol)
+                                            },
+                                            onSetAsMain: {
+                                                setAsMainIcon(icon.sfSymbol)
+                                            },
+                                            onToggleSecondary: {
+                                                toggleSecondary(icon.sfSymbol)
+                                            }
+                                        )
+                                    }
+                                }
+                                .padding(.horizontal)
                             }
+                            .padding(.top, 8)
+                            .padding(.bottom, 8)
+                        }
+
+                        // Categories with icons
+                        ForEach(filteredCategories, id: \.category) { category, icons in
+                            VStack(alignment: .leading, spacing: 8) {
+                                // Category header
+                                Text(category.rawValue)
+                                    .font(.headline)
+                                    .foregroundColor(palette.textPrimary)
+                                    .padding(.horizontal)
+
+                                // Icon grid
+                                LazyVGrid(columns: columns, spacing: 8) {
+                                    ForEach(icons) { icon in
+                                        MainIconGridItem(
+                                            icon: icon,
+                                            isMainIcon: selectedIconSymbol == icon.sfSymbol,
+                                            isSecondaryIcon: isSecondary(icon.sfSymbol),
+                                            canAddSecondary: secondaryIcons.count < maxSecondaryIcons,
+                                            suggestionType: suggestionType(for: icon.sfSymbol),
+                                            tintColor: tintColor,
+                                            palette: palette,
+                                            onTap: {
+                                                setAsMainIcon(icon.sfSymbol)
+                                            },
+                                            onSetAsMain: {
+                                                setAsMainIcon(icon.sfSymbol)
+                                            },
+                                            onToggleSecondary: {
+                                                toggleSecondary(icon.sfSymbol)
+                                            }
+                                        )
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                            .padding(.bottom, 8)
                         }
                     }
-                    .padding(.horizontal)
-
-                    Spacer()
+                    .padding(.bottom, 20)
                 }
-                .padding(.top, 24)
             }
             .navigationTitle("Choose Icon")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "Search icons")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundColor(palette.accent)
+                }
+            }
+        }
+    }
+}
+
+/// Individual icon grid item
+private struct IconGridItem: View {
+    let icon: IconDefinition
+    let isSelected: Bool
+    let suggestionType: IconSuggestionType
+    let tintColor: Color
+    let palette: ThemePalette
+    let onTap: () -> Void
+
+    /// Glow color for suggestions
+    private var suggestionGlowColor: Color {
+        switch suggestionType {
+        case .primary:
+            return palette.accent
+        case .secondary:
+            return palette.accent.opacity(0.6)
+        case .none:
+            return .clear
+        }
+    }
+
+    /// Glow intensity for suggestions
+    private var suggestionGlowRadius: CGFloat {
+        switch suggestionType {
+        case .primary:
+            return 8
+        case .secondary:
+            return 4
+        case .none:
+            return 0
+        }
+    }
+
+    /// Border width for suggestions
+    private var suggestionBorderWidth: CGFloat {
+        switch suggestionType {
+        case .primary:
+            return 2.5
+        case .secondary:
+            return 1.5
+        case .none:
+            return 0
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 2) {
+                ZStack {
+                    // Suggestion glow effect (behind the icon)
+                    if suggestionType != .none {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(suggestionGlowColor.opacity(0.3))
+                            .frame(width: 44, height: 44)
+                            .blur(radius: suggestionGlowRadius)
+                    }
+
+                    Image(systemName: icon.sfSymbol)
+                        .font(.system(size: 22))
+                        .foregroundColor(isSelected ? .white : tintColor)
+                        .frame(width: 44, height: 44)
+                        .background(isSelected ? tintColor : tintColor.opacity(0.12))
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(
+                                    isSelected ? tintColor : (suggestionType != .none ? palette.accent : Color.clear),
+                                    lineWidth: isSelected ? 2 : suggestionBorderWidth
+                                )
+                        )
+                }
+
+                Text(icon.displayName)
+                    .font(.system(size: 9))
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 50)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Icon grid item with main icon highlighting and context menu
+private struct MainIconGridItem: View {
+    let icon: IconDefinition
+    let isMainIcon: Bool
+    let isSecondaryIcon: Bool
+    let canAddSecondary: Bool
+    let suggestionType: IconSuggestionType
+    let tintColor: Color
+    let palette: ThemePalette
+    let onTap: () -> Void
+    let onSetAsMain: () -> Void
+    let onToggleSecondary: () -> Void
+
+    /// Glow color for suggestions
+    private var suggestionGlowColor: Color {
+        switch suggestionType {
+        case .primary:
+            return palette.accent
+        case .secondary:
+            return palette.accent.opacity(0.6)
+        case .none:
+            return .clear
+        }
+    }
+
+    /// Glow intensity for suggestions
+    private var suggestionGlowRadius: CGFloat {
+        switch suggestionType {
+        case .primary:
+            return 8
+        case .secondary:
+            return 4
+        case .none:
+            return 0
+        }
+    }
+
+    /// Border width for suggestions
+    private var suggestionBorderWidth: CGFloat {
+        switch suggestionType {
+        case .primary:
+            return 2.5
+        case .secondary:
+            return 1.5
+        case .none:
+            return 0
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 2) {
+                ZStack {
+                    // Suggestion glow effect (behind the icon)
+                    if suggestionType != .none {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(suggestionGlowColor.opacity(0.3))
+                            .frame(width: 44, height: 44)
+                            .blur(radius: suggestionGlowRadius)
+                    }
+
+                    Image(systemName: icon.sfSymbol)
+                        .font(.system(size: 22))
+                        .foregroundColor(isMainIcon ? .white : tintColor)
+                        .frame(width: 44, height: 44)
+                        .background(isMainIcon ? tintColor : tintColor.opacity(0.12))
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(
+                                    isMainIcon ? tintColor : (suggestionType != .none ? palette.accent : Color.clear),
+                                    lineWidth: isMainIcon ? 2 : suggestionBorderWidth
+                                )
+                        )
+                        .overlay(alignment: .topTrailing) {
+                            // Main icon indicator (star)
+                            if isMainIcon {
+                                Image(systemName: "star.fill")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(3)
+                                    .background(tintColor)
+                                    .clipShape(Circle())
+                                    .offset(x: 4, y: -4)
+                            }
+                            // Secondary icon indicator (number badge)
+                            else if isSecondaryIcon {
+                                Image(systemName: "2.circle.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(palette.accent)
+                                    .background(Circle().fill(palette.background).padding(-1))
+                                    .offset(x: 4, y: -4)
+                            }
+                        }
+                }
+
+                Text(icon.displayName)
+                    .font(.system(size: 9))
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 50)
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            // Set as main icon option (unless already main)
+            if !isMainIcon {
+                Button {
+                    onSetAsMain()
+                } label: {
+                    Label("Set as Main Icon", systemImage: "star")
+                }
+            }
+
+            // Secondary icon toggle
+            if isSecondaryIcon {
+                Button(role: .destructive) {
+                    onToggleSecondary()
+                } label: {
+                    Label("Remove from Top Bar", systemImage: "minus.circle")
+                }
+            } else if !isMainIcon && canAddSecondary {
+                Button {
+                    onToggleSecondary()
+                } label: {
+                    Label("Add to Top Bar", systemImage: "plus.circle")
                 }
             }
         }

@@ -7,6 +7,7 @@
 
 import Foundation
 import AVFoundation
+import SoundAnalysis
 
 // MARK: - Classification Result
 
@@ -14,6 +15,14 @@ import AVFoundation
 struct AudioClassificationResult {
     let icon: PresetIcon
     let confidence: Float
+    /// Top predictions that meet the suggestion threshold (max 3, sorted by confidence desc)
+    let topPredictions: [IconPrediction]
+
+    init(icon: PresetIcon, confidence: Float, topPredictions: [IconPrediction] = []) {
+        self.icon = icon
+        self.confidence = confidence
+        self.topPredictions = topPredictions
+    }
 
     /// Whether the confidence meets the threshold for auto-assignment
     func meetsThreshold(_ threshold: Float = 0.70) -> Bool {
@@ -31,76 +40,153 @@ protocol AudioIconClassifier {
     func classify(fileURL: URL) async -> AudioClassificationResult?
 }
 
-// MARK: - Classification Category
-
-/// Categories recognized by the classifier
-enum AudioCategory: String, CaseIterable {
-    case voice      // Speech, vocals, singing
-    case guitar     // Guitar sounds
-    case drums      // Drums, percussion
-    case keys       // Piano, keyboard, synth
-    case other      // Unknown/mixed/unclassified
-
-    /// Map category to preset icon
-    var presetIcon: PresetIcon {
-        switch self {
-        case .voice: return .musicMic   // "music.mic" - Vocal
-        case .guitar: return .guitar    // "guitars.fill" - Guitar
-        case .drums: return .drum       // "cylinder.fill" - Drums
-        case .keys: return .pianokeys   // "pianokeys" - Piano
-        case .other: return .waveform   // Default waveform
-        }
-    }
-}
-
-// MARK: - No Model Classifier (Fallback)
-
-/// Fallback classifier that returns default icon
-/// Used when SoundAnalysis model is not available
-final class NoModelClassifier: AudioIconClassifier {
-    func classify(fileURL: URL) async -> AudioClassificationResult? {
-        // No model available - return nil to indicate classification not possible
-        print("[AudioIconClassifier] No model available, skipping classification")
-        return nil
-    }
-}
-
 // MARK: - Sound Analysis Classifier
 
-/// Classifier using Apple's SoundAnalysis framework
-/// This is a scaffold - actual Core ML model integration would go here
+/// Classifier using Apple's built-in SoundAnalysis framework
+@available(iOS 15.0, *)
 final class SoundAnalysisClassifier: AudioIconClassifier {
 
-    /// Check if the classification model is available
+    /// Maximum duration to analyze (seconds)
+    private let maxAnalysisDuration: TimeInterval = 10.0
+
+    /// Check if the built-in classifier is available
     var isModelAvailable: Bool {
-        // TODO: Check if Core ML model bundle exists
-        // For now, return false to use fallback
-        return false
+        // Apple's built-in classifier is available on iOS 15+
+        return true
     }
 
     func classify(fileURL: URL) async -> AudioClassificationResult? {
-        guard isModelAvailable else {
-            print("[SoundAnalysisClassifier] Model not available")
-            return nil
-        }
-
         // Verify file exists
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             print("[SoundAnalysisClassifier] File not found: \(fileURL.path)")
-            return nil
+            return AudioClassificationResult(icon: .waveform, confidence: 0)
         }
 
-        // TODO: Implement actual SoundAnalysis classification
-        // 1. Load Core ML model
-        // 2. Create SNAudioFileAnalyzer with the audio file
-        // 3. Add classification request with model
-        // 4. Analyze and collect results
-        // 5. Map top classification to AudioCategory
-        // 6. Return result with confidence
+        do {
+            // Create the built-in sound classifier request
+            let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
 
-        // Placeholder: return nil until model is integrated
-        print("[SoundAnalysisClassifier] Classification not yet implemented")
-        return nil
+            // Create file analyzer
+            let analyzer = try SNAudioFileAnalyzer(url: fileURL)
+
+            // Use observer to collect results
+            let observer = ClassificationResultsObserver(maxDuration: maxAnalysisDuration)
+
+            try analyzer.add(request, withObserver: observer)
+
+            // Run analysis in background and wait for completion
+            return await withCheckedContinuation { continuation in
+                observer.onComplete = { result in
+                    continuation.resume(returning: result)
+                }
+
+                // Start analysis
+                analyzer.analyze()
+            }
+        } catch {
+            print("[SoundAnalysisClassifier] Analysis failed: \(error.localizedDescription)")
+            return AudioClassificationResult(icon: .waveform, confidence: 0)
+        }
+    }
+}
+
+// MARK: - Classification Results Observer
+
+@available(iOS 15.0, *)
+private final class ClassificationResultsObserver: NSObject, SNResultsObserving {
+
+    /// Max duration to analyze before stopping
+    private let maxDuration: TimeInterval
+
+    /// Track all icon matches with their max confidence (keyed by SF Symbol)
+    private var iconConfidences: [String: Float] = [:]
+
+    /// Track if we've logged available classifications (debug, once)
+    private static var hasLoggedClassifications = false
+
+    /// Completion callback
+    var onComplete: ((AudioClassificationResult) -> Void)?
+
+    /// Track analyzed time
+    private var lastAnalyzedTime: TimeInterval = 0
+
+    init(maxDuration: TimeInterval) {
+        self.maxDuration = maxDuration
+        super.init()
+    }
+
+    func request(_ request: SNRequest, didProduce result: SNResult) {
+        guard let classification = result as? SNClassificationResult else { return }
+
+        // Log available classifications once for debugging (DEBUG only)
+        #if DEBUG
+        if !Self.hasLoggedClassifications {
+            let topLabels = classification.classifications.prefix(15).map { "\($0.identifier): \(String(format: "%.2f", $0.confidence))" }
+            print("[SoundAnalysisClassifier] Labels: \(topLabels.joined(separator: ", "))")
+            Self.hasLoggedClassifications = true
+        }
+        #endif
+
+        // Track time progress
+        lastAnalyzedTime = classification.timeRange.start.seconds + classification.timeRange.duration.seconds
+
+        // Use IconCatalog to map labels to icons, track max confidence per icon
+        for item in classification.classifications {
+            let label = item.identifier
+            let confidence = Float(item.confidence)
+
+            // Look up icon in catalog by classifier label
+            if let matchedIcon = IconCatalog.labelToIconMap[label] {
+                let symbol = matchedIcon.sfSymbol
+                iconConfidences[symbol] = max(iconConfidences[symbol] ?? 0, confidence)
+            }
+        }
+    }
+
+    func request(_ request: SNRequest, didFailWithError error: Error) {
+        print("[SoundAnalysisClassifier] Request failed: \(error.localizedDescription)")
+        deliverResult()
+    }
+
+    func requestDidComplete(_ request: SNRequest) {
+        deliverResult()
+    }
+
+    private func deliverResult() {
+        // Filter predictions >= threshold and sort by confidence descending
+        let threshold = IconPrediction.suggestionThreshold
+        let qualifiedPredictions = iconConfidences
+            .filter { $0.value >= threshold }
+            .sorted { $0.value > $1.value }
+            .prefix(3)  // Max 3 suggestions
+            .map { IconPrediction(iconSymbol: $0.key, confidence: $0.value) }
+
+        // Find best overall match (may be below threshold)
+        let bestMatch = iconConfidences.max { $0.value < $1.value }
+
+        if let best = bestMatch, best.value > 0 {
+            let presetIcon = PresetIcon(rawValue: best.key) ?? .waveform
+            let result = AudioClassificationResult(
+                icon: presetIcon,
+                confidence: best.value,
+                topPredictions: Array(qualifiedPredictions)
+            )
+            print("[SoundAnalysisClassifier] Best: \(best.key) @ \(Int(best.value * 100))%, suggestions: \(qualifiedPredictions.count)")
+            onComplete?(result)
+        } else {
+            onComplete?(AudioClassificationResult(icon: .waveform, confidence: 0, topPredictions: []))
+        }
+    }
+}
+
+// MARK: - Fallback Classifier for older iOS
+
+/// Fallback for iOS < 15 where built-in classifier isn't available
+final class LegacySoundAnalysisClassifier: AudioIconClassifier {
+    var isModelAvailable: Bool { false }
+
+    func classify(fileURL: URL) async -> AudioClassificationResult? {
+        return AudioClassificationResult(icon: .waveform, confidence: 0)
     }
 }
 
@@ -112,16 +198,17 @@ final class AudioIconClassifierManager {
 
     private let classifier: AudioIconClassifier
 
-    /// Confidence threshold for auto-assignment (0.70 = 70%)
-    let confidenceThreshold: Float = 0.70
+    /// Confidence threshold for auto-assignment (0.855 = 85.5%)
+    let confidenceThreshold: Float = 0.855
 
     private init() {
-        // Use SoundAnalysis if available, otherwise fallback
-        let soundAnalysis = SoundAnalysisClassifier()
-        if soundAnalysis.isModelAvailable {
-            classifier = soundAnalysis
+        // Use Apple's built-in SoundAnalysis classifier on iOS 15+
+        if #available(iOS 15.0, *) {
+            classifier = SoundAnalysisClassifier()
+            print("[AudioIconClassifierManager] Using Apple SoundAnalysis classifier")
         } else {
-            classifier = NoModelClassifier()
+            classifier = LegacySoundAnalysisClassifier()
+            print("[AudioIconClassifierManager] Using legacy fallback (iOS < 15)")
         }
     }
 
@@ -165,17 +252,27 @@ final class AudioIconClassifierManager {
             return recording
         }
 
-        // Attempt classification
-        guard let suggestedIcon = await classifyForIcon(fileURL: recording.fileURL) else {
+        // Attempt classification - get full result with predictions
+        guard let result = await classifier.classify(fileURL: recording.fileURL) else {
             return recording
         }
 
-        // Update recording with classified icon
         var updated = recording
-        updated.iconName = suggestedIcon.rawValue
-        updated.iconSource = .auto
 
-        print("[AudioIconClassifierManager] Set icon to \(suggestedIcon.displayName) for: \(recording.title)")
+        // Always store top predictions for icon picker suggestions
+        if !result.topPredictions.isEmpty {
+            updated.iconPredictions = result.topPredictions
+        }
+
+        // Only auto-assign icon if confidence meets threshold
+        if result.meetsThreshold(confidenceThreshold) {
+            updated.iconName = result.icon.rawValue
+            updated.iconSource = .auto
+            print("[AudioIconClassifierManager] Set icon to \(result.icon.displayName) for: \(recording.title)")
+        } else {
+            print("[AudioIconClassifierManager] Below threshold (\(Int(result.confidence * 100))%), stored \(result.topPredictions.count) suggestions")
+        }
+
         return updated
     }
 }

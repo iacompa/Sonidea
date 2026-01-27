@@ -169,3 +169,68 @@ struct SiriShortcutsHelpSheet: View {
         )
     }
 }
+
+/// Info sheet explaining auto icon detection privacy
+struct AutoIconInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+
+                VStack(spacing: 20) {
+                    // Icon
+                    Image(systemName: "cpu")
+                        .font(.system(size: 44))
+                        .foregroundColor(palette.accent)
+                        .padding(.top, 8)
+
+                    // Title
+                    Text("On-Device Detection")
+                        .font(.headline)
+                        .foregroundColor(palette.textPrimary)
+
+                    // Privacy bullets
+                    VStack(alignment: .leading, spacing: 12) {
+                        PrivacyBullet(icon: "iphone", text: "Runs locally on your iPhone")
+                        PrivacyBullet(icon: "lock.shield.fill", text: "Audio never leaves your device")
+                        PrivacyBullet(icon: "xmark.icloud.fill", text: "No uploads or accounts required")
+                    }
+                    .padding(.horizontal, 24)
+
+                    Spacer()
+                }
+                .padding(.top, 16)
+            }
+            .navigationTitle("Privacy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
+                }
+            }
+        }
+    }
+}
+
+/// A single privacy bullet point with icon
+private struct PrivacyBullet: View {
+    @Environment(\.themePalette) private var palette
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(palette.accent)
+                .frame(width: 24)
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(palette.textPrimary)
+        }
+    }
+}

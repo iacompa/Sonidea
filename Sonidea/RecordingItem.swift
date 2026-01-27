@@ -26,6 +26,15 @@ enum IconSource: String, Codable {
     case user   // Manually selected by user
 }
 
+/// A single icon classification prediction from SoundAnalysis
+struct IconPrediction: Codable, Equatable {
+    let iconSymbol: String   // SF Symbol name
+    let confidence: Float    // 0.0 to 1.0
+
+    /// Minimum threshold for suggestions (85.5%)
+    static let suggestionThreshold: Float = 0.855
+}
+
 // MARK: - Preset Icons for Recordings
 
 /// Preset tintable SF Symbol icons for recordings
@@ -107,6 +116,13 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     // Icon source: "auto" (classifier) or "user" (manual selection)
     var iconSourceRaw: String?
+
+    // Top 3 classification predictions (sorted by confidence desc, only those >= 0.855)
+    var iconPredictions: [IconPrediction]?
+
+    // Secondary icons for top bar display (max 2, shown alongside main icon)
+    // Main icon is iconName; these are additional icons shown in the 3-icon strip
+    var secondaryIcons: [String]?
 
     // Per-recording EQ settings
     var eqSettings: EQSettings?
@@ -284,6 +300,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     }
 
     /// The preset icon for this recording (defaults to waveform)
+    /// NOTE: This only works for icons in the PresetIcon enum. For full icon support, use displayIconSymbol.
     var presetIcon: PresetIcon {
         get {
             guard let name = iconName else { return .waveform }
@@ -292,6 +309,12 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         set {
             iconName = newValue.rawValue
         }
+    }
+
+    /// SF Symbol name for displaying the recording's icon
+    /// This is the single source of truth for icon display - use this instead of presetIcon.systemName
+    var displayIconSymbol: String {
+        iconName ?? "waveform"
     }
 
     // MARK: - Stable Icon Tile Colors (no automatic changes based on edits/tags/selection)
@@ -419,6 +442,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         iconColorHex: String? = nil,
         iconName: String? = nil,
         iconSourceRaw: String? = nil,
+        iconPredictions: [IconPrediction]? = nil,
+        secondaryIcons: [String]? = nil,
         eqSettings: EQSettings? = nil,
         projectId: UUID? = nil,
         parentRecordingId: UUID? = nil,
@@ -457,6 +482,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.iconColorHex = iconColorHex
         self.iconName = iconName
         self.iconSourceRaw = iconSourceRaw
+        self.iconPredictions = iconPredictions
+        self.secondaryIcons = secondaryIcons
         self.eqSettings = eqSettings
         self.projectId = projectId
         self.parentRecordingId = parentRecordingId
@@ -482,7 +509,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, fileURL, createdAt, duration, modifiedAt, title, notes, tagIDs, albumID
         case locationLabel, transcript, latitude, longitude, trashedAt
-        case lastPlaybackPosition, iconColorHex, iconName, iconSourceRaw, eqSettings
+        case lastPlaybackPosition, iconColorHex, iconName, iconSourceRaw, iconPredictions, secondaryIcons, eqSettings
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
         case locationModeRaw, locationProofHash, locationProofStatusRaw
@@ -515,6 +542,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         // Migration: existing recordings with iconName set by user should be treated as user source
         // New recordings without iconSourceRaw default to nil (auto classification can run)
         iconSourceRaw = try container.decodeIfPresent(String.self, forKey: .iconSourceRaw)
+        iconPredictions = try container.decodeIfPresent([IconPrediction].self, forKey: .iconPredictions)
+        // Migration: pinnedIcons renamed to secondaryIcons, try both keys for backwards compatibility
+        secondaryIcons = try container.decodeIfPresent([String].self, forKey: .secondaryIcons)
         eqSettings = try container.decodeIfPresent(EQSettings.self, forKey: .eqSettings)
 
         // Migration: new fields with defaults for existing recordings
