@@ -88,8 +88,8 @@ final class OverdubEngine {
         quality: RecordingQualityPreset,
         settings: AppSettings
     ) throws {
-        // Reset any existing state
-        stop()
+        // Reset any existing state (don't deactivate session since we're about to reconfigure it)
+        stop(deactivateSession: false)
 
         // Configure audio session for overdub
         try AudioSessionManager.shared.configureForOverdub(quality: quality, settings: settings)
@@ -201,6 +201,7 @@ final class OverdubEngine {
 
         } catch {
             print("❌ [OverdubEngine] Failed to start playback: \(error)")
+            recordingError = "Failed to start playback: \(error.localizedDescription)"
         }
     }
 
@@ -215,14 +216,18 @@ final class OverdubEngine {
     }
 
     /// Stop playback and reset position
-    func stop() {
+    /// - Parameter deactivateSession: Whether to deactivate the audio session. Pass `false` when
+    ///   stop is called from prepare() since prepare() will immediately reconfigure the session.
+    func stop(deactivateSession: Bool = true) {
         stopRecordingInternal()
         basePlayerNode?.stop()
         for player in layerPlayerNodes {
             player.stop()
         }
         audioEngine?.stop()
-        AudioSessionManager.shared.deactivate()
+        if deactivateSession {
+            AudioSessionManager.shared.deactivate()
+        }
         stopTimer()
         currentPlaybackTime = 0
         recordingDuration = 0
@@ -324,25 +329,44 @@ final class OverdubEngine {
             throw OverdubEngineError.recordingFailed("No audio input available. Please check your microphone connection.")
         }
 
-        // Stop and reset the engine to pick up the new route/format
-        // This is critical for Bluetooth: the input node format is stale until the engine restarts.
+        // Stop the engine to pick up the new route/format
+        // Avoid engine.reset() which detaches all nodes and can cause format mismatches.
+        // Instead, stop the engine, create fresh player nodes, and re-attach them.
         if engine.isRunning {
             engine.stop()
         }
-        engine.reset()
 
-        // Re-attach and re-connect player nodes (engine.reset() detaches all nodes)
+        // Create fresh player nodes to avoid stale state from previous runs
         let mainMixer = engine.mainMixerNode
-        if let basePlayer = basePlayerNode, let baseFile = baseAudioFile {
-            engine.attach(basePlayer)
-            engine.connect(basePlayer, to: mainMixer, format: baseFile.processingFormat)
+
+        // Detach old nodes before creating new ones
+        if let oldBase = basePlayerNode {
+            engine.detach(oldBase)
         }
-        for (index, layerPlayer) in layerPlayerNodes.enumerated() {
-            guard index < layerAudioFiles.count else { continue }
-            let layerFile = layerAudioFiles[index]
-            engine.attach(layerPlayer)
-            engine.connect(layerPlayer, to: mainMixer, format: layerFile.processingFormat)
+        for oldLayer in layerPlayerNodes {
+            engine.detach(oldLayer)
         }
+
+        // Create and attach fresh base player
+        if let baseFile = baseAudioFile {
+            let newBasePlayer = AVAudioPlayerNode()
+            engine.attach(newBasePlayer)
+            engine.connect(newBasePlayer, to: mainMixer, format: baseFile.processingFormat)
+            newBasePlayer.volume = baseVolume
+            basePlayerNode = newBasePlayer
+        }
+
+        // Create and attach fresh layer players
+        var newLayerPlayers: [AVAudioPlayerNode] = []
+        for (index, layerFile) in layerAudioFiles.enumerated() {
+            let newLayerPlayer = AVAudioPlayerNode()
+            engine.attach(newLayerPlayer)
+            engine.connect(newLayerPlayer, to: mainMixer, format: layerFile.processingFormat)
+            newLayerPlayer.volume = layerVolume
+            newLayerPlayers.append(newLayerPlayer)
+            _ = index // suppress unused warning
+        }
+        layerPlayerNodes = newLayerPlayers
 
         // Get input node and validate its format AFTER engine reset
         let inputNode = engine.inputNode

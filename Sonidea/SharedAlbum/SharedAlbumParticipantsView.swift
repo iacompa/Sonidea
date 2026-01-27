@@ -143,7 +143,12 @@ struct SharedAlbumParticipantsView: View {
         Task {
             let fetched = await appState.sharedAlbumManager.fetchParticipants(for: album)
             await MainActor.run {
-                participants = fetched
+                if fetched.isEmpty, let cached = album.participants, !cached.isEmpty {
+                    // Use cached participants when CloudKit fetch returns empty
+                    participants = cached
+                } else {
+                    participants = fetched
+                }
                 isLoading = false
             }
         }

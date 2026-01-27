@@ -42,9 +42,6 @@ struct OverdubSessionView: View {
     @State private var offsetSliderValue: Double = 0 // For sync adjustment
     @State private var showOffsetSlider = false
 
-    // Route change monitoring
-    @State private var routeChangeObserver: Any?
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -126,6 +123,9 @@ struct OverdubSessionView: View {
             }
             .onDisappear {
                 cleanup()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { notification in
+                handleRouteChange(notification)
             }
             .onChange(of: engine.state) { oldValue, newValue in
                 // Detect when engine auto-stops (e.g. from write failure)
@@ -648,15 +648,6 @@ struct OverdubSessionView: View {
             showHeadphonesAlert = true
         }
 
-        // Setup route change monitoring
-        routeChangeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [self] notification in
-            handleRouteChange(notification)
-        }
-
         // Prepare engine
         prepareEngine()
     }
@@ -735,6 +726,9 @@ struct OverdubSessionView: View {
                 try? FileManager.default.removeItem(at: layerURL)
                 recordedLayerURL = nil
                 isStartingRecording = false
+                // Engine is in a broken state after failed startRecording — re-prepare needed
+                isPrepared = false
+                prepareEngine()
             }
         }
     }
@@ -876,9 +870,6 @@ struct OverdubSessionView: View {
     }
 
     private func cleanup() {
-        if let observer = routeChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
         engine.cleanup()
     }
 

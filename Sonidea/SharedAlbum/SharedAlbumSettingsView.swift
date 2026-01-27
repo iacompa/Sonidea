@@ -194,20 +194,6 @@ struct SharedAlbumSettingsView: View {
                     Label("Location", systemImage: "location")
                 }
 
-                // MARK: - Sensitive Content
-                Section {
-                    Toggle(isOn: $settings.requireSensitiveApproval) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Require Approval")
-                                .foregroundColor(palette.textPrimary)
-                            Text("Admins must approve sensitive recordings before others can view them")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                } header: {
-                    Label("Sensitive Content", systemImage: "eye.slash")
-                }
             }
             .navigationTitle("Album Settings")
             .navigationBarTitleDisplayMode(.inline)

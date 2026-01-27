@@ -118,11 +118,7 @@ struct SharedRecordingRow: View {
                 RecordingBadge(badge: .headphones)
             }
 
-            if sharedInfo?.isSensitive == true {
-                RecordingBadge(badge: .sensitive)
-            }
-
-            if sharedInfo?.isVerified == true {
+if sharedInfo?.isVerified == true {
                 RecordingBadge(badge: .verified)
             }
 
