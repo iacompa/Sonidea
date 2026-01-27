@@ -62,6 +62,13 @@ final class OverdubEngine {
     private var timer: Timer?
     private var recordingStartTime: Date?
     private var playbackStartHostTime: UInt64 = 0
+    private(set) var failedLayerIndices: [Int] = []
+
+    /// Thread-safe write failure counter (accessed from audio tap thread)
+    private let writeFailureCounter = WriteFailureCounter()
+
+    /// Set by engine when a critical error occurs during recording (e.g. disk full)
+    private(set) var recordingError: String?
 
     // Base recording info
     private var baseDuration: TimeInterval = 0
@@ -108,6 +115,7 @@ final class OverdubEngine {
         self.layerAudioFiles = []
         self.layerPlayerNodes = []
         self.layerOffsets = layerOffsets
+        self.failedLayerIndices = []
 
         for (index, layerURL) in layerFileURLs.enumerated() {
             do {
@@ -120,6 +128,7 @@ final class OverdubEngine {
                 layerPlayerNodes.append(layerPlayer)
             } catch {
                 print("⚠️ [OverdubEngine] Failed to load layer \(index): \(error)")
+                failedLayerIndices.append(index + 1)
             }
         }
 
@@ -147,11 +156,12 @@ final class OverdubEngine {
 
             // Schedule base track from current position
             let sampleRate = baseFile.processingFormat.sampleRate
-            let startFrame = AVAudioFramePosition(currentPlaybackTime * sampleRate)
+            let startFrame = min(AVAudioFramePosition(currentPlaybackTime * sampleRate), baseFile.length)
 
             // Schedule from startFrame to end
-            let framesToPlay = AVAudioFrameCount(baseFile.length - startFrame)
-            if framesToPlay > 0 {
+            let remaining = baseFile.length - startFrame
+            if remaining > 0 {
+                let framesToPlay = AVAudioFrameCount(remaining)
                 basePlayer.scheduleSegment(
                     baseFile,
                     startingFrame: startFrame,
@@ -276,8 +286,25 @@ final class OverdubEngine {
             try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
 
-            // Wait for route to stabilize (HFP negotiation takes ~200-500ms)
-            try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            // Poll for valid input format with timeout (HFP negotiation can take 200-1500ms)
+            var routeReady = false
+            for attempt in 1...6 {
+                try await Task.sleep(nanoseconds: 300_000_000) // 300ms per attempt
+                let inputs = session.currentRoute.inputs
+                if !inputs.isEmpty {
+                    routeReady = true
+                    #if DEBUG
+                    print("✅ [OverdubEngine] Bluetooth route ready after attempt \(attempt)")
+                    #endif
+                    break
+                }
+                #if DEBUG
+                print("⏳ [OverdubEngine] Bluetooth route not ready, attempt \(attempt)/6")
+                #endif
+            }
+            if !routeReady {
+                throw OverdubEngineError.recordingFailed("Bluetooth audio route did not stabilize. Try disconnecting and reconnecting your Bluetooth device, or use wired headphones.")
+            }
         }
 
         #if DEBUG
@@ -344,11 +371,21 @@ final class OverdubEngine {
         self.recordingFileURL = finalURL
 
         // Install tap on input to record
+        writeFailureCounter.reset()
+        recordingError = nil
+        let failureCounter = writeFailureCounter  // capture for closure (non-isolated)
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
             do {
                 try file.write(from: buffer)
+                failureCounter.markSuccess()
             } catch {
-                print("❌ [OverdubEngine] Error writing buffer: \(error)")
+                if failureCounter.increment() {
+                    Task { @MainActor in
+                        self?.recordingError = "Recording failed: could not write audio data. Your storage may be full."
+                        self?.stopRecordingInternal()
+                    }
+                    return
+                }
             }
 
             Task { @MainActor in
@@ -428,10 +465,27 @@ final class OverdubEngine {
 
             // Schedule with offset
             if offset > 0 {
-                // Delay start
+                // Positive offset: delay the layer start
                 let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
                 let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
                 layerPlayer.scheduleFile(layerFile, at: startTime)
+            } else if offset < 0 {
+                // Negative offset: skip into the layer (start playback from later in the file)
+                let skipSeconds = -offset
+                let sampleRate = layerFile.processingFormat.sampleRate
+                let skipFrames = AVAudioFramePosition(skipSeconds * sampleRate)
+                let remainingFrames = AVAudioFrameCount(layerFile.length - skipFrames)
+                if skipFrames < layerFile.length && remainingFrames > 0 {
+                    layerPlayer.scheduleSegment(
+                        layerFile,
+                        startingFrame: skipFrames,
+                        frameCount: remainingFrames,
+                        at: nil
+                    )
+                } else {
+                    // Offset exceeds layer length — skip this layer
+                    continue
+                }
             } else {
                 layerPlayer.scheduleFile(layerFile, at: nil)
             }
@@ -544,6 +598,36 @@ final class OverdubEngine {
 }
 
 // MARK: - Errors
+
+// MARK: - Thread-Safe Write Failure Counter
+
+/// Accessed from audio tap thread — must be thread-safe
+final class WriteFailureCounter: @unchecked Sendable {
+    private var _count = 0
+    private let lock = NSLock()
+    let maxFailures = 10
+
+    func reset() {
+        lock.lock()
+        _count = 0
+        lock.unlock()
+    }
+
+    /// Increments and returns true if max failures reached
+    func increment() -> Bool {
+        lock.lock()
+        _count += 1
+        let exceeded = _count >= maxFailures
+        lock.unlock()
+        return exceeded
+    }
+
+    func markSuccess() {
+        lock.lock()
+        _count = 0
+        lock.unlock()
+    }
+}
 
 enum OverdubEngineError: Error, LocalizedError {
     case engineNotPrepared

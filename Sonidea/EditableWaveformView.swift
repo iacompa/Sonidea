@@ -328,12 +328,12 @@ struct EditableWaveformView: View {
         return ZStack {
             // Playhead line
             Rectangle()
-                .fill(Color.white)
+                .fill(palette.playheadColor)
                 .frame(width: 2, height: height)
 
             // Draggable handle at top
             Circle()
-                .fill(Color.white)
+                .fill(palette.playheadColor)
                 .frame(width: 12, height: 12)
                 .offset(y: -height / 2 + 6)
                 .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)
@@ -383,7 +383,7 @@ struct EditableWaveformView: View {
         let x = timeToX(currentTime, width: width)
 
         return Rectangle()
-            .fill(palette.accent)
+            .fill(palette.playheadColor)
             .frame(width: 2, height: height)
             .offset(x: x - 1)
             .allowsHitTesting(false)

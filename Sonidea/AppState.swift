@@ -769,32 +769,26 @@ final class AppState {
     }
 
     /// Delete recording from shared album (deletes for everyone)
-    func deleteRecordingFromSharedAlbum(_ recording: RecordingItem, album: Album) {
+    func deleteRecordingFromSharedAlbum(_ recording: RecordingItem, album: Album) async throws {
         guard album.isShared else {
             // Not shared, use regular delete
             moveToTrash(recording)
             return
         }
 
-        // Remove from local state
+        // Delete from CloudKit first — only remove locally on success
         let recordingId = recording.id
+        try await sharedAlbumManager.deleteRecordingFromSharedAlbum(recordingId: recordingId, album: album)
+
+        // CloudKit succeeded — now remove locally
         recordings.removeAll { $0.id == recordingId }
         saveRecordings()
-
-        // Delete from CloudKit shared zone
-        Task {
-            do {
-                try await sharedAlbumManager.deleteRecordingFromSharedAlbum(recordingId: recordingId, album: album)
-            } catch {
-                print("Failed to delete recording from shared album: \(error)")
-            }
-        }
     }
 
     // MARK: - Enhanced Shared Album Management
 
     /// Cache for shared recording metadata
-    private(set) var sharedRecordingInfoCache: [UUID: SharedRecordingItem] = [:]
+    var sharedRecordingInfoCache: [UUID: SharedRecordingItem] = [:]
 
     /// Get shared recording info for a recording (from cache or creates default)
     func sharedRecordingInfo(for recording: RecordingItem, in album: Album) -> SharedRecordingItem? {
@@ -826,8 +820,15 @@ final class AppState {
     ) async throws {
         guard album.isShared else { return }
 
-        let displayName = await sharedAlbumManager.getCurrentUserDisplayName()
+        // Check permission: admin can delete anything, members only if allowed
         let userId = await sharedAlbumManager.getCurrentUserId() ?? "unknown"
+        let isOwnRecording = sharedInfo.creatorId == userId
+        let canDelete = album.canDeleteAnyRecording || (isOwnRecording && album.canDeleteOwnRecording)
+        guard canDelete else {
+            throw SharedAlbumError.permissionDenied
+        }
+
+        let displayName = await sharedAlbumManager.getCurrentUserDisplayName()
 
         let trashItem = try await sharedAlbumManager.moveToTrash(
             recording: sharedInfo,
@@ -914,9 +915,37 @@ final class AppState {
         sharedRecordingInfoCache[recording.id] = updatedInfo
     }
 
+    /// Approve or reject a sensitive recording (admin only)
+    func approveSensitiveRecording(
+        recording: RecordingItem,
+        sharedInfo: SharedRecordingItem,
+        approved: Bool,
+        album: Album
+    ) async throws {
+        guard album.isShared else { return }
+
+        try await sharedAlbumManager.approveSensitiveRecording(
+            recording: sharedInfo,
+            approved: approved,
+            album: album
+        )
+
+        // Update cache
+        var updatedInfo = sharedInfo
+        updatedInfo.sensitiveApproved = approved
+        if approved {
+            updatedInfo.sensitiveApprovedBy = await sharedAlbumManager.getCurrentUserId()
+            updatedInfo.sensitiveApprovedAt = Date()
+        } else {
+            updatedInfo.sensitiveApprovedBy = nil
+            updatedInfo.sensitiveApprovedAt = nil
+        }
+        sharedRecordingInfoCache[recording.id] = updatedInfo
+    }
+
     /// Get recordings with pending sensitive approval (for admin)
     func pendingSensitiveApprovals(in album: Album) -> [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
-        guard album.isShared, album.currentUserRole == .admin else { return [] }
+        guard album.isShared, album.currentUserRole == .admin || (album.currentUserRole == nil && album.isOwner) else { return [] }
 
         return recordings(in: album).compactMap { recording -> (RecordingItem, SharedRecordingItem)? in
             guard let info = sharedRecordingInfoCache[recording.id],

@@ -603,12 +603,12 @@ struct PlayheadView: View {
         if x >= -10 && x <= width + 10 {
             ZStack {
                 Rectangle()
-                    .fill(isEditing ? Color.white : palette.accent)
+                    .fill(palette.playheadColor)
                     .frame(width: 2, height: height)
 
                 if isEditing {
                     Circle()
-                        .fill(Color.white)
+                        .fill(palette.playheadColor)
                         .frame(width: 14, height: 14)
                         .offset(y: -height / 2 + 7)
                         .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)

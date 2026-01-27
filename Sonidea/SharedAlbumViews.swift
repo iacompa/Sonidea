@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CloudKit
+import MapKit
 
 // MARK: - Create Shared Album Flow
 
@@ -85,6 +86,7 @@ struct CreateSharedAlbumSheet: View {
 
                 // Continue button
                 Button {
+                    errorMessage = nil
                     if albumName.trimmingCharacters(in: .whitespaces).isEmpty {
                         errorMessage = "Please enter an album name"
                     } else {
@@ -110,7 +112,7 @@ struct CreateSharedAlbumSheet: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
-                .disabled(albumName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(albumName.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
             }
             .background(palette.background)
             .navigationBarTitleDisplayMode(.inline)
@@ -651,6 +653,7 @@ struct LeaveSharedAlbumSheet: View {
     let album: Album
 
     @State private var isLeaving = false
+    @State private var leaveError: String?
 
     var body: some View {
         NavigationStack {
@@ -688,6 +691,13 @@ struct LeaveSharedAlbumSheet: View {
                     SharedAlbumInfoRow(icon: "person.2", text: "Other participants won't be affected", color: .green)
                 }
                 .padding(.horizontal, 24)
+
+                if let error = leaveError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal)
+                }
 
                 Spacer()
 
@@ -733,7 +743,7 @@ struct LeaveSharedAlbumSheet: View {
                 appState.removeSharedAlbum(album)
                 dismiss()
             } catch {
-                // Handle error
+                leaveError = error.localizedDescription
             }
             isLeaving = false
         }
@@ -882,16 +892,16 @@ struct SharedAlbumDetailView: View {
     @State private var albumSettings: SharedAlbumSettings = .default
     @State private var selectedRecording: RecordingItem?
     @State private var selectedSharedInfo: SharedRecordingItem?
+    @State private var currentUserId: String?
+    @State private var shareIsStale = false
+    @State private var showLeaveAlbum = false
+    @State private var showAddRecordingInfo = false
 
     private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.compactMap { recording in
             guard let info = sharedRecordingInfos[recording.id], info.hasSharedLocation else { return nil }
             return (recording, info)
         }
-    }
-
-    private var currentUserId: String? {
-        nil // Would be fetched from CloudKit
     }
 
     var body: some View {
@@ -945,7 +955,7 @@ struct SharedAlbumDetailView: View {
                             Divider()
 
                             Button(role: .destructive) {
-                                // Show leave confirmation
+                                showLeaveAlbum = true
                             } label: {
                                 Label("Leave Album", systemImage: "rectangle.portrait.and.arrow.right")
                             }
@@ -970,6 +980,21 @@ struct SharedAlbumDetailView: View {
             }
             .sheet(isPresented: $showMap) {
                 SharedAlbumMapView(album: album, recordings: recordingsWithLocation)
+            }
+            .sheet(isPresented: $showLeaveAlbum) {
+                LeaveSharedAlbumSheet(album: album)
+            }
+            .alert("Album No Longer Available", isPresented: $shareIsStale) {
+                Button("OK") {
+                    dismiss()
+                }
+            } message: {
+                Text("The owner has stopped sharing this album. It will be removed from your library.")
+            }
+            .alert("Add Recordings", isPresented: $showAddRecordingInfo) {
+                Button("OK") {}
+            } message: {
+                Text("To add a recording, go to your recordings list and move a recording into this shared album.")
             }
             .sheet(item: $selectedRecording) { recording in
                 SharedRecordingDetailView(
@@ -1040,7 +1065,7 @@ struct SharedAlbumDetailView: View {
                 SharedAlbumEmptyState(
                     isCurrentUserAdmin: album.currentUserRole == .admin,
                     onAddRecording: {
-                        // Handle add recording
+                        showAddRecordingInfo = true
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1062,8 +1087,10 @@ struct SharedAlbumDetailView: View {
                             sharedInfo: sharedRecordingInfos[recording.id],
                             isCurrentUserRecording: sharedRecordingInfos[recording.id]?.creatorId == currentUserId,
                             onTap: {
-                                selectedRecording = recording
+                                // Set sharedInfo BEFORE recording to avoid showing stale data
+                                // (selectedRecording triggers the sheet)
                                 selectedSharedInfo = sharedRecordingInfos[recording.id]
+                                selectedRecording = recording
                             }
                         )
                     }
@@ -1139,33 +1166,36 @@ struct SharedAlbumDetailView: View {
             } else {
                 VStack {
                     // Mini map preview
-                    Button {
-                        showMap = true
-                    } label: {
-                        ZStack(alignment: .bottomTrailing) {
-                            // Placeholder for mini map
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.blue.opacity(0.1), .purple.opacity(0.1)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .frame(height: 200)
-                                .overlay(
-                                    VStack {
-                                        Image(systemName: "map.fill")
-                                            .font(.system(size: 40))
-                                            .foregroundColor(palette.accent.opacity(0.5))
-
-                                        Text("\(recordingsWithLocation.count) locations")
-                                            .font(.subheadline)
-                                            .foregroundColor(palette.textSecondary)
+                    ZStack(alignment: .bottomTrailing) {
+                        Map {
+                            ForEach(recordingsWithLocation, id: \.recording.id) { item in
+                                if let lat = item.sharedInfo.sharedLatitude,
+                                   let lon = item.sharedInfo.sharedLongitude {
+                                    Annotation(
+                                        item.recording.title,
+                                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                                        anchor: .bottom
+                                    ) {
+                                        Circle()
+                                            .fill(palette.accent)
+                                            .frame(width: 12, height: 12)
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(Color.white, lineWidth: 2)
+                                            )
                                     }
-                                )
+                                }
+                            }
+                        }
+                        .mapStyle(.standard(elevation: .realistic))
+                        .frame(height: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .allowsHitTesting(false)
 
-                            // Expand button
+                        // Expand button
+                        Button {
+                            showMap = true
+                        } label: {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption)
                                 .foregroundColor(.white)
@@ -1175,7 +1205,6 @@ struct SharedAlbumDetailView: View {
                                 .padding(8)
                         }
                     }
-                    .buttonStyle(.plain)
                     .padding()
 
                     // Location list
@@ -1215,12 +1244,33 @@ struct SharedAlbumDetailView: View {
     private func loadData() {
         isLoading = true
         Task {
+            defer {
+                Task { @MainActor in
+                    isLoading = false
+                }
+            }
+
+            // Validate share still exists (non-owner)
+            if !album.isOwner && !appState.isSharedAlbumsDebugMode {
+                let valid = await appState.sharedAlbumManager.validateShareExists(for: album)
+                if !valid {
+                    await MainActor.run {
+                        shareIsStale = true
+                    }
+                    return
+                }
+            }
+
+            // Fetch current user ID
+            let userId = await appState.sharedAlbumManager.getCurrentUserId()
+
             // Load recordings
             let albumRecordings = appState.recordings(in: album)
 
             // In debug mode, use cached shared recording info
             if appState.isSharedAlbumsDebugMode {
                 await MainActor.run {
+                    currentUserId = userId ?? "user_001"  // Debug fallback
                     recordings = albumRecordings
                     // Copy from appState cache
                     for recording in albumRecordings {
@@ -1231,7 +1281,6 @@ struct SharedAlbumDetailView: View {
                     activityEvents = appState.debugMockActivityFeed()
                     trashItems = appState.debugMockTrashItems()
                     albumSettings = album.sharedSettings ?? .default
-                    isLoading = false
                 }
             } else {
                 // Load shared recording info (creator attribution, location, etc.)
@@ -1247,12 +1296,12 @@ struct SharedAlbumDetailView: View {
                 let settings = await appState.sharedAlbumManager.fetchAlbumSettings(for: album)
 
                 await MainActor.run {
+                    currentUserId = userId
                     recordings = albumRecordings
                     sharedRecordingInfos = sharedInfos
                     activityEvents = activity
                     trashItems = trash
                     albumSettings = settings ?? .default
-                    isLoading = false
                 }
             }
         }
@@ -1270,9 +1319,10 @@ struct SharedRecordingDetailView: View {
     let sharedInfo: SharedRecordingItem?
     let album: Album
 
-    @State private var isPlaying = false
-    @State private var playbackProgress: Double = 0
+    @State private var playback = PlaybackEngine()
     @State private var showDemoAlert = false
+    @State private var isLoadingAudio = false
+    @State private var audioLoadError: String?
 
     private var isDemoRecording: Bool {
         appState.isSharedAlbumsDebugMode && !FileManager.default.fileExists(atPath: recording.fileURL.path)
@@ -1323,6 +1373,9 @@ struct SharedRecordingDetailView: View {
                     }
                     .foregroundColor(palette.accent)
                 }
+            }
+            .onDisappear {
+                playback.stop()
             }
             .alert("Demo Recording", isPresented: $showDemoAlert) {
                 Button("OK", role: .cancel) {}
@@ -1448,6 +1501,26 @@ struct SharedRecordingDetailView: View {
 
     private var playbackSection: some View {
         VStack(spacing: 16) {
+            // Loading/error state
+            if isLoadingAudio {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Loading audio...")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+                .padding()
+            } else if let error = audioLoadError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+                .padding()
+            }
+
             // Progress bar
             VStack(spacing: 4) {
                 GeometryReader { geometry in
@@ -1456,22 +1529,23 @@ struct SharedRecordingDetailView: View {
                             .fill(palette.textTertiary.opacity(0.3))
                             .frame(height: 4)
 
+                        let progress = playback.duration > 0 ? playback.currentTime / playback.duration : 0
                         RoundedRectangle(cornerRadius: 2)
                             .fill(palette.accent)
-                            .frame(width: geometry.size.width * playbackProgress, height: 4)
+                            .frame(width: geometry.size.width * progress, height: 4)
                     }
                 }
                 .frame(height: 4)
 
                 HStack {
-                    Text(formatTime(playbackProgress * recording.duration))
+                    Text(formatTime(playback.currentTime))
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                         .monospacedDigit()
 
                     Spacer()
 
-                    Text(formatTime(recording.duration))
+                    Text(formatTime(playback.duration > 0 ? playback.duration : recording.duration))
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                         .monospacedDigit()
@@ -1481,9 +1555,10 @@ struct SharedRecordingDetailView: View {
             // Playback controls
             HStack(spacing: 32) {
                 Button {
-                    // Skip backward
                     if isDemoRecording {
                         showDemoAlert = true
+                    } else {
+                        playback.skip(seconds: -15)
                     }
                 } label: {
                     Image(systemName: "gobackward.15")
@@ -1495,7 +1570,7 @@ struct SharedRecordingDetailView: View {
                     if isDemoRecording {
                         showDemoAlert = true
                     } else {
-                        isPlaying.toggle()
+                        handlePlayPause()
                     }
                 } label: {
                     ZStack {
@@ -1503,16 +1578,17 @@ struct SharedRecordingDetailView: View {
                             .fill(palette.accent)
                             .frame(width: 64, height: 64)
 
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title)
                             .foregroundColor(.white)
                     }
                 }
 
                 Button {
-                    // Skip forward
                     if isDemoRecording {
                         showDemoAlert = true
+                    } else {
+                        playback.skip(seconds: 30)
                     }
                 } label: {
                     Image(systemName: "goforward.30")
@@ -1524,6 +1600,49 @@ struct SharedRecordingDetailView: View {
         .padding()
         .background(palette.cardBackground)
         .cornerRadius(12)
+    }
+
+    private func handlePlayPause() {
+        if playback.isPlaying {
+            playback.pause()
+        } else if playback.isLoaded {
+            playback.play()
+        } else {
+            // Need to load audio first
+            loadAndPlay()
+        }
+    }
+
+    private func loadAndPlay() {
+        // Check if the file exists locally
+        let fileURL = recording.fileURL
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            playback.load(url: fileURL)
+            playback.play()
+            return
+        }
+
+        // File doesn't exist locally — download from CloudKit
+        isLoadingAudio = true
+        audioLoadError = nil
+        Task {
+            do {
+                let localURL = try await appState.sharedAlbumManager.fetchRecordingAudio(
+                    recordingId: recording.id,
+                    album: album
+                )
+                await MainActor.run {
+                    isLoadingAudio = false
+                    playback.load(url: localURL)
+                    playback.play()
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingAudio = false
+                    audioLoadError = "Could not load audio: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func badgesSection(info: SharedRecordingItem) -> some View {
@@ -1618,8 +1737,9 @@ struct SharedRecordingDetailView: View {
     }
 
     private func formatTime(_ seconds: TimeInterval) -> String {
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
+        let clamped = max(0, seconds)
+        let mins = Int(clamped) / 60
+        let secs = Int(clamped) % 60
         return String(format: "%d:%02d", mins, secs)
     }
 }

@@ -930,12 +930,12 @@ struct PlayheadLineView: View {
 
                 // Main line
                 Rectangle()
-                    .fill(Color.white)
+                    .fill(palette.playheadColor)
                     .frame(width: 2, height: height)
 
                 // Top handle (knob)
                 Circle()
-                    .fill(Color.white)
+                    .fill(palette.playheadColor)
                     .frame(width: 16, height: 16)
                     .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
                     .offset(y: -height / 2 + 8)

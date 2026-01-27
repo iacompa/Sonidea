@@ -22,6 +22,8 @@ struct SharedAlbumParticipantsView: View {
     @State private var showRoleSheet = false
     @State private var isProcessing = false
     @State private var errorMessage: String?
+    @State private var sharingController: UICloudSharingController?
+    @State private var showSharingSheet = false
 
     var body: some View {
         NavigationStack {
@@ -80,10 +82,16 @@ struct SharedAlbumParticipantsView: View {
                     Text("\(participant.displayName) will lose access to all recordings in this album.")
                 }
             }
-            .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
+            }
+            .sheet(isPresented: $showSharingSheet) {
+                if let controller = sharingController {
+                    CloudSharingSheet(controller: controller)
+                        .ignoresSafeArea()
+                }
             }
             .onAppear {
                 loadParticipants()
@@ -198,13 +206,12 @@ struct SharedAlbumParticipantsView: View {
 
     private func showShareSheet() {
         appState.sharedAlbumManager.prepareSharingController(for: album) { controller in
-            guard let controller = controller else { return }
-
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let window = windowScene.windows.first,
-               let rootVC = window.rootViewController {
-                rootVC.present(controller, animated: true)
+            guard let controller = controller else {
+                errorMessage = "Could not prepare sharing. Please try again."
+                return
             }
+            sharingController = controller
+            showSharingSheet = true
         }
     }
 }

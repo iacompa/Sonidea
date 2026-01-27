@@ -92,7 +92,7 @@ struct SharedAlbumTrashView: View {
             } message: {
                 Text("All \(trashItems.count) items will be permanently deleted and cannot be recovered.")
             }
-            .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
@@ -220,15 +220,21 @@ struct SharedAlbumTrashView: View {
     private func emptyTrash() {
         isProcessing = true
         Task {
+            var deletedIds: Set<UUID> = []
+            var failCount = 0
             for item in trashItems {
                 do {
                     try await appState.sharedAlbumManager.permanentlyDelete(trashItem: item, album: album)
+                    deletedIds.insert(item.id)
                 } catch {
-                    // Continue with other items
+                    failCount += 1
                 }
             }
             await MainActor.run {
-                trashItems = []
+                trashItems.removeAll { deletedIds.contains($0.id) }
+                if failCount > 0 {
+                    errorMessage = "Failed to delete \(failCount) item\(failCount == 1 ? "" : "s"). Please try again."
+                }
                 isProcessing = false
             }
         }

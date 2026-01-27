@@ -23,11 +23,16 @@ struct SharedAlbumMapView: View {
     @State private var filterParticipant: String? = nil
     @State private var showVerifiedOnly = false
     @State private var showFilters = false
+    @State private var showRecordingDetail = false
 
     private var filteredRecordings: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.filter { item in
-            // Must have shared location
-            guard item.sharedInfo.hasSharedLocation else { return false }
+            // Must have valid shared location
+            guard item.sharedInfo.hasSharedLocation,
+                  let lat = item.sharedInfo.sharedLatitude,
+                  let lon = item.sharedInfo.sharedLongitude,
+                  lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180,
+                  lat.isFinite && lon.isFinite else { return false }
 
             // Participant filter
             if let participantId = filterParticipant {
@@ -69,7 +74,7 @@ struct SharedAlbumMapView: View {
                             }
                         },
                         onPlay: {
-                            // Play recording
+                            showRecordingDetail = true
                         }
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -102,6 +107,18 @@ struct SharedAlbumMapView: View {
                     showVerifiedOnly: $showVerifiedOnly
                 )
                 .presentationDetents([.medium])
+            }
+            .sheet(isPresented: Binding(
+                get: { showRecordingDetail && selectedRecording != nil },
+                set: { showRecordingDetail = $0 }
+            )) {
+                if let selected = selectedRecording {
+                    SharedRecordingDetailView(
+                        recording: selected.recording,
+                        sharedInfo: selected.sharedInfo,
+                        album: album
+                    )
+                }
             }
         }
     }

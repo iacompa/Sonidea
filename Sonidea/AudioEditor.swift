@@ -79,7 +79,9 @@ final class AudioEditor {
             )
 
             // Read the selected segment
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
             sourceFile.framePosition = startFrame
             try sourceFile.read(into: buffer, frameCount: frameCount)
 
@@ -168,7 +170,9 @@ final class AudioEditor {
 
             // Write part before cut
             if beforeFrameCount > 0 {
-                let beforeBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: beforeFrameCount)!
+                guard let beforeBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: beforeFrameCount) else {
+                    throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+                }
                 sourceFile.framePosition = 0
                 try sourceFile.read(into: beforeBuffer, frameCount: beforeFrameCount)
                 try outputFile.write(from: beforeBuffer)
@@ -176,7 +180,9 @@ final class AudioEditor {
 
             // Write part after cut
             if afterFrameCount > 0 {
-                let afterBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: afterFrameCount)!
+                guard let afterBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: afterFrameCount) else {
+                    throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+                }
                 sourceFile.framePosition = afterFrameStart
                 try sourceFile.read(into: afterBuffer, frameCount: afterFrameCount)
                 try outputFile.write(from: afterBuffer)
@@ -312,7 +318,9 @@ final class AudioEditor {
                 let frameCount = AVAudioFrameCount(endFrame - startFrame)
 
                 if frameCount > 0 {
-                    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                        throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+                    }
                     sourceFile.framePosition = startFrame
                     try sourceFile.read(into: buffer, frameCount: frameCount)
                     try outputFile.write(from: buffer)
@@ -383,6 +391,7 @@ enum AudioEditorError: LocalizedError {
     case invalidRange
     case readError
     case writeError
+    case editFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -392,6 +401,8 @@ enum AudioEditorError: LocalizedError {
             return "Failed to read audio file"
         case .writeError:
             return "Failed to write edited audio"
+        case .editFailed(let message):
+            return message
         }
     }
 }

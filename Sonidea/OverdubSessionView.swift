@@ -98,7 +98,7 @@ struct OverdubSessionView: View {
             .alert("Headphones Required", isPresented: $showHeadphonesAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Recording over a track requires headphones to prevent feedback. Plug in headphones or connect a supported headset, then try again.")
+                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they provide zero-latency monitoring and perfect sync. Bluetooth headphones will work but introduce a noticeable audio delay.")
             }
             .alert("Maximum Layers Reached", isPresented: $showMaxLayersAlert) {
                 Button("OK", role: .cancel) {}
@@ -108,6 +108,7 @@ struct OverdubSessionView: View {
             .confirmationDialog("Discard Recording?", isPresented: $showDiscardConfirmation) {
                 Button("Discard", role: .destructive) {
                     discardRecording()
+                    dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -125,6 +126,22 @@ struct OverdubSessionView: View {
             }
             .onDisappear {
                 cleanup()
+            }
+            .onChange(of: engine.state) { oldValue, newValue in
+                // Detect when engine auto-stops (e.g. from write failure)
+                if oldValue == .recording && newValue == .idle && isRecording {
+                    isRecording = false
+                    if let writeError = engine.recordingError {
+                        errorMessage = writeError
+                        showErrorAlert = true
+                        // Discard corrupt file
+                        if let url = recordedLayerURL {
+                            try? FileManager.default.removeItem(at: url)
+                        }
+                        recordedLayerURL = nil
+                        recordedLayerDuration = 0
+                    }
+                }
             }
         }
     }
@@ -153,16 +170,18 @@ struct OverdubSessionView: View {
                     .foregroundColor(palette.textTertiary)
             }
 
-            // Bluetooth latency warning (non-blocking, subtle)
+            // Bluetooth latency warning
             if AudioSessionManager.shared.isBluetoothOutput() {
-                HStack(spacing: 4) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 9))
-                    Text("Bluetooth adds delay. For zero-latency monitoring, use wired headphones.")
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                    Text("Bluetooth detected — expect audio delay. Wired headphones are strongly recommended for overdub recording.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
                 }
-                .foregroundColor(palette.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
             }
         }
         .padding(.horizontal)
@@ -358,11 +377,22 @@ struct OverdubSessionView: View {
 
                 if !isPrepared {
                     HStack(spacing: 6) {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Preparing audio engine...")
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
+                        if errorMessage != nil {
+                            Button {
+                                errorMessage = nil
+                                prepareEngine()
+                            } label: {
+                                Label("Retry Preparation", systemImage: "arrow.clockwise")
+                                    .font(.caption)
+                                    .foregroundColor(palette.accent)
+                            }
+                        } else {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Preparing audio engine...")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
                     }
                 } else {
                     Text("The base track will play while you record")
@@ -649,6 +679,13 @@ struct OverdubSessionView: View {
             )
             isPrepared = true
             print("✅ [OverdubSessionView] Engine prepared successfully, isPrepared=\(isPrepared)")
+
+            // Warn about any layers that couldn't be loaded
+            if !engine.failedLayerIndices.isEmpty {
+                let layerNames = engine.failedLayerIndices.map { "Layer \($0)" }.joined(separator: ", ")
+                errorMessage = "\(layerNames) could not be loaded and won't play during monitoring. The audio file may be missing or corrupted."
+                showErrorAlert = true
+            }
         } catch {
             isPrepared = false
             errorMessage = "Failed to prepare overdub: \(error.localizedDescription)"
@@ -680,7 +717,6 @@ struct OverdubSessionView: View {
 
         // Generate file URL for new layer
         let layerURL = generateLayerFileURL()
-        recordedLayerURL = layerURL
         isStartingRecording = true
 
         Task {
@@ -689,11 +725,14 @@ struct OverdubSessionView: View {
                     outputURL: layerURL,
                     quality: appState.appSettings.recordingQuality
                 )
+                recordedLayerURL = layerURL
                 isRecording = true
                 isStartingRecording = false
             } catch {
                 errorMessage = error.localizedDescription
                 showErrorAlert = true
+                // Clean up the file if it was partially created
+                try? FileManager.default.removeItem(at: layerURL)
                 recordedLayerURL = nil
                 isStartingRecording = false
             }
@@ -701,12 +740,42 @@ struct OverdubSessionView: View {
     }
 
     private func stopRecording() {
-        recordedLayerDuration = engine.stopRecording()
+        // Set isRecording = false BEFORE engine state changes,
+        // so the onChange(of: engine.state) handler knows this was a manual stop.
         isRecording = false
+        recordedLayerDuration = engine.stopRecording()
+
+        // Check if engine encountered a write error during recording
+        if let writeError = engine.recordingError {
+            errorMessage = writeError
+            showErrorAlert = true
+            // Discard the corrupt file
+            if let url = recordedLayerURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+            recordedLayerURL = nil
+            recordedLayerDuration = 0
+        }
     }
 
     private func saveRecording() {
-        guard let layerURL = recordedLayerURL else { return }
+        guard let layerURL = recordedLayerURL,
+              FileManager.default.fileExists(atPath: layerURL.path) else {
+            errorMessage = "Recording file not found. The recording may have been interrupted."
+            showErrorAlert = true
+            recordedLayerURL = nil
+            recordedLayerDuration = 0
+            return
+        }
+
+        guard recordedLayerDuration >= 0.1 else {
+            errorMessage = "Recording is too short. Please record for at least a moment before saving."
+            showErrorAlert = true
+            try? FileManager.default.removeItem(at: layerURL)
+            recordedLayerURL = nil
+            recordedLayerDuration = 0
+            return
+        }
 
         // Create or get overdub group
         let group: OverdubGroup
@@ -771,7 +840,7 @@ struct OverdubSessionView: View {
 
     private func handleClose() {
         if isRecording {
-            engine.stop()
+            stopRecording()
         }
 
         if recordedLayerURL != nil {
@@ -786,10 +855,20 @@ struct OverdubSessionView: View {
             // Headphones disconnected — stop everything
             if isRecording {
                 stopRecording()
+                // The partial recording may be incomplete — auto-discard it
+                if let url = recordedLayerURL {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                recordedLayerURL = nil
+                recordedLayerDuration = 0
+                errorMessage = "Headphones disconnected during recording. The partial recording was discarded."
+                showErrorAlert = true
             }
             engine.stop()
             isPrepared = false
-            showHeadphonesAlert = true
+            if !showErrorAlert {
+                showHeadphonesAlert = true
+            }
         } else if !isPrepared && !isRecording {
             // Headphones reconnected — re-prepare engine
             prepareEngine()
@@ -815,9 +894,11 @@ struct OverdubSessionView: View {
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        let tenths = Int((duration.truncatingRemainder(dividingBy: 1)) * 10)
+        let clamped = max(0, duration)
+        let totalSeconds = Int(clamped)
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        let tenths = Int((clamped.truncatingRemainder(dividingBy: 1)) * 10)
         return String(format: "%d:%02d.%d", minutes, seconds, tenths)
     }
 

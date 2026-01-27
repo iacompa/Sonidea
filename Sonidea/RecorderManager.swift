@@ -577,31 +577,22 @@ final class RecorderManager: NSObject {
         // AVAudioRecorder.stop() is synchronous but file system may lag
         let fileManager = FileManager.default
         var fileVerified = false
-        var retryCount = 0
-        let maxRetries = 10
 
-        while !fileVerified && retryCount < maxRetries {
-            if fileManager.fileExists(atPath: fileURL.path) {
-                do {
-                    let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
-                    if let size = attrs[.size] as? Int64, size > 100 {
-                        fileVerified = true
-                        print("✅ [RecorderManager] File verified: \(size) bytes after \(retryCount) retries")
-                    }
-                } catch {
-                    print("⚠️ [RecorderManager] Error checking file attributes: \(error.localizedDescription)")
+        // Check file existence synchronously (quick check, no blocking sleep)
+        if fileManager.fileExists(atPath: fileURL.path) {
+            do {
+                let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
+                if let size = attrs[.size] as? Int64, size > 100 {
+                    fileVerified = true
+                    print("✅ [RecorderManager] File verified: \(size) bytes")
                 }
-            }
-
-            if !fileVerified {
-                retryCount += 1
-                // Small delay to let file system catch up
-                Thread.sleep(forTimeInterval: 0.05)
+            } catch {
+                print("⚠️ [RecorderManager] Error checking file attributes: \(error.localizedDescription)")
             }
         }
 
         if !fileVerified {
-            print("❌ [RecorderManager] File verification failed after \(maxRetries) retries")
+            print("❌ [RecorderManager] File verification failed")
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
         }
 
@@ -633,6 +624,9 @@ final class RecorderManager: NSObject {
 
         resetState()
         clearInProgressRecording()
+
+        // Deactivate audio session when recording is done
+        AudioSessionManager.shared.deactivate()
 
         // Log final file info for debugging
         AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - final")

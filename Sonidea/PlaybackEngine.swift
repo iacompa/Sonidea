@@ -193,6 +193,9 @@ final class PlaybackEngine {
         duration = 0
         seekFrame = 0
         stopTimer()
+
+        // Deactivate audio session when playback is fully stopped
+        AudioSessionManager.shared.deactivate()
     }
 
     func togglePlayPause() {

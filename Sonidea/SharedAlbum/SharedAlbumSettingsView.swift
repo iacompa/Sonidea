@@ -268,8 +268,8 @@ struct SharedAlbumSettingsView: View {
         Task {
             do {
                 try await appState.sharedAlbumManager.stopSharing(album)
-                appState.removeSharedAlbum(album)
                 await MainActor.run {
+                    appState.removeSharedAlbum(album)
                     isSaving = false
                     dismiss()
                 }

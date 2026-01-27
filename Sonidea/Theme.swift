@@ -178,6 +178,9 @@ struct ThemePalette: Equatable {
     let toolbarTextPrimary: Color?        // nil = use textPrimary
     let toolbarTextSecondary: Color?      // nil = use textSecondary
 
+    // Playhead color (for waveform scrubber/cursor)
+    let playheadColor: Color
+
     // Waveform editor colors
     // Selection background should be visible but subtle - not overpower the waveform
     // Each theme has a curated color to ensure good contrast with waveform bars
@@ -230,6 +233,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
+        playheadColor: Color.accentColor,
         waveformSelectionBackground: Color.accentColor.opacity(0.15)  // Subtle blue tint
     )
 
@@ -271,6 +275,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
+        playheadColor: Color.white,
         waveformSelectionBackground: Color.accentColor.opacity(0.20)  // Slightly more visible on dark
     )
 
@@ -312,6 +317,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
+        playheadColor: Color.fromHex("#9B8CFF"),  // Light purple
         waveformSelectionBackground: Color.fromHex("#9B8CFF").opacity(0.18)  // Light purple selection
     )
 
@@ -353,6 +359,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
+        playheadColor: Color.fromHex("#C4956A"),  // Warm amber
         waveformSelectionBackground: Color.fromHex("#C4956A").opacity(0.12)  // Subtle amber on light bg
     )
 
@@ -415,6 +422,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: .light,
         toolbarTextPrimary: Color.fromHex("#1C1C1E"),   // dark text on light toolbar
         toolbarTextSecondary: Color.fromHex("#3A3A3C"),
+        playheadColor: Color.fromHex("#7B8AF4"),  // Periwinkle
         waveformSelectionBackground: Color.fromHex("#7B8AF4").opacity(0.20)  // Periwinkle selection
     )
 
@@ -477,6 +485,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: Color.fromHex("#F2F5F7"),
         toolbarTextSecondary: Color.fromHex("#C9D2D8"),
+        playheadColor: Color.fromHex("#F29A2E"),  // FL orange
         waveformSelectionBackground: Color.fromHex("#F29A2E").opacity(0.15)  // Subtle orange selection
     )
 
@@ -539,6 +548,7 @@ struct ThemePalette: Equatable {
         toolbarColorScheme: nil,
         toolbarTextPrimary: Color.fromHex("#E9EEF4"),
         toolbarTextSecondary: Color.fromHex("#AEBBCC"),
+        playheadColor: Color.fromHex("#29D3C3"),  // Teal/mint
         waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18)  // Teal selection
     )
 
@@ -558,8 +568,8 @@ struct ThemePalette: Equatable {
         separator: Color.white.opacity(0.12),
         stroke: Color.white.opacity(0.15),
 
-        accent: Color.fromHex("#2786BE"),                   // Blue needle/line
-        recordButton: Color.fromHex("#F62E38"),             // Red wave
+        accent: Color.fromHex("#F62E38"),                   // Red accent (swapped)
+        recordButton: Color.fromHex("#2786BE"),             // Blue record button (swapped)
         useMaterials: false,
 
         listRowBackground: Color.clear,
@@ -568,29 +578,30 @@ struct ThemePalette: Equatable {
         navigationBarBackground: Color.fromHex("#383838"),
         sheetBackground: Color.fromHex("#424242"),
 
-        primaryButtonBackground: Color.fromHex("#2786BE"),  // Blue
+        primaryButtonBackground: Color.fromHex("#F62E38"),  // Red (swapped)
         primaryButtonForeground: Color.white,
         secondaryButtonBackground: Color.fromHex("#4A4A4A"),
-        secondaryButtonForeground: Color.fromHex("#2786BE"),
+        secondaryButtonForeground: Color.fromHex("#F62E38"),
 
         chipBackground: Color.fromHex("#4A4A4A"),
-        chipForeground: Color.fromHex("#2786BE"),
-        chipStroke: Color.fromHex("#2786BE").opacity(0.3),
-        chipSelectedBackground: Color.fromHex("#2786BE"),
+        chipForeground: Color.fromHex("#F62E38"),
+        chipStroke: Color.fromHex("#F62E38").opacity(0.3),
+        chipSelectedBackground: Color.fromHex("#F62E38"),
         chipSelectedForeground: Color.white,
 
-        sliderTint: Color.fromHex("#2786BE"),
-        toggleOnTint: Color.fromHex("#F33B42"),             // Red companion for toggles
+        sliderTint: Color.fromHex("#F62E38"),               // Red sliders (swapped)
+        toggleOnTint: Color.fromHex("#2786BE"),             // Blue toggles (swapped)
 
         titleFontDesign: .default,
         numericFontDesign: .monospaced,
 
-        liveRecordingAccent: Color.fromHex("#F62E38"),      // Red for recording UI
+        liveRecordingAccent: Color.fromHex("#2786BE"),      // Blue for recording UI (swapped)
 
         toolbarColorScheme: nil,
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
-        waveformSelectionBackground: Color.fromHex("#2786BE").opacity(0.20)  // Blue selection
+        playheadColor: Color.fromHex("#2786BE"),            // Blue playhead (matches Sonidea logo)
+        waveformSelectionBackground: Color.fromHex("#F62E38").opacity(0.20)  // Red selection (swapped)
     )
 }
 

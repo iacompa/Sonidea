@@ -1603,7 +1603,11 @@ struct SearchSheetView: View {
                 RecordingDetailView(recording: recording)
             }
             .sheet(item: $selectedAlbum) { album in
-                AlbumDetailSheet(album: album)
+                if album.isShared {
+                    SharedAlbumDetailView(album: album)
+                } else {
+                    AlbumDetailSheet(album: album)
+                }
             }
             .sheet(item: $selectedProject) { project in
                 ProjectDetailView(project: project)

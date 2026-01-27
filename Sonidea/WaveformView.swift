@@ -18,6 +18,7 @@ struct WaveformView: View {
     private let cornerRadius: CGFloat = 12
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePalette) private var palette
 
     /// Convenience initializer for backward compatibility (envelope only)
     init(samples: [Float], progress: Double = 0, zoomScale: Binding<CGFloat>) {
@@ -48,7 +49,8 @@ struct WaveformView: View {
                         progress: progress,
                         width: zoomedWidth,
                         height: geometry.size.height,
-                        isDarkMode: colorScheme == .dark
+                        isDarkMode: colorScheme == .dark,
+                        playheadColor: palette.playheadColor
                     )
                     .frame(width: zoomedWidth, height: geometry.size.height)
                     .id("waveform")
@@ -77,6 +79,7 @@ struct WaveformCanvas: View {
     let width: CGFloat
     let height: CGFloat
     let isDarkMode: Bool
+    var playheadColor: Color = .white
 
     var body: some View {
         Canvas { context, size in
@@ -90,7 +93,6 @@ struct WaveformCanvas: View {
             // Theme-based colors
             let gridColor: Color = isDarkMode ? .white.opacity(0.08) : .black.opacity(0.06)
             let waveformColor: Color = isDarkMode ? .white.opacity(0.7) : Color(.systemGray)
-            let playheadColor: Color = isDarkMode ? .white : .accentColor
 
             // === 1. Draw Grid (behind waveform) ===
 
@@ -355,7 +357,7 @@ private struct DetailsPlayheadView: View {
                 path.move(to: CGPoint(x: x, y: 0))
                 path.addLine(to: CGPoint(x: x, y: height))
             }
-            .stroke(palette.accent, lineWidth: 2)
+            .stroke(palette.playheadColor, lineWidth: 2)
         }
     }
 }

@@ -58,7 +58,12 @@ extension Color {
     }
 
     func toHex() -> String {
-        guard let components = UIColor(self).cgColor.components else { return "#007AFF" }
+        guard let components = UIColor(self).cgColor.components, components.count >= 3 else {
+            // Grayscale or invalid color space — convert via UIColor
+            var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0
+            UIColor(self).getRed(&r, green: &g, blue: &b, alpha: nil)
+            return String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+        }
         let r = Int((components[0] * 255).rounded())
         let g = Int((components[1] * 255).rounded())
         let b = Int((components[2] * 255).rounded())

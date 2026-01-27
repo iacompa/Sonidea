@@ -153,7 +153,9 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
 
     // System albums cannot be renamed
     var canRename: Bool {
-        !isSystem && !isShared  // Shared albums cannot be renamed by non-owners
+        if isSystem { return false }
+        if isShared { return isOwner }  // Only owner can rename shared albums
+        return true
     }
 
     /// Shared albums cannot be converted from existing albums

@@ -11,6 +11,7 @@ import CloudKit
 import Observation
 import OSLog
 import UIKit
+import Network
 
 // MARK: - Shared Album Error
 
@@ -27,6 +28,8 @@ enum SharedAlbumError: Error, LocalizedError {
     case recordingNotFound
     case trashItemNotFound
     case invalidRole
+    case offline
+    case shareNoLongerExists
 
     var errorDescription: String? {
         switch self {
@@ -54,6 +57,10 @@ enum SharedAlbumError: Error, LocalizedError {
             return "Trash item not found"
         case .invalidRole:
             return "Invalid participant role"
+        case .offline:
+            return "You're offline. This action will be retried when connectivity returns."
+        case .shareNoLongerExists:
+            return "This shared album is no longer available. The owner may have stopped sharing."
         }
     }
 }
@@ -68,12 +75,15 @@ final class SharedAlbumManager {
 
     var isProcessing = false
     var error: String?
+    var isOnline = true
+    var shareStale = false  // Set true when owner has stopped sharing
 
     // MARK: - Configuration
 
     private let containerIdentifier = "iCloud.com.iacompa.sonidea"
     private let sharedZoneName = "SharedAlbumsZone"
     private let maxParticipants = 5
+    private let maxCacheSizeBytes: Int64 = 500 * 1024 * 1024  // 500 MB
     private let logger = Logger(subsystem: "com.iacompa.sonidea", category: "SharedAlbum")
 
     // MARK: - CloudKit Objects
@@ -90,12 +100,57 @@ final class SharedAlbumManager {
         container.sharedCloudDatabase
     }
 
+    // MARK: - Database Routing for Owner vs Non-Owner
+
+    /// Returns the correct database and zone ID for a shared album.
+    /// Owners use privateDatabase with their own zone.
+    /// Non-owners use sharedDatabase and must find the zone from allRecordZones().
+    private func databaseAndZone(for album: Album) async throws -> (database: CKDatabase, zoneID: CKRecordZone.ID) {
+        if album.isOwner {
+            let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
+            return (privateDatabase, zoneID)
+        } else {
+            let allZones = try await sharedDatabase.allRecordZones()
+            guard let sharedZone = allZones.first(where: { $0.zoneID.zoneName == "SharedAlbum-\(album.id.uuidString)" }) else {
+                throw SharedAlbumError.shareNoLongerExists
+            }
+            return (sharedDatabase, sharedZone.zoneID)
+        }
+    }
+
     // Weak reference to AppState
     weak var appState: AppState?
 
+    // MARK: - Network Monitor & Offline Queue
+
+    private let networkMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.iacompa.sonidea.networkMonitor")
+    private var pendingOperations: [PendingOperation] = []
+    private let pendingOpsKey = "sharedAlbum_pendingOperations"
+
+    /// Represents a queued operation that failed due to being offline
+    struct PendingOperation: Codable, Identifiable {
+        let id: UUID
+        let operationType: String
+        let albumId: UUID
+        let recordingId: UUID?
+        let payload: [String: String]
+        let createdAt: Date
+        var retryCount: Int = 0
+    }
+
+    private let maxRetryCount = 5
+
     // MARK: - Initialization
 
-    init() {}
+    init() {
+        loadPendingOperations()
+        startNetworkMonitor()
+    }
+
+    deinit {
+        networkMonitor.cancel()
+    }
 
     // MARK: - Public API
 
@@ -172,11 +227,10 @@ final class SharedAlbumManager {
             return nil
         }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let shareRecordID = CKRecord.ID(recordName: shareRecordName, zoneID: zoneID)
-
         do {
-            let record = try await privateDatabase.record(for: shareRecordID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let shareRecordID = CKRecord.ID(recordName: shareRecordName, zoneID: zoneID)
+            let record = try await db.record(for: shareRecordID)
             return record as? CKShare
         } catch {
             logger.error("Failed to fetch share: \(error.localizedDescription)")
@@ -194,17 +248,25 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        // For participants, we just remove the zone from sharedDatabase
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-
+        // Non-owners leave by fetching the share from the shared database
+        // and using CKDatabase to remove the accepted share
         do {
-            // Accept leaving by removing from shared database
-            // The zone will be removed from the participant's view
-            try await sharedDatabase.modifyRecordZones(saving: [], deleting: [zoneID])
-            logger.info("Left shared album successfully")
+            // First try to fetch all accepted shares and find the matching one
+            let allZones = try await sharedDatabase.allRecordZones()
+            let matchingZone = allZones.first { $0.zoneID.zoneName == "SharedAlbum-\(album.id.uuidString)" }
+
+            if let zone = matchingZone {
+                // Delete the zone from the shared database — this removes the participant's
+                // accepted share and effectively leaves the album
+                try await sharedDatabase.modifyRecordZones(saving: [], deleting: [zone.zoneID])
+                logger.info("Left shared album successfully")
+            } else {
+                // Zone not found in shared database — may already be left
+                logger.warning("Shared zone not found, album may already be left")
+            }
         } catch {
-            // If zone doesn't exist in shared database, it's already been left
-            logger.warning("Zone may already be removed: \(error.localizedDescription)")
+            logger.error("Failed to leave shared album: \(error.localizedDescription)")
+            throw SharedAlbumError.networkError(error)
         }
     }
 
@@ -254,7 +316,7 @@ final class SharedAlbumManager {
         let currentUserId = await getCurrentUserId() ?? "unknown"
         let currentUserName = await getCurrentUserDisplayName() ?? "Unknown User"
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
+        let (db, zoneID) = try await databaseAndZone(for: album)
         let recordID = CKRecord.ID(recordName: recording.id.uuidString, zoneID: zoneID)
 
         let record = CKRecord(recordType: "SharedRecording", recordID: recordID)
@@ -287,7 +349,7 @@ final class SharedAlbumManager {
         }
 
         do {
-            try await privateDatabase.save(record)
+            try await db.save(record)
 
             // Log activity
             let event = SharedAlbumActivityEvent.recordingAdded(
@@ -314,11 +376,10 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
-
         do {
-            try await privateDatabase.modifyRecords(saving: [], deleting: [recordID])
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
+            try await db.modifyRecords(saving: [], deleting: [recordID])
             logger.info("Deleted recording from shared album")
         } catch {
             logger.error("Failed to delete recording from shared album: \(error.localizedDescription)")
@@ -332,19 +393,18 @@ final class SharedAlbumManager {
 
         logger.info("Fetching shared recording info for album: \(album.id)")
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
         let predicate = NSPredicate(value: true)
         let query = CKQuery(recordType: "SharedRecording", predicate: predicate)
 
         var result: [UUID: SharedRecordingItem] = [:]
 
         do {
-            let records = try await privateDatabase.records(matching: query, inZoneWith: zoneID, resultsLimit: 500)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let records = try await db.records(matching: query, inZoneWith: zoneID, resultsLimit: 500)
 
             for (_, recordResult) in records.matchResults {
                 if case .success(let record) = recordResult {
-                    guard let recordingIdString = record.recordID.recordName.components(separatedBy: "-").first,
-                          let recordingId = UUID(uuidString: record.recordID.recordName) else {
+                    guard let recordingId = UUID(uuidString: record.recordID.recordName) else {
                         continue
                     }
 
@@ -405,6 +465,9 @@ final class SharedAlbumManager {
             )
             participants.append(ownerParticipant)
 
+            // Fetch stored roles from CloudKit
+            let storedRoles = await fetchStoredParticipantRoles(for: album)
+
             // Add other participants
             for participant in share.participants where participant.role != .owner {
                 let status: SharedAlbumParticipant.ParticipantStatus
@@ -419,13 +482,13 @@ final class SharedAlbumManager {
                     status = .pending
                 }
 
-                // Default new participants to member role
-                // In a full implementation, we'd fetch stored roles from CloudKit
+                let participantId = participant.userIdentity.userRecordID?.recordName ?? UUID().uuidString
                 let displayName = participant.userIdentity.nameComponents?.formatted() ?? "Participant"
+                let storedRole = storedRoles[participantId] ?? .member
                 let p = SharedAlbumParticipant(
-                    id: participant.userIdentity.userRecordID?.recordName ?? UUID().uuidString,
+                    id: participantId,
                     displayName: displayName,
-                    role: .member,  // Default role for non-owners
+                    role: storedRole,
                     acceptanceStatus: status,
                     joinedAt: status == .accepted ? Date() : nil,
                     avatarInitials: SharedAlbumParticipant.generateInitials(from: displayName)
@@ -474,15 +537,53 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        // In a real implementation, this would update the CKShare participant permissions
-        // For now, we'll update local state and sync
+        // Store the role in a CloudKit record so it persists across devices
+        let (db, zoneID) = try await databaseAndZone(for: album)
+        let roleRecordID = CKRecord.ID(recordName: "role-\(participantId)", zoneID: zoneID)
+
+        let record: CKRecord
+        do {
+            record = try await db.record(for: roleRecordID)
+        } catch {
+            record = CKRecord(recordType: "SharedAlbumParticipantRole", recordID: roleRecordID)
+        }
+
+        record["participantId"] = participantId
+        record["role"] = newRole.rawValue
+
+        do {
+            try await db.save(record)
+            logger.info("Saved participant role to CloudKit")
+        } catch {
+            logger.error("Failed to save participant role: \(error.localizedDescription)")
+            throw SharedAlbumError.networkError(error)
+        }
+
+        // Update CKShare participant permission to match role
+        if let share = try await getShare(for: album) {
+            for participant in share.participants {
+                if participant.userIdentity.userRecordID?.recordName == participantId {
+                    let permission: CKShare.ParticipantPermission = newRole == .viewer ? .readOnly : .readWrite
+                    participant.permission = permission
+                    break
+                }
+            }
+            do {
+                try await privateDatabase.save(share)
+                logger.info("Updated CKShare participant permission")
+            } catch {
+                logger.error("Failed to update CKShare permission: \(error.localizedDescription)")
+                // Non-fatal: the role record is already saved
+            }
+        }
 
         // Log activity
         if let currentUserId = await getCurrentUserId() {
+            let currentDisplayName = await getCurrentUserDisplayName()
             let event = SharedAlbumActivityEvent(
                 albumId: album.id,
                 actorId: currentUserId,
-                actorDisplayName: "You",
+                actorDisplayName: currentDisplayName,
                 eventType: .participantRoleChanged,
                 targetParticipantId: participantId,
                 newValue: newRole.displayName
@@ -520,10 +621,11 @@ final class SharedAlbumManager {
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
                 let event = SharedAlbumActivityEvent(
                     albumId: album.id,
                     actorId: currentUserId,
-                    actorDisplayName: "You",
+                    actorDisplayName: currentDisplayName,
                     eventType: .participantRemoved,
                     targetParticipantId: participantId
                 )
@@ -568,25 +670,25 @@ final class SharedAlbumManager {
             deletedByDisplayName: deletedByDisplayName
         )
 
-        // Store in CloudKit trash zone
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
-        let trashRecord = CKRecord(recordType: "SharedAlbumTrash", recordID: trashRecordID)
-
-        trashRecord["recordingId"] = trashItem.recordingId.uuidString
-        trashRecord["title"] = trashItem.title
-        trashRecord["duration"] = trashItem.duration
-        trashRecord["creatorId"] = trashItem.creatorId
-        trashRecord["creatorDisplayName"] = trashItem.creatorDisplayName
-        trashRecord["deletedBy"] = trashItem.deletedBy
-        trashRecord["deletedByDisplayName"] = trashItem.deletedByDisplayName
-        trashRecord["deletedAt"] = trashItem.deletedAt
-        trashRecord["originalCreatedAt"] = trashItem.originalCreatedAt
-
         do {
+            // Store in CloudKit trash zone
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
+            let trashRecord = CKRecord(recordType: "SharedAlbumTrash", recordID: trashRecordID)
+
+            trashRecord["recordingId"] = trashItem.recordingId.uuidString
+            trashRecord["title"] = trashItem.title
+            trashRecord["duration"] = trashItem.duration
+            trashRecord["creatorId"] = trashItem.creatorId
+            trashRecord["creatorDisplayName"] = trashItem.creatorDisplayName
+            trashRecord["deletedBy"] = trashItem.deletedBy
+            trashRecord["deletedByDisplayName"] = trashItem.deletedByDisplayName
+            trashRecord["deletedAt"] = trashItem.deletedAt
+            trashRecord["originalCreatedAt"] = trashItem.originalCreatedAt
+
             // Save trash record and delete original
             let recordingRecordID = CKRecord.ID(recordName: localRecording.id.uuidString, zoneID: zoneID)
-            try await privateDatabase.modifyRecords(saving: [trashRecord], deleting: [recordingRecordID])
+            try await db.modifyRecords(saving: [trashRecord], deleting: [recordingRecordID])
 
             // Log activity
             let event = SharedAlbumActivityEvent.recordingDeleted(
@@ -616,30 +718,39 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-
-        // Recreate the recording record
-        let recordID = CKRecord.ID(recordName: trashItem.recordingId.uuidString, zoneID: zoneID)
-        let record = CKRecord(recordType: "SharedRecording", recordID: recordID)
-
-        record["title"] = trashItem.title
-        record["duration"] = trashItem.duration
-        record["createdAt"] = trashItem.originalCreatedAt
-        record["creatorId"] = trashItem.creatorId
-        record["creatorDisplayName"] = trashItem.creatorDisplayName
-
-        // Delete trash record
-        let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
-
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [trashRecordID])
+            let (db, zoneID) = try await databaseAndZone(for: album)
+
+            // Recreate the recording record
+            let recordID = CKRecord.ID(recordName: trashItem.recordingId.uuidString, zoneID: zoneID)
+            let record = CKRecord(recordType: "SharedRecording", recordID: recordID)
+
+            record["title"] = trashItem.title
+            record["duration"] = trashItem.duration
+            record["createdAt"] = trashItem.originalCreatedAt
+            record["creatorId"] = trashItem.creatorId
+            record["creatorDisplayName"] = trashItem.creatorDisplayName
+
+            // Restore audio from original metadata if available
+            if let audioRef = trashItem.audioAssetReference {
+                let audioURL = URL(fileURLWithPath: audioRef)
+                if FileManager.default.fileExists(atPath: audioURL.path) {
+                    record["audioFile"] = CKAsset(fileURL: audioURL)
+                }
+            }
+
+            // Delete trash record
+            let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
+
+            try await db.modifyRecords(saving: [record], deleting: [trashRecordID])
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
                 let event = SharedAlbumActivityEvent(
                     albumId: album.id,
                     actorId: currentUserId,
-                    actorDisplayName: "You",
+                    actorDisplayName: currentDisplayName,
                     eventType: .recordingRestored,
                     targetRecordingId: trashItem.recordingId,
                     targetRecordingTitle: trashItem.title
@@ -664,11 +775,10 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
-
         do {
-            try await privateDatabase.modifyRecords(saving: [], deleting: [trashRecordID])
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
+            try await db.modifyRecords(saving: [], deleting: [trashRecordID])
             logger.info("Permanently deleted trash item")
         } catch {
             logger.error("Failed to permanently delete: \(error.localizedDescription)")
@@ -680,12 +790,12 @@ final class SharedAlbumManager {
     func fetchTrashItems(for album: Album) async -> [SharedAlbumTrashItem] {
         guard album.isShared else { return [] }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
         let query = CKQuery(recordType: "SharedAlbumTrash", predicate: NSPredicate(value: true))
         query.sortDescriptors = [NSSortDescriptor(key: "deletedAt", ascending: false)]
 
         do {
-            let (results, _) = try await privateDatabase.records(matching: query, inZoneWith: zoneID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let (results, _) = try await db.records(matching: query, inZoneWith: zoneID)
 
             var trashItems: [SharedAlbumTrashItem] = []
             for (_, result) in results {
@@ -714,13 +824,12 @@ final class SharedAlbumManager {
 
         logger.info("Purging \(itemsToPurge.count) expired trash items")
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordIDsToDelete = itemsToPurge.map { item in
-            CKRecord.ID(recordName: "trash-\(item.id.uuidString)", zoneID: zoneID)
-        }
-
         do {
-            try await privateDatabase.modifyRecords(saving: [], deleting: recordIDsToDelete)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordIDsToDelete = itemsToPurge.map { item in
+                CKRecord.ID(recordName: "trash-\(item.id.uuidString)", zoneID: zoneID)
+            }
+            try await db.modifyRecords(saving: [], deleting: recordIDsToDelete)
             logger.info("Purged expired trash items successfully")
         } catch {
             logger.error("Failed to purge trash items: \(error.localizedDescription)")
@@ -749,8 +858,11 @@ final class SharedAlbumManager {
             return nil
         }
 
+        let trashIdString = record.recordID.recordName.replacingOccurrences(of: "trash-", with: "")
+        guard let trashItemId = UUID(uuidString: trashIdString) else { return nil }
+
         return SharedAlbumTrashItem(
-            id: UUID(uuidString: record.recordID.recordName.replacingOccurrences(of: "trash-", with: "")) ?? UUID(),
+            id: trashItemId,
             recordingId: recordingId,
             albumId: albumId,
             title: title,
@@ -770,23 +882,23 @@ final class SharedAlbumManager {
     func logActivity(event: SharedAlbumActivityEvent, for album: Album) async throws {
         guard album.isShared else { return }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordID = CKRecord.ID(recordName: "activity-\(event.id.uuidString)", zoneID: zoneID)
-        let record = CKRecord(recordType: "SharedAlbumActivity", recordID: recordID)
-
-        record["timestamp"] = event.timestamp
-        record["actorId"] = event.actorId
-        record["actorDisplayName"] = event.actorDisplayName
-        record["eventType"] = event.eventType.rawValue
-        record["targetRecordingId"] = event.targetRecordingId?.uuidString
-        record["targetRecordingTitle"] = event.targetRecordingTitle
-        record["targetParticipantId"] = event.targetParticipantId
-        record["targetParticipantName"] = event.targetParticipantName
-        record["oldValue"] = event.oldValue
-        record["newValue"] = event.newValue
-
         do {
-            try await privateDatabase.save(record)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: "activity-\(event.id.uuidString)", zoneID: zoneID)
+            let record = CKRecord(recordType: "SharedAlbumActivity", recordID: recordID)
+
+            record["timestamp"] = event.timestamp
+            record["actorId"] = event.actorId
+            record["actorDisplayName"] = event.actorDisplayName
+            record["eventType"] = event.eventType.rawValue
+            record["targetRecordingId"] = event.targetRecordingId?.uuidString
+            record["targetRecordingTitle"] = event.targetRecordingTitle
+            record["targetParticipantId"] = event.targetParticipantId
+            record["targetParticipantName"] = event.targetParticipantName
+            record["oldValue"] = event.oldValue
+            record["newValue"] = event.newValue
+
+            try await db.save(record)
             logger.debug("Logged activity: \(event.eventType.rawValue)")
         } catch {
             logger.error("Failed to log activity: \(error.localizedDescription)")
@@ -798,12 +910,12 @@ final class SharedAlbumManager {
     func fetchActivityFeed(for album: Album, limit: Int = 50) async -> [SharedAlbumActivityEvent] {
         guard album.isShared else { return [] }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
         let query = CKQuery(recordType: "SharedAlbumActivity", predicate: NSPredicate(value: true))
         query.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
 
         do {
-            let (results, _) = try await privateDatabase.records(matching: query, inZoneWith: zoneID, resultsLimit: limit)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let (results, _) = try await db.records(matching: query, inZoneWith: zoneID, resultsLimit: limit)
 
             var events: [SharedAlbumActivityEvent] = []
             for (_, result) in results {
@@ -829,8 +941,11 @@ final class SharedAlbumManager {
             return nil
         }
 
+        let activityIdString = record.recordID.recordName.replacingOccurrences(of: "activity-", with: "")
+        guard let activityId = UUID(uuidString: activityIdString) else { return nil }
+
         return SharedAlbumActivityEvent(
-            id: UUID(uuidString: record.recordID.recordName.replacingOccurrences(of: "activity-", with: "")) ?? UUID(),
+            id: activityId,
             albumId: albumId,
             timestamp: timestamp,
             actorId: actorId,
@@ -857,13 +972,13 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
+        let (db, zoneID) = try await databaseAndZone(for: album)
         let settingsRecordID = CKRecord.ID(recordName: "settings-\(album.id.uuidString)", zoneID: zoneID)
 
         // Try to fetch existing settings record or create new one
         let record: CKRecord
         do {
-            record = try await privateDatabase.record(for: settingsRecordID)
+            record = try await db.record(for: settingsRecordID)
         } catch {
             record = CKRecord(recordType: "SharedAlbumSettings", recordID: settingsRecordID)
         }
@@ -876,7 +991,7 @@ final class SharedAlbumManager {
         record["requireSensitiveApproval"] = settings.requireSensitiveApproval
 
         do {
-            try await privateDatabase.save(record)
+            try await db.save(record)
             logger.info("Updated album settings successfully")
         } catch {
             logger.error("Failed to update settings: \(error.localizedDescription)")
@@ -888,11 +1003,10 @@ final class SharedAlbumManager {
     func fetchAlbumSettings(for album: Album) async -> SharedAlbumSettings? {
         guard album.isShared else { return nil }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let settingsRecordID = CKRecord.ID(recordName: "settings-\(album.id.uuidString)", zoneID: zoneID)
-
         do {
-            let record = try await privateDatabase.record(for: settingsRecordID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let settingsRecordID = CKRecord.ID(recordName: "settings-\(album.id.uuidString)", zoneID: zoneID)
+            let record = try await db.record(for: settingsRecordID)
             return parseSettingsRecord(record)
         } catch {
             // Settings don't exist yet, return defaults
@@ -951,11 +1065,11 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
-
         do {
-            let record = try await privateDatabase.record(for: recordID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
+
+            let record = try await db.record(for: recordID)
 
             record["locationSharingMode"] = mode.rawValue
 
@@ -970,15 +1084,16 @@ final class SharedAlbumManager {
                 record["sharedPlaceName"] = nil
             }
 
-            try await privateDatabase.save(record)
+            try await db.save(record)
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
                 let eventType: ActivityEventType = mode == .none ? .locationDisabled : .locationEnabled
                 let event = SharedAlbumActivityEvent(
                     albumId: album.id,
                     actorId: currentUserId,
-                    actorDisplayName: "You",
+                    actorDisplayName: currentDisplayName,
                     eventType: eventType,
                     newValue: mode.displayName
                 )
@@ -1006,24 +1121,25 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
-
         do {
-            let record = try await privateDatabase.record(for: recordID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
+
+            let record = try await db.record(for: recordID)
             record["isSensitive"] = isSensitive
             record["sensitiveApproved"] = false
             record["sensitiveApprovedBy"] = nil
 
-            try await privateDatabase.save(record)
+            try await db.save(record)
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
                 let eventType: ActivityEventType = isSensitive ? .recordingMarkedSensitive : .recordingUnmarkedSensitive
                 let event = SharedAlbumActivityEvent(
                     albumId: album.id,
                     actorId: currentUserId,
-                    actorDisplayName: "You",
+                    actorDisplayName: currentDisplayName,
                     eventType: eventType,
                     targetRecordingId: recording.recordingId
                 )
@@ -1051,25 +1167,26 @@ final class SharedAlbumManager {
         isProcessing = true
         defer { isProcessing = false }
 
-        let zoneID = CKRecordZone.ID(zoneName: "SharedAlbum-\(album.id.uuidString)", ownerName: CKCurrentUserDefaultName)
-        let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
-
         do {
-            let record = try await privateDatabase.record(for: recordID)
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recording.recordingId.uuidString, zoneID: zoneID)
+
+            let record = try await db.record(for: recordID)
 
             if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
                 record["sensitiveApproved"] = approved
                 record["sensitiveApprovedBy"] = approved ? currentUserId : nil
                 record["sensitiveApprovedAt"] = approved ? Date() : nil
 
-                try await privateDatabase.save(record)
+                try await db.save(record)
 
                 // Log activity
                 let eventType: ActivityEventType = approved ? .sensitiveRecordingApproved : .sensitiveRecordingRejected
                 let event = SharedAlbumActivityEvent(
                     albumId: album.id,
                     actorId: currentUserId,
-                    actorDisplayName: "You",
+                    actorDisplayName: currentDisplayName,
                     eventType: eventType,
                     targetRecordingId: recording.recordingId
                 )
@@ -1081,6 +1198,53 @@ final class SharedAlbumManager {
             logger.error("Failed to approve sensitive recording: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
         }
+    }
+
+    // MARK: - Audio Asset Download
+
+    /// Download audio for a shared recording from CloudKit
+    /// Returns a local file URL where the audio has been cached
+    func fetchRecordingAudio(recordingId: UUID, album: Album) async throws -> URL {
+        // Check local cache first
+        let cacheDir = sharedAlbumCacheDirectory(albumId: album.id)
+        let cachedFile = cacheDir.appendingPathComponent("\(recordingId.uuidString).m4a")
+        if FileManager.default.fileExists(atPath: cachedFile.path) {
+            return cachedFile
+        }
+
+        // Fetch from CloudKit using correct database for owner vs non-owner
+        let (db, zoneID) = try await databaseAndZone(for: album)
+        let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
+        let record = try await db.record(for: recordID)
+
+        guard let asset = record["audioFile"] as? CKAsset,
+              let assetURL = asset.fileURL else {
+            throw SharedAlbumError.recordingNotFound
+        }
+
+        // Copy asset to local cache
+        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: cachedFile.path) {
+            try FileManager.default.removeItem(at: cachedFile)
+        }
+        try FileManager.default.copyItem(at: assetURL, to: cachedFile)
+
+        // Validate the downloaded file is not empty
+        let attributes = try FileManager.default.attributesOfItem(atPath: cachedFile.path)
+        let fileSize = attributes[.size] as? Int64 ?? 0
+        if fileSize == 0 {
+            try? FileManager.default.removeItem(at: cachedFile)
+            throw SharedAlbumError.recordingNotFound
+        }
+
+        logger.info("Downloaded shared recording audio to cache: \(recordingId)")
+        return cachedFile
+    }
+
+    /// Get the cache directory for a shared album's audio files
+    private func sharedAlbumCacheDirectory(albumId: UUID) -> URL {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SharedAlbumAudio/\(albumId.uuidString)", isDirectory: true) }
+        return caches.appendingPathComponent("SharedAlbumAudio/\(albumId.uuidString)", isDirectory: true)
     }
 
     // MARK: - Helper Methods
@@ -1096,6 +1260,30 @@ final class SharedAlbumManager {
         }
     }
 
+    /// Fetch stored participant roles from CloudKit
+    private func fetchStoredParticipantRoles(for album: Album) async -> [String: ParticipantRole] {
+        let query = CKQuery(recordType: "SharedAlbumParticipantRole", predicate: NSPredicate(value: true))
+
+        var roles: [String: ParticipantRole] = [:]
+
+        do {
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let (results, _) = try await db.records(matching: query, inZoneWith: zoneID)
+            for (_, result) in results {
+                if case .success(let record) = result,
+                   let participantId = record["participantId"] as? String,
+                   let roleRaw = record["role"] as? String,
+                   let role = ParticipantRole(rawValue: roleRaw) {
+                    roles[participantId] = role
+                }
+            }
+        } catch {
+            logger.error("Failed to fetch stored roles: \(error.localizedDescription)")
+        }
+
+        return roles
+    }
+
     /// Get current user's display name
     func getCurrentUserDisplayName() async -> String {
         do {
@@ -1106,7 +1294,256 @@ final class SharedAlbumManager {
             return "You"
         }
     }
+
+    // MARK: - Real-Time Sync (CKDatabaseSubscription)
+
+    /// Subscribe to changes in the private and shared databases for shared album zones
+    func setupDatabaseSubscriptions() async {
+        logger.info("Setting up database subscriptions for shared albums")
+
+        // Subscribe to private database changes (owner sees participant changes)
+        await subscribeToDatabase(privateDatabase, subscriptionID: "private-shared-albums")
+
+        // Subscribe to shared database changes (participants see owner/other changes)
+        await subscribeToDatabase(sharedDatabase, subscriptionID: "shared-shared-albums")
+    }
+
+    private func subscribeToDatabase(_ database: CKDatabase, subscriptionID: String) async {
+        let subscription = CKDatabaseSubscription(subscriptionID: subscriptionID)
+
+        let notificationInfo = CKSubscription.NotificationInfo()
+        notificationInfo.shouldSendContentAvailable = true  // Silent push
+        subscription.notificationInfo = notificationInfo
+
+        do {
+            try await database.save(subscription)
+            logger.info("Subscribed to database: \(subscriptionID)")
+        } catch {
+            // Subscription may already exist — that's fine
+            if let ckError = error as? CKError, ckError.code == .serverRejectedRequest {
+                logger.debug("Subscription already exists: \(subscriptionID)")
+            } else {
+                logger.error("Failed to subscribe to \(subscriptionID): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Handle a remote notification push (called from AppDelegate)
+    func handleRemoteNotification() async {
+        logger.info("Handling remote notification for shared albums")
+
+        // Refresh all shared album data
+        guard let appState = appState else { return }
+        let sharedAlbums = appState.albums.filter { $0.isShared }
+
+        for album in sharedAlbums {
+            // Refresh recordings
+            let sharedInfos = await fetchSharedRecordingInfo(for: album)
+            for (id, info) in sharedInfos {
+                appState.sharedRecordingInfoCache[id] = info
+            }
+
+            // Refresh activity
+            _ = await fetchActivityFeed(for: album)
+
+            // Purge expired trash
+            try? await purgeExpiredTrashItems(for: album)
+        }
+
+        logger.info("Finished handling remote notification")
+    }
+
+    // MARK: - Network Monitor & Offline Queue
+
+    private func startNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let isSatisfied = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let wasOffline = !self.isOnline
+                self.isOnline = isSatisfied
+
+                if wasOffline && isSatisfied {
+                    self.logger.info("Network restored — retrying pending operations")
+                    await self.retryPendingOperations()
+                }
+            }
+        }
+        networkMonitor.start(queue: monitorQueue)
+    }
+
+    /// Queue a failed operation for retry when network returns
+    func queuePendingOperation(type: String, albumId: UUID, recordingId: UUID? = nil, payload: [String: String] = [:]) {
+        let op = PendingOperation(
+            id: UUID(),
+            operationType: type,
+            albumId: albumId,
+            recordingId: recordingId,
+            payload: payload,
+            createdAt: Date()
+        )
+        pendingOperations.append(op)
+        savePendingOperations()
+        logger.info("Queued pending operation: \(type)")
+    }
+
+    /// Retry all pending operations
+    private func retryPendingOperations() async {
+        guard !pendingOperations.isEmpty else { return }
+
+        let opsToRetry = pendingOperations
+        pendingOperations.removeAll()
+        savePendingOperations()
+
+        for op in opsToRetry {
+            guard let appState = appState else { break }
+            guard let album = appState.albums.first(where: { $0.id == op.albumId }) else { continue }
+
+            do {
+                switch op.operationType {
+                case "addRecording":
+                    if let recordingId = op.recordingId,
+                       let recording = appState.recordings.first(where: { $0.id == recordingId }) {
+                        let mode = LocationSharingMode(rawValue: op.payload["locationMode"] ?? "none") ?? .none
+                        try await addRecordingToSharedAlbum(recording: recording, album: album, locationMode: mode)
+                    }
+                case "deleteRecording":
+                    if let recordingId = op.recordingId {
+                        try await deleteRecordingFromSharedAlbum(recordingId: recordingId, album: album)
+                    }
+                case "updateSettings":
+                    if let settingsData = op.payload["settings"]?.data(using: .utf8),
+                       let settings = try? JSONDecoder().decode(SharedAlbumSettings.self, from: settingsData) {
+                        try await updateAlbumSettings(album: album, settings: settings)
+                    }
+                default:
+                    logger.warning("Unknown pending operation type: \(op.operationType)")
+                }
+                logger.info("Retried pending operation: \(op.operationType)")
+            } catch {
+                // Re-queue if still failing, up to max retries
+                var retryOp = op
+                retryOp.retryCount += 1
+                if retryOp.retryCount < self.maxRetryCount {
+                    logger.error("Retry \(retryOp.retryCount)/\(self.maxRetryCount) failed for \(op.operationType): \(error.localizedDescription)")
+                    pendingOperations.append(retryOp)
+                } else {
+                    logger.error("Dropping operation \(op.operationType) after \(self.maxRetryCount) retries")
+                }
+            }
+        }
+
+        savePendingOperations()
+    }
+
+    private func savePendingOperations() {
+        if let data = try? JSONEncoder().encode(pendingOperations) {
+            UserDefaults.standard.set(data, forKey: pendingOpsKey)
+        }
+    }
+
+    private func loadPendingOperations() {
+        if let data = UserDefaults.standard.data(forKey: pendingOpsKey),
+           let ops = try? JSONDecoder().decode([PendingOperation].self, from: data) {
+            pendingOperations = ops
+        }
+    }
+
+    // MARK: - Stale Share Detection
+
+    /// Check if a shared album's share still exists (owner may have stopped sharing)
+    func validateShareExists(for album: Album) async -> Bool {
+        guard album.isShared else { return false }
+
+        if album.isOwner {
+            // Owner's share is always valid from their perspective
+            return true
+        }
+
+        // Non-owner: check if the zone still exists in shared database
+        do {
+            let allZones = try await sharedDatabase.allRecordZones()
+            let exists = allZones.contains { $0.zoneID.zoneName == "SharedAlbum-\(album.id.uuidString)" }
+            if !exists {
+                shareStale = true
+                logger.warning("Shared album no longer exists: \(album.name)")
+            }
+            return exists
+        } catch {
+            // Network error — don't mark as stale, just return true
+            logger.error("Failed to validate share: \(error.localizedDescription)")
+            return true
+        }
+    }
+
+    // MARK: - Audio Cache Management
+
+    /// Evict cached audio files if total size exceeds limit (LRU)
+    func evictAudioCacheIfNeeded() {
+        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let cacheBase = cachesDir.appendingPathComponent("SharedAlbumAudio", isDirectory: true)
+
+        guard FileManager.default.fileExists(atPath: cacheBase.path) else { return }
+
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: cacheBase, includingPropertiesForKeys: [.fileSizeKey, .contentAccessDateKey], options: [.skipsHiddenFiles]) else { return }
+
+        struct CachedFile {
+            let url: URL
+            let size: Int64
+            let lastAccessed: Date
+        }
+
+        var files: [CachedFile] = []
+        var totalSize: Int64 = 0
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentAccessDateKey]),
+                  let size = values.fileSize,
+                  let accessed = values.contentAccessDate else { continue }
+            let entry = CachedFile(url: fileURL, size: Int64(size), lastAccessed: accessed)
+            files.append(entry)
+            totalSize += entry.size
+        }
+
+        guard totalSize > maxCacheSizeBytes else { return }
+
+        // Sort oldest-accessed first (LRU eviction)
+        files.sort { $0.lastAccessed < $1.lastAccessed }
+
+        var evicted: Int64 = 0
+        for file in files {
+            guard totalSize - evicted > maxCacheSizeBytes else { break }
+            do {
+                try fm.removeItem(at: file.url)
+                evicted += file.size
+                logger.debug("Evicted cached audio: \(file.url.lastPathComponent) (\(file.size) bytes)")
+            } catch {
+                logger.error("Failed to evict cache file: \(error.localizedDescription)")
+            }
+        }
+
+        logger.info("Evicted \(evicted) bytes from shared album audio cache")
+    }
+
+    // MARK: - Background Trash Purge
+
+    /// Purge expired trash items for all shared albums (call on app launch / foreground)
+    func purgeAllExpiredTrash() async {
+        guard let appState = appState else { return }
+        let sharedAlbums = appState.albums.filter { $0.isShared }
+
+        for album in sharedAlbums {
+            do {
+                try await purgeExpiredTrashItems(for: album)
+            } catch {
+                logger.error("Failed to purge trash for album \(album.name): \(error.localizedDescription)")
+            }
+        }
+    }
 }
+
+// MARK: - UICloudSharingController SwiftUI Bridge
 
 // MARK: - UICloudSharingController Support
 

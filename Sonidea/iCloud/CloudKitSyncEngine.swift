@@ -623,7 +623,18 @@ final class CloudKitSyncEngine {
                             // Download audio file if needed
                             if let asset = record["audioFile"] as? CKAsset,
                                let assetURL = asset.fileURL {
-                                try? FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                                // Use a temp copy to avoid data loss if copyItem fails
+                                let backupURL = recording.fileURL.appendingPathExtension("backup")
+                                try? FileManager.default.moveItem(at: recording.fileURL, to: backupURL)
+                                do {
+                                    try FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                                    // Copy succeeded, remove backup
+                                    try? FileManager.default.removeItem(at: backupURL)
+                                } catch {
+                                    // Copy failed — restore backup to prevent data loss
+                                    try? FileManager.default.moveItem(at: backupURL, to: recording.fileURL)
+                                    logger.error("Failed to copy synced audio file: \(error.localizedDescription)")
+                                }
                             }
                             appState.recordings[localIndex] = recording
                             recordingsChanged = true
@@ -632,7 +643,11 @@ final class CloudKitSyncEngine {
                         // New recording from another device
                         if let asset = record["audioFile"] as? CKAsset,
                            let assetURL = asset.fileURL {
-                            try? FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                            do {
+                                try FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                            } catch {
+                                logger.error("Failed to copy new synced audio file: \(error.localizedDescription)")
+                            }
                         }
                         appState.recordings.append(recording)
                         recordingsChanged = true
@@ -665,6 +680,11 @@ final class CloudKitSyncEngine {
 
             case SonideaRecordType.tombstone.rawValue:
                 // Handle tombstone - delete local record
+                // Skip tombstones from this device (already applied locally)
+                if let tombstoneDeviceId = record["deviceId"] as? String,
+                   tombstoneDeviceId == deviceId {
+                    continue
+                }
                 if let targetId = record["targetId"] as? String,
                    let targetUUID = UUID(uuidString: targetId),
                    let targetType = record["targetType"] as? String {

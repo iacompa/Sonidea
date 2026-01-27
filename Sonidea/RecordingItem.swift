@@ -368,8 +368,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     // Check if recording has valid coordinates
     var hasCoordinates: Bool {
-        guard let lat = latitude, let lon = longitude else { return false }
-        return lat != 0 || lon != 0
+        latitude != nil && longitude != nil
     }
 
     // Get CLLocationCoordinate2D if coordinates exist
@@ -386,8 +385,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     }
 
     var formattedDuration: String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
+        let safeDuration = max(0, duration)
+        let minutes = Int(safeDuration) / 60
+        let seconds = Int(safeDuration) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
 

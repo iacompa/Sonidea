@@ -242,7 +242,7 @@ struct SharedAlbumActivityEvent: Identifiable, Codable, Equatable {
 
         case .settingAllowDeletesChanged:
             if let value = newValue {
-                let enabled = value == "true"
+                let enabled = value.lowercased() == "true"
                 return "\(actorDisplayName) \(enabled ? "enabled" : "disabled") member deletion"
             }
             return "\(actorDisplayName) changed deletion settings"

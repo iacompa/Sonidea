@@ -23,6 +23,20 @@ struct SonideaApp: App {
 
                     // Check for pending actions on app launch
                     appState.consumePendingStartRecording()
+
+                    // Wire shared album manager for remote notifications
+                    AppDelegate.sharedAlbumManager = appState.sharedAlbumManager
+
+                    // Set up shared album real-time sync subscriptions
+                    Task {
+                        await appState.sharedAlbumManager.setupDatabaseSubscriptions()
+                    }
+
+                    // Purge expired shared album trash & evict audio cache on launch
+                    Task {
+                        await appState.sharedAlbumManager.purgeAllExpiredTrash()
+                        appState.sharedAlbumManager.evictAudioCacheIfNeeded()
+                    }
                 }
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     if newPhase == .active {
@@ -44,6 +58,11 @@ struct SonideaApp: App {
                             Task {
                                 await appState.syncManager.syncOnForeground()
                             }
+                        }
+
+                        // Purge expired shared album trash on foreground
+                        Task {
+                            await appState.sharedAlbumManager.purgeAllExpiredTrash()
                         }
                     } else if newPhase == .background {
                         // When going to background, verify Live Activity state matches recording state
@@ -145,6 +164,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("Failed to register for remote notifications: \(error.localizedDescription)")
     }
 
+    /// Shared album manager reference (set from SonideaApp on launch)
+    static weak var sharedAlbumManager: SharedAlbumManager?
+
     func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
@@ -152,13 +174,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ) {
         // Handle CloudKit silent push notification
         Task { @MainActor in
-            // Get the shared AppState and trigger sync
-            // Note: This requires accessing the shared state
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let window = windowScene.windows.first,
-               let rootVC = window.rootViewController {
-                // The sync manager will be triggered via the scene's AppState
-                // For now, we complete with new data available
+            // Trigger shared album sync on remote notification
+            if let manager = AppDelegate.sharedAlbumManager {
+                await manager.handleRemoteNotification()
             }
             completionHandler(.newData)
         }
