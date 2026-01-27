@@ -92,6 +92,7 @@ struct RecordingDetailView: View {
     @State private var showHeadphonesRequiredAlert = false
 
     @State private var waveformSamples: [Float] = []
+    @State private var waveformMinMaxSamples: [WaveformSamplePair] = []  // For true waveform rendering
     @State private var zoomScale: CGFloat = 1.0
     @State private var isLoadingWaveform = true
 
@@ -119,7 +120,10 @@ struct RecordingDetailView: View {
 
     // Waveform height constants
     private let compactWaveformHeight: CGFloat = 100
-    private let expandedWaveformHeight: CGFloat = 240  // Increased ~20% for more editing space
+    private let expandedWaveformHeight: CGFloat = 240  // Base height for edit mode
+    private let minEditWaveformHeight: CGFloat = 150   // Minimum height when adjusting
+    private let maxEditWaveformHeight: CGFloat = 400   // Maximum height when adjusting
+    @State private var editWaveformHeightAdjustment: CGFloat = 0  // User adjustment via drag
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
@@ -260,6 +264,12 @@ struct RecordingDetailView: View {
             return playback.duration
         }
         return currentRecording.duration
+    }
+
+    /// Current edit mode waveform height (base + user adjustment)
+    private var currentEditWaveformHeight: CGFloat {
+        let height = expandedWaveformHeight + editWaveformHeightAdjustment
+        return min(maxEditWaveformHeight, max(minEditWaveformHeight, height))
     }
 
     /// Accessibility label for the suggested icons strip
@@ -600,6 +610,39 @@ struct RecordingDetailView: View {
         .padding(.bottom, 100)  // Higher position so it doesn't overlap playback controls
     }
 
+    // MARK: - Waveform Height Resize Handle
+
+    @State private var heightDragStartAdjustment: CGFloat = 0
+
+    private var waveformHeightResizeHandle: some View {
+        VStack(spacing: 0) {
+            // Drag handle indicator
+            Capsule()
+                .fill(palette.textTertiary)
+                .frame(width: 40, height: 4)
+                .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    let delta = value.translation.height
+                    let newAdjustment = heightDragStartAdjustment + delta
+                    // Clamp to valid range
+                    let minAdj = minEditWaveformHeight - expandedWaveformHeight
+                    let maxAdj = maxEditWaveformHeight - expandedWaveformHeight
+                    editWaveformHeightAdjustment = min(maxAdj, max(minAdj, newAdjustment))
+                }
+                .onEnded { _ in
+                    heightDragStartAdjustment = editWaveformHeightAdjustment
+                }
+        )
+        .onAppear {
+            heightDragStartAdjustment = editWaveformHeightAdjustment
+        }
+    }
+
     // MARK: - Playback Section
 
     private var playbackSection: some View {
@@ -801,6 +844,7 @@ struct RecordingDetailView: View {
                         currentTime: playback.currentTime,
                         isPlaying: playback.isPlaying,
                         isPrecisionMode: $isPrecisionMode,
+                        waveformHeight: currentEditWaveformHeight,
                         onSeek: { time in
                             playback.seek(to: time)
                         },
@@ -811,6 +855,10 @@ struct RecordingDetailView: View {
                         },
                         onSilenceRangeTap: { id in
                             toggleSilenceRange(id: id)
+                        },
+                        onResetAll: {
+                            // Reset height adjustment when user taps reset
+                            editWaveformHeightAdjustment = 0
                         }
                     )
                     // Force fresh @State when duration changes to fix stale WaveformTimeline.duration
@@ -819,17 +867,24 @@ struct RecordingDetailView: View {
                     .id("waveform-\(currentRecording.id)-\(Int(playback.duration * 1000))")
                     }
                 } else {
-                    // Normal playback waveform
-                    WaveformView(
-                        samples: waveformSamples,
+                    // Normal playback waveform (matches Edit mode style, but shorter)
+                    DetailsWaveformView(
+                        waveformData: highResWaveformData,
+                        fallbackSamples: waveformSamples,
                         progress: playbackProgress,
-                        zoomScale: $zoomScale
+                        duration: playback.duration > 0 ? playback.duration : currentRecording.duration,
+                        isPlaying: playback.isPlaying
                     )
                     .frame(height: compactWaveformHeight)
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
             .padding(.top, 8)  // Only top padding; bottom gap comes from VStack spacing
+
+            // Edit mode: Height resize handle
+            if isEditingWaveform && highResWaveformData != nil {
+                waveformHeightResizeHandle
+            }
 
             // Edit mode: Selection info and actions
             if isEditingWaveform {
@@ -1094,8 +1149,13 @@ struct RecordingDetailView: View {
                 for: snapshot.audioFileURL,
                 targetSampleCount: 150
             )
+            let minMaxSamples = await WaveformSampler.shared.minMaxSamples(
+                for: snapshot.audioFileURL,
+                targetSampleCount: 150
+            )
             await MainActor.run {
                 waveformSamples = samples
+                waveformMinMaxSamples = minMaxSamples
                 isLoadingWaveform = false
                 playback.load(url: snapshot.audioFileURL)
             }
@@ -1423,12 +1483,17 @@ struct RecordingDetailView: View {
                 for: pendingURL,
                 targetSampleCount: 150
             )
+            let minMaxSamples = await WaveformSampler.shared.minMaxSamples(
+                for: pendingURL,
+                targetSampleCount: 150
+            )
 
             // Load high-res waveform for new file
             let waveformData = try? await AudioWaveformExtractor.shared.extractWaveform(from: pendingURL)
 
             await MainActor.run {
                 waveformSamples = samples
+                waveformMinMaxSamples = minMaxSamples
                 highResWaveformData = waveformData
                 isLoadingWaveform = false
             }
@@ -2428,8 +2493,13 @@ struct RecordingDetailView: View {
                 for: currentRecording.fileURL,
                 targetSampleCount: 150
             )
+            let minMaxSamples = await WaveformSampler.shared.minMaxSamples(
+                for: currentRecording.fileURL,
+                targetSampleCount: 150
+            )
             await MainActor.run {
                 waveformSamples = samples
+                waveformMinMaxSamples = minMaxSamples
                 isLoadingWaveform = false
             }
         }

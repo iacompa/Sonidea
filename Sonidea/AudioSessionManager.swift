@@ -168,6 +168,9 @@ final class AudioSessionManager {
         let requestedSampleRate = quality.sampleRate
         try? session.setPreferredSampleRate(requestedSampleRate)
 
+        // Force mono input - we only record mono for best quality on mobile devices
+        try? session.setPreferredInputNumberOfChannels(1)
+
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
@@ -202,6 +205,10 @@ final class AudioSessionManager {
         options.insert(.allowBluetoothA2DP)
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
+
+        // Force mono input - we only record mono for best quality on mobile devices
+        try? session.setPreferredInputNumberOfChannels(1)
+
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         actualSampleRate = session.sampleRate
@@ -320,6 +327,9 @@ final class AudioSessionManager {
         let requestedSampleRate = quality.sampleRate
         try? session.setPreferredSampleRate(requestedSampleRate)
         try? session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
+
+        // Force mono input - we only record mono for best quality on mobile devices
+        try? session.setPreferredInputNumberOfChannels(1)
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)

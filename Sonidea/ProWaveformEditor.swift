@@ -62,7 +62,29 @@ final class WaveformTimeline {
     }
 
     static let minZoom: CGFloat = 1.0
-    static let maxZoom: CGFloat = 10.0  // Cap at 1000% for mobile usability
+    static let maxZoom: CGFloat = 100.0  // Cap at 10,000% for detailed editing
+
+    // MARK: - Grid/Tick Intervals (shared between ruler and waveform grid)
+
+    /// Returns tick intervals for the current visible duration
+    /// This is the single source of truth for both time ruler and waveform grid alignment
+    func tickIntervals() -> (major: TimeInterval, minor: TimeInterval) {
+        let duration = visibleDuration
+        switch duration {
+        case 0..<0.05:   return (0.01, 0.002)   // Extreme zoom: major every 10ms, minor every 2ms
+        case 0.05..<0.2: return (0.05, 0.01)    // Ultra high zoom: major every 50ms, minor every 10ms
+        case 0.2..<0.5:  return (0.1, 0.02)     // Very high zoom: major every 100ms, minor every 20ms
+        case 0.5..<1:    return (0.2, 0.05)     // High zoom: major every 200ms, minor every 50ms
+        case 1..<2:      return (0.5, 0.1)      // Zoomed in: major every 500ms, minor every 100ms
+        case 2..<5:      return (1.0, 0.2)      // Medium-high: major every 1s, minor every 200ms
+        case 5..<15:     return (2.0, 0.5)      // Medium: major every 2s, minor every 500ms
+        case 15..<30:    return (5.0, 1.0)      // Medium-low: major every 5s, minor every 1s
+        case 30..<60:    return (10.0, 2.0)     // Low: major every 10s, minor every 2s
+        case 60..<180:   return (30.0, 5.0)     // Very low: major every 30s, minor every 5s
+        case 180..<600:  return (60.0, 10.0)    // Ultra low: major every 1min, minor every 10s
+        default:         return (120.0, 30.0)   // Extreme: major every 2min, minor every 30s
+        }
+    }
 
     init(duration: TimeInterval) {
         self.duration = max(0.01, duration)
@@ -96,7 +118,7 @@ final class WaveformTimeline {
         visibleStartTime = max(0, min(newStartTime, duration - visibleDuration))
     }
 
-    /// Ensure a time is visible
+    /// Ensure a time is visible (scrolls only when near edges)
     func ensureVisible(_ time: TimeInterval, padding: TimeInterval = 0) {
         let paddedPadding = min(padding, visibleDuration * 0.1)
         var newStartTime = visibleStartTime
@@ -109,6 +131,22 @@ final class WaveformTimeline {
 
         // Only assign if changed
         if abs(newStartTime - visibleStartTime) > 0.0001 {
+            visibleStartTime = newStartTime
+        }
+    }
+
+    /// Center the visible window on a specific time (follow-track mode)
+    /// Keeps the playhead in the center of the screen during playback
+    func centerOnTime(_ time: TimeInterval) {
+        // Calculate start time that puts the given time at center
+        let halfVisible = visibleDuration / 2
+        var newStartTime = time - halfVisible
+
+        // Clamp to valid range
+        newStartTime = max(0, min(newStartTime, duration - visibleDuration))
+
+        // Only assign if changed (prevents excessive updates)
+        if abs(newStartTime - visibleStartTime) > 0.001 {
             visibleStartTime = newStartTime
         }
     }
@@ -173,6 +211,7 @@ struct ProWaveformEditor: View {
     // Callbacks
     let onSeek: (TimeInterval) -> Void
     let onMarkerTap: (Marker) -> Void
+    var onResetAll: (() -> Void)?  // Called when user requests full reset (zoom + height)
 
     // Environment
     @Environment(\.themePalette) private var palette
@@ -190,8 +229,10 @@ struct ProWaveformEditor: View {
     @State private var leftHandleDragTime: TimeInterval = 0
     @State private var rightHandleDragTime: TimeInterval = 0
 
+    // Height (configurable)
+    let waveformHeight: CGFloat
+
     // Constants
-    private let waveformHeight: CGFloat = 240  // Increased ~20% (from 200) for more editing space
     private let timeRulerHeight: CGFloat = 36  // Reduced ~20% from 44
     private let handleWidth: CGFloat = 16
     private let handleHitArea: CGFloat = 44
@@ -211,9 +252,11 @@ struct ProWaveformEditor: View {
         currentTime: TimeInterval,
         isPlaying: Bool,
         isPrecisionMode: Binding<Bool>,
+        waveformHeight: CGFloat = 240,
         onSeek: @escaping (TimeInterval) -> Void,
         onMarkerTap: @escaping (Marker) -> Void,
-        onSilenceRangeTap: ((UUID) -> Void)? = nil
+        onSilenceRangeTap: ((UUID) -> Void)? = nil,
+        onResetAll: (() -> Void)? = nil
     ) {
         self.waveformData = waveformData
         self.duration = duration
@@ -225,9 +268,11 @@ struct ProWaveformEditor: View {
         self.currentTime = currentTime
         self.isPlaying = isPlaying
         self._isPrecisionMode = isPrecisionMode
+        self.waveformHeight = waveformHeight
         self.onSeek = onSeek
         self.onMarkerTap = onMarkerTap
         self.onSilenceRangeTap = onSilenceRangeTap
+        self.onResetAll = onResetAll
         self._timeline = State(initialValue: WaveformTimeline(duration: duration))
     }
 
@@ -352,14 +397,19 @@ struct ProWaveformEditor: View {
                 }
             }
 
-            // Zoom indicator
-            if timeline.zoomScale > 1.05 {
+            // Zoom indicator (shows when zoomed OR height adjusted)
+            if timeline.zoomScale > 1.05 || waveformHeight != 240 {
                 ZoomInfoBar(
                     zoomScale: timeline.zoomScale,
                     visibleStart: timeline.visibleStartTime,
                     visibleEnd: timeline.visibleEndTime,
                     palette: palette,
-                    onReset: { withAnimation(.easeInOut(duration: 0.2)) { timeline.reset() } }
+                    onReset: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            timeline.reset()
+                            onResetAll?()  // Also reset height if callback provided
+                        }
+                    }
                 )
                 .padding(.top, 8)
             }
@@ -384,9 +434,9 @@ struct ProWaveformEditor: View {
             if isPlaying {
                 playheadPosition = newTime
             }
-            // Auto-scroll to keep playhead visible when zoomed
+            // Follow-track: center playhead on screen when zoomed and playing
             if isPlaying && timeline.zoomScale > 1.0 {
-                timeline.ensureVisible(newTime, padding: timeline.visibleDuration * 0.2)
+                timeline.centerOnTime(newTime)
             }
         }
         .onChange(of: duration) { _, newDuration in
@@ -538,8 +588,8 @@ struct TimeRulerBar: View {
     var body: some View {
         GeometryReader { geometry in
             Canvas { context, size in
-                let visibleDuration = timeline.visibleDuration
-                let (majorInterval, minorInterval) = tickIntervals(for: visibleDuration)
+                // Use shared tick intervals from timeline (single source of truth)
+                let (majorInterval, minorInterval) = timeline.tickIntervals()
 
                 // Draw minor ticks (shorter, no labels)
                 drawTicks(context: context, size: size, interval: minorInterval, tickHeight: 5, showLabel: false)
@@ -550,23 +600,6 @@ struct TimeRulerBar: View {
         }
         .background(palette.inputBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))  // Match waveform corners
-    }
-
-    private func tickIntervals(for duration: TimeInterval) -> (major: TimeInterval, minor: TimeInterval) {
-        // Adaptive tick intervals based on visible duration (zoom level)
-        // More granular at high zoom for DAW-like precision editing
-        switch duration {
-        case 0..<0.5:    return (0.1, 0.01)   // Very high zoom: major every 100ms, minor every 10ms
-        case 0.5..<1:    return (0.2, 0.05)   // High zoom: major every 200ms, minor every 50ms
-        case 1..<2:      return (0.5, 0.1)    // Zoomed in: major every 500ms, minor every 100ms
-        case 2..<5:      return (1.0, 0.2)    // Medium-high: major every 1s, minor every 200ms
-        case 5..<15:     return (2.0, 0.5)    // Medium: major every 2s, minor every 500ms
-        case 15..<30:    return (5.0, 1.0)    // Medium-low: major every 5s, minor every 1s
-        case 30..<60:    return (10.0, 2.0)   // Low: major every 10s, minor every 2s
-        case 60..<180:   return (30.0, 5.0)   // Very low: major every 30s, minor every 5s
-        case 180..<600:  return (60.0, 10.0)  // Ultra low: major every 1min, minor every 10s
-        default:         return (120.0, 30.0) // Extreme: major every 2min, minor every 30s
-        }
     }
 
     private func drawTicks(context: GraphicsContext, size: CGSize, interval: TimeInterval, tickHeight: CGFloat, showLabel: Bool) {
@@ -580,8 +613,8 @@ struct TimeRulerBar: View {
 
         var time = firstTick
         while time <= endTime {
-            let progress = (time - startTime) / timeline.visibleDuration
-            let x = CGFloat(progress) * size.width
+            // Use shared timeToX for exact alignment with waveform grid
+            let x = timeline.timeToX(time, width: size.width)
 
             // Draw tick line from bottom of view
             let tickPath = Path { path in
@@ -625,8 +658,12 @@ struct TimeRulerBar: View {
         let seconds = totalSeconds % 60
         let fraction = time.truncatingRemainder(dividingBy: 1)
 
-        // Show milliseconds when zoomed in enough to see 10ms ticks
-        if timeline.visibleDuration < 1 {
+        // Show milliseconds when zoomed in enough
+        if timeline.visibleDuration < 0.2 {
+            // Extreme zoom: show milliseconds (0:00.005)
+            let milliseconds = Int(fraction * 1000)
+            return String(format: "%d:%02d.%03d", minutes, seconds, milliseconds)
+        } else if timeline.visibleDuration < 1 {
             // Very high zoom: show centiseconds (0:00.05)
             let centiseconds = Int(fraction * 100)
             return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
@@ -657,51 +694,111 @@ struct WaveformBarsView: View {
         Canvas { context, size in
             guard let data = waveformData else { return }
 
-            // Use Canvas size.width which is always valid (never 0)
-            // The passed `width` parameter can be 0 on first GeometryReader layout
             let actualWidth = size.width
             guard actualWidth > 0 else { return }
 
-            // Get samples for visible range
-            let targetBars = max(1, Int(actualWidth / 3)) // ~3pt per bar for dense look, minimum 1
+            // Get samples for visible range - higher density for smooth line
+            let targetSamples = max(1, Int(actualWidth / 2))
             let samples = data.samples(
                 from: timeline.visibleStartTime,
                 to: timeline.visibleEndTime,
-                targetCount: targetBars
+                targetCount: targetSamples
             )
 
             guard !samples.isEmpty else { return }
 
-            let barCount = samples.count
-            let barSpacing: CGFloat = 1.5
-            let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let barWidth = max(1.5, (actualWidth - totalSpacing) / CGFloat(barCount))
+            let centerY = size.height / 2
+            let padding: CGFloat = 4
+            let maxAmplitude = (size.height / 2) - padding
 
-            // Colors
+            // Theme colors
+            let gridColor: Color = colorScheme == .dark ? .white.opacity(0.08) : .black.opacity(0.06)
             let selectedColor = palette.accent
-            let unselectedColor = colorScheme == .dark
-                ? Color.white.opacity(0.4)
-                : Color(.systemGray3)
+            let unselectedColor: Color = colorScheme == .dark ? .white.opacity(0.5) : Color(.systemGray)
 
-            // Selection indices
+            // === 1. Draw Grid (aligned with time ruler) ===
+
+            // Vertical grid lines - use same time intervals as ruler for perfect alignment
+            let (majorInterval, minorInterval) = timeline.tickIntervals()
+            let startTime = timeline.visibleStartTime
+            let endTime = timeline.visibleEndTime
+
+            // Draw minor vertical grid lines (lighter)
+            let firstMinorTick = ceil(startTime / minorInterval) * minorInterval
+            var minorTime = firstMinorTick
+            while minorTime <= endTime {
+                let x = timeline.timeToX(minorTime, width: actualWidth)
+                var gridLine = Path()
+                gridLine.move(to: CGPoint(x: x, y: 0))
+                gridLine.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(gridLine, with: .color(gridColor.opacity(0.5)), lineWidth: 0.5)
+                minorTime += minorInterval
+            }
+
+            // Draw major vertical grid lines (more visible)
+            let firstMajorTick = ceil(startTime / majorInterval) * majorInterval
+            var majorTime = firstMajorTick
+            while majorTime <= endTime {
+                let x = timeline.timeToX(majorTime, width: actualWidth)
+                var gridLine = Path()
+                gridLine.move(to: CGPoint(x: x, y: 0))
+                gridLine.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
+                majorTime += majorInterval
+            }
+
+            // Horizontal grid lines (amplitude markers)
+            let horizontalGridCount = 4
+            let horizontalSpacing = size.height / CGFloat(horizontalGridCount)
+            for i in 1..<horizontalGridCount {
+                let y = CGFloat(i) * horizontalSpacing
+                var gridLine = Path()
+                gridLine.move(to: CGPoint(x: 0, y: y))
+                gridLine.addLine(to: CGPoint(x: actualWidth, y: y))
+                context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
+            }
+
+            // Center line
+            var centerLine = Path()
+            centerLine.move(to: CGPoint(x: 0, y: centerY))
+            centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
+            context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
+
+            // === 2. Draw Waveform (vertical bars with selection coloring) ===
+
+            // Selection bounds in x coordinates
             let visibleDuration = timeline.visibleDuration
-            let selStartProgress = (selectionStart - timeline.visibleStartTime) / visibleDuration
-            let selEndProgress = (selectionEnd - timeline.visibleStartTime) / visibleDuration
-            let selStartIndex = Int(selStartProgress * Double(barCount))
-            let selEndIndex = Int(selEndProgress * Double(barCount))
+            let selStartX = CGFloat((selectionStart - timeline.visibleStartTime) / visibleDuration) * actualWidth
+            let selEndX = CGFloat((selectionEnd - timeline.visibleStartTime) / visibleDuration) * actualWidth
+
+            let sampleCount = samples.count
+            let xStep = actualWidth / CGFloat(sampleCount)
+
+            // Cap line width: minimum 1, maximum 3 (prevents issues on zoom)
+            let lineWidth = min(3, max(1, xStep * 0.7))
 
             for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * (barWidth + barSpacing)
-                let barHeight = max(2, CGFloat(sample) * size.height * 0.85)
-                let y = (size.height - barHeight) / 2
+                let x = CGFloat(index) * xStep + xStep / 2
 
-                let rect = CGRect(x: x, y: y, width: barWidth, height: barHeight)
-                let path = RoundedRectangle(cornerRadius: barWidth / 2).path(in: rect)
+                // Sample is 0-1 normalized amplitude (louder = higher value)
+                let amplitude = CGFloat(sample) * maxAmplitude
 
-                let isInSelection = index >= selStartIndex && index <= selEndIndex
-                let color = isInSelection ? selectedColor : unselectedColor
+                // Draw symmetric around center - louder sounds = taller bars
+                let yTop = centerY - amplitude
+                let yBottom = centerY + amplitude
 
-                context.fill(path, with: .color(color))
+                let isInSelection = x >= selStartX && x <= selEndX
+                let barColor = isInSelection ? selectedColor : unselectedColor
+
+                var linePath = Path()
+                linePath.move(to: CGPoint(x: x, y: yTop))
+                linePath.addLine(to: CGPoint(x: x, y: yBottom))
+
+                context.stroke(
+                    linePath,
+                    with: .color(barColor),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
             }
         }
     }
