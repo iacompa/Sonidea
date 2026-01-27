@@ -319,7 +319,8 @@ struct DetailsWaveformView: View {
     }
 }
 
-/// Canvas component for DetailsWaveformView (extracted for cleaner code)
+/// Canvas component for DetailsWaveformView - matches Edit mode (WaveformBarsView) exactly
+/// Uses time-based grid lines for proper alignment at all zoom levels
 private struct DetailsWaveformCanvas: View {
     let waveformData: WaveformData?
     let fallbackSamples: [Float]
@@ -332,6 +333,31 @@ private struct DetailsWaveformCanvas: View {
     let height: CGFloat
     let colorScheme: ColorScheme
     let palette: ThemePalette
+
+    // Calculate tick intervals based on visible duration (matches Edit mode exactly)
+    private func tickIntervals(visibleDuration: TimeInterval) -> (major: TimeInterval, minor: TimeInterval) {
+        switch visibleDuration {
+        case 0..<0.05:   return (0.01, 0.002)   // 10ms major, 2ms minor (extreme zoom)
+        case 0.05..<0.2: return (0.05, 0.01)    // 50ms major, 10ms minor
+        case 0.2..<0.5:  return (0.1, 0.02)     // 100ms major, 20ms minor
+        case 0.5..<1:    return (0.2, 0.05)     // 200ms major, 50ms minor
+        case 1..<2:      return (0.5, 0.1)      // 500ms major, 100ms minor
+        case 2..<5:      return (1, 0.2)        // 1s major, 200ms minor
+        case 5..<10:     return (2, 0.5)        // 2s major, 500ms minor
+        case 10..<30:    return (5, 1)          // 5s major, 1s minor
+        case 30..<60:    return (10, 2)         // 10s major, 2s minor
+        case 60..<120:   return (15, 5)         // 15s major, 5s minor
+        case 120..<300:  return (30, 10)        // 30s major, 10s minor
+        case 300..<600:  return (60, 15)        // 1min major, 15s minor
+        default:         return (120, 30)       // 2min major, 30s minor
+        }
+    }
+
+    // Convert time to x coordinate (matches Edit mode exactly)
+    private func timeToX(_ time: TimeInterval, visibleStartTime: TimeInterval, visibleDuration: TimeInterval, width: CGFloat) -> CGFloat {
+        let progress = (time - visibleStartTime) / visibleDuration
+        return CGFloat(progress) * width
+    }
 
     var body: some View {
         Canvas { context, size in
@@ -370,25 +396,41 @@ private struct DetailsWaveformCanvas: View {
             let playheadProgress = (progress - visibleStartProgress) / visibleDurationFraction
             let playheadX = CGFloat(playheadProgress) * actualWidth
 
-            // Theme colors
+            // Theme colors (matching Edit mode exactly)
             let gridColor: Color = colorScheme == .dark ? .white.opacity(0.08) : .black.opacity(0.06)
             let waveformColor: Color = colorScheme == .dark ? .white.opacity(0.5) : Color(.systemGray)
             let playheadColor: Color = colorScheme == .dark ? .white : palette.accent
 
-            // === 1. Draw Grid ===
+            // === 1. Draw Grid (time-based, matching Edit mode) ===
 
-            // Vertical grid lines (16 divisions of visible area)
-            let verticalGridCount = 16
-            let verticalSpacing = actualWidth / CGFloat(verticalGridCount)
-            for i in 1..<verticalGridCount {
-                let x = CGFloat(i) * verticalSpacing
+            // Get tick intervals based on visible duration
+            let (majorInterval, minorInterval) = tickIntervals(visibleDuration: visibleDuration)
+
+            // Draw minor vertical grid lines (lighter)
+            let firstMinorTick = ceil(visibleStartTime / minorInterval) * minorInterval
+            var minorTime = firstMinorTick
+            while minorTime <= visibleEndTime {
+                let x = timeToX(minorTime, visibleStartTime: visibleStartTime, visibleDuration: visibleDuration, width: actualWidth)
+                var gridLine = Path()
+                gridLine.move(to: CGPoint(x: x, y: 0))
+                gridLine.addLine(to: CGPoint(x: x, y: actualHeight))
+                context.stroke(gridLine, with: .color(gridColor.opacity(0.5)), lineWidth: 0.5)
+                minorTime += minorInterval
+            }
+
+            // Draw major vertical grid lines (more visible)
+            let firstMajorTick = ceil(visibleStartTime / majorInterval) * majorInterval
+            var majorTime = firstMajorTick
+            while majorTime <= visibleEndTime {
+                let x = timeToX(majorTime, visibleStartTime: visibleStartTime, visibleDuration: visibleDuration, width: actualWidth)
                 var gridLine = Path()
                 gridLine.move(to: CGPoint(x: x, y: 0))
                 gridLine.addLine(to: CGPoint(x: x, y: actualHeight))
                 context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
+                majorTime += majorInterval
             }
 
-            // Horizontal grid lines
+            // Horizontal grid lines (amplitude markers)
             let horizontalGridCount = 4
             let horizontalSpacing = actualHeight / CGFloat(horizontalGridCount)
             for i in 1..<horizontalGridCount {
@@ -405,7 +447,7 @@ private struct DetailsWaveformCanvas: View {
             centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
             context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
 
-            // === 2. Draw Waveform ===
+            // === 2. Draw Waveform (same as Edit mode, without selection coloring) ===
 
             let sampleCount = samples.count
             let xStep = actualWidth / CGFloat(sampleCount)

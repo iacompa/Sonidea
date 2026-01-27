@@ -632,7 +632,12 @@ struct RecordingDetailView: View {
                     // Clamp to valid range
                     let minAdj = minEditWaveformHeight - expandedWaveformHeight
                     let maxAdj = maxEditWaveformHeight - expandedWaveformHeight
-                    editWaveformHeightAdjustment = min(maxAdj, max(minAdj, newAdjustment))
+                    // Use transaction to disable animation during drag (prevents shake/jiggle)
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        editWaveformHeightAdjustment = min(maxAdj, max(minAdj, newAdjustment))
+                    }
                 }
                 .onEnded { _ in
                     heightDragStartAdjustment = editWaveformHeightAdjustment
