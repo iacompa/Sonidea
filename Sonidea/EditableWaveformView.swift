@@ -895,38 +895,70 @@ struct SelectionTimeDisplay: View {
     private var minimumGap: TimeInterval { 0.05 }
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Start time with nudge
-            SelectionEndpointControl(
-                label: "IN",
-                time: selectionStart,
-                onNudge: { delta in nudgeStart(by: delta) },
-                palette: palette
-            )
+        VStack(spacing: 2) {
+            // Labels above the strip, left/right aligned
+            HStack {
+                Text("IN")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.leading, 12)
 
-            // Playhead time in center - shows current position during playback/scrubbing
-            Text(formatTime(playheadPosition))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundColor(palette.accent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .accessibilityLabel("Playhead time")
-                .accessibilityValue(formatTimeForAccessibility(playheadPosition))
+                Spacer()
 
-            // End time with nudge
-            SelectionEndpointControl(
-                label: "OUT",
-                time: selectionEnd,
-                onNudge: { delta in nudgeEnd(by: delta) },
-                palette: palette
+                Text("OUT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.trailing, 12)
+            }
+
+            // Main control strip
+            HStack(spacing: 0) {
+                // Start time with nudge
+                SelectionEndpointControl(
+                    time: selectionStart,
+                    onNudge: { delta in nudgeStart(by: delta) },
+                    onSetToPlayhead: { setStartToPlayhead() },
+                    palette: palette
+                )
+
+                // Playhead time in center - shows current position during playback/scrubbing
+                Text(formatTime(playheadPosition))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundColor(palette.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .accessibilityLabel("Playhead time")
+                    .accessibilityValue(formatTimeForAccessibility(playheadPosition))
+
+                // End time with nudge
+                SelectionEndpointControl(
+                    time: selectionEnd,
+                    onNudge: { delta in nudgeEnd(by: delta) },
+                    onSetToPlayhead: { setEndToPlayhead() },
+                    palette: palette
+                )
+            }
+            .background(palette.inputBackground)
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(palette.stroke.opacity(0.3), lineWidth: 1)
             )
         }
-        .background(palette.inputBackground)
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(palette.stroke.opacity(0.3), lineWidth: 1)
-        )
+    }
+
+    private func setStartToPlayhead() {
+        // Move IN point to playhead, but keep minimum gap from OUT
+        let newStart = Swift.min(playheadPosition, selectionEnd - minimumGap)
+        selectionStart = Swift.max(0, newStart)
+        impactGenerator.impactOccurred(intensity: 0.6)
+    }
+
+    private func setEndToPlayhead() {
+        // Move OUT point to playhead, but keep minimum gap from IN
+        let newEnd = Swift.max(playheadPosition, selectionStart + minimumGap)
+        selectionEnd = Swift.min(newEnd, duration)
+        impactGenerator.impactOccurred(intensity: 0.6)
     }
 
     private func nudgeStart(by delta: TimeInterval) {
@@ -965,25 +997,38 @@ struct SelectionTimeDisplay: View {
 // MARK: - Selection Endpoint Control
 
 struct SelectionEndpointControl: View {
-    let label: String
     let time: TimeInterval
     let onNudge: (TimeInterval) -> Void
+    let onSetToPlayhead: () -> Void
     let palette: ThemePalette
 
     private let nudgeStep: TimeInterval = 0.01
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text(label)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundColor(palette.textTertiary)
-
+        VStack(spacing: 6) {
+            // Time display
             Text(formatTime(time))
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .foregroundColor(palette.textPrimary)
 
-            // Nudge buttons with press-and-hold auto-repeat
+            // Buttons row: [scope] [-] [+]
             HStack(spacing: 2) {
+                // Set to playhead button - matches nudge button size
+                Button {
+                    onSetToPlayhead()
+                } label: {
+                    Image(systemName: "scope")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 26, height: 22)
+                        .foregroundColor(palette.accent)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(palette.accent.opacity(0.15))
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Set to playhead")
+
                 RepeatableNudgeButton(
                     systemImage: "minus",
                     onTrigger: { onNudge(-nudgeStep) }

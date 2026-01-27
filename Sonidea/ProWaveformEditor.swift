@@ -62,7 +62,7 @@ final class WaveformTimeline {
     }
 
     static let minZoom: CGFloat = 1.0
-    static let maxZoom: CGFloat = 100.0  // Cap at 10,000% for detailed editing
+    static let maxZoom: CGFloat = 200.0  // Cap at 20,000% for detailed editing
 
     // MARK: - Grid/Tick Intervals (shared between ruler and waveform grid)
 
@@ -285,6 +285,7 @@ struct ProWaveformEditor: View {
             // Main waveform area
             GeometryReader { geometry in
                 let width = geometry.size.width
+                let height = geometry.size.height  // Use actual geometry height to avoid mismatch
 
                 ZStack(alignment: .leading) {
                     // Waveform bars
@@ -294,7 +295,7 @@ struct ProWaveformEditor: View {
                         selectionStart: selectionStart,
                         selectionEnd: selectionEnd,
                         width: width,
-                        height: waveformHeight,
+                        height: height,
                         palette: palette,
                         colorScheme: colorScheme
                     )
@@ -305,7 +306,7 @@ struct ProWaveformEditor: View {
                             silenceRanges: silenceRanges,
                             timeline: timeline,
                             width: width,
-                            height: waveformHeight,
+                            height: height,
                             onTap: onSilenceRangeTap
                         )
                     }
@@ -316,7 +317,7 @@ struct ProWaveformEditor: View {
                         selectionEnd: selectionEnd,
                         timeline: timeline,
                         width: width,
-                        height: waveformHeight,
+                        height: height,
                         palette: palette
                     )
 
@@ -327,7 +328,7 @@ struct ProWaveformEditor: View {
                         duration: duration,
                         isPrecisionMode: isPrecisionMode,
                         width: width,
-                        height: waveformHeight,
+                        height: height,
                         palette: palette,
                         onMarkerTap: onMarkerTap
                     )
@@ -343,7 +344,7 @@ struct ProWaveformEditor: View {
                         duration: duration,
                         isPrecisionMode: isPrecisionMode,
                         width: width,
-                        height: waveformHeight,
+                        height: height,
                         palette: palette,
                         isDraggingExternal: $leftHandleDragging,
                         dragTimeExternal: $leftHandleDragTime
@@ -357,7 +358,7 @@ struct ProWaveformEditor: View {
                         duration: duration,
                         isPrecisionMode: isPrecisionMode,
                         width: width,
-                        height: waveformHeight,
+                        height: height,
                         palette: palette,
                         isDraggingExternal: $rightHandleDragging,
                         dragTimeExternal: $rightHandleDragTime
@@ -372,7 +373,6 @@ struct ProWaveformEditor: View {
                         palette: palette
                     )
                 }
-                .frame(height: waveformHeight)
                 .contentShape(Rectangle())
                 .gesture(panGesture(width: width))
                 .gesture(tapGesture(width: width))
@@ -382,23 +382,30 @@ struct ProWaveformEditor: View {
             .frame(height: waveformHeight)
             .background(palette.inputBackground.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .drawingGroup()  // Rasterize entire waveform area to GPU texture
+            .animation(nil, value: waveformHeight)  // Prevent jitter during height resize drag
             // Playhead overlay - rendered outside clipped container to prevent edge clipping
+            // Uses same GeometryReader as main content to avoid timing mismatch
             .overlay {
                 GeometryReader { overlayGeometry in
+                    let overlayWidth = overlayGeometry.size.width
+                    let overlayHeight = overlayGeometry.size.height
+
                     PlayheadLineView(
                         playheadPosition: $playheadPosition,
                         timeline: timeline,
                         duration: duration,
                         isPrecisionMode: isPrecisionMode,
-                        width: overlayGeometry.size.width,
-                        height: waveformHeight,
+                        width: overlayWidth,
+                        height: overlayHeight,
                         palette: palette
                     )
+                    .transaction { t in t.disablesAnimations = true }
                 }
             }
 
-            // Zoom indicator (shows when zoomed OR height adjusted)
-            if timeline.zoomScale > 1.05 || waveformHeight != 240 {
+            // Zoom indicator (shows when zoomed only - NOT based on height to avoid jitter during resize)
+            if timeline.zoomScale > 1.05 {
                 ZoomInfoBar(
                     zoomScale: timeline.zoomScale,
                     visibleStart: timeline.visibleStartTime,
@@ -414,6 +421,8 @@ struct ProWaveformEditor: View {
                 .padding(.top, 8)
             }
         }
+        .geometryGroup()  // Isolate geometry changes to prevent layout propagation
+        .animation(nil, value: waveformHeight)  // Prevent jitter on entire editor during height drag
         // Tooltip overlay - rendered at VStack level so it can appear above the waveform
         .overlay(alignment: .top) {
             GeometryReader { geometry in
@@ -431,12 +440,17 @@ struct ProWaveformEditor: View {
         }
         .onChange(of: currentTime) { _, newTime in
             // Sync playhead position with playback time when playing
+            // Apply audio latency compensation - AVAudioPlayer.currentTime is ahead of actual audio output
+            // Typical iOS audio output latency is 20-80ms; we use 50ms as a reasonable default
+            let audioLatencyCompensation: TimeInterval = 0.05
+            let compensatedTime = isPlaying ? max(0, newTime - audioLatencyCompensation) : newTime
+
             if isPlaying {
-                playheadPosition = newTime
+                playheadPosition = compensatedTime
             }
             // Follow-track: center playhead on screen when zoomed and playing
             if isPlaying && timeline.zoomScale > 1.0 {
-                timeline.centerOnTime(newTime)
+                timeline.centerOnTime(compensatedTime)
             }
         }
         .onChange(of: duration) { _, newDuration in
@@ -689,6 +703,8 @@ struct WaveformBarsView: View {
     let height: CGFloat
     let palette: ThemePalette
     let colorScheme: ColorScheme
+    var showsSelectionHighlight: Bool = true  // Set to false for Details (non-edit) mode
+    var showsHorizontalGrid: Bool = true      // Set to false for Details (cleaner look)
 
     var body: some View {
         Canvas { context, size in
@@ -747,26 +763,28 @@ struct WaveformBarsView: View {
                 majorTime += majorInterval
             }
 
-            // Horizontal grid lines (amplitude markers)
-            let horizontalGridCount = 4
-            let horizontalSpacing = size.height / CGFloat(horizontalGridCount)
-            for i in 1..<horizontalGridCount {
-                let y = CGFloat(i) * horizontalSpacing
-                var gridLine = Path()
-                gridLine.move(to: CGPoint(x: 0, y: y))
-                gridLine.addLine(to: CGPoint(x: actualWidth, y: y))
-                context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
+            // Horizontal grid lines (amplitude markers) - only in Edit mode
+            if showsHorizontalGrid {
+                let horizontalGridCount = 4
+                let horizontalSpacing = size.height / CGFloat(horizontalGridCount)
+                for i in 1..<horizontalGridCount {
+                    let y = CGFloat(i) * horizontalSpacing
+                    var gridLine = Path()
+                    gridLine.move(to: CGPoint(x: 0, y: y))
+                    gridLine.addLine(to: CGPoint(x: actualWidth, y: y))
+                    context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
+                }
+
+                // Center line
+                var centerLine = Path()
+                centerLine.move(to: CGPoint(x: 0, y: centerY))
+                centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
+                context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
             }
 
-            // Center line
-            var centerLine = Path()
-            centerLine.move(to: CGPoint(x: 0, y: centerY))
-            centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
-            context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
+            // === 2. Draw Waveform (vertical bars with optional selection coloring) ===
 
-            // === 2. Draw Waveform (vertical bars with selection coloring) ===
-
-            // Selection bounds in x coordinates
+            // Selection bounds in x coordinates (only used if showsSelectionHighlight)
             let visibleDuration = timeline.visibleDuration
             let selStartX = CGFloat((selectionStart - timeline.visibleStartTime) / visibleDuration) * actualWidth
             let selEndX = CGFloat((selectionEnd - timeline.visibleStartTime) / visibleDuration) * actualWidth
@@ -787,8 +805,14 @@ struct WaveformBarsView: View {
                 let yTop = centerY - amplitude
                 let yBottom = centerY + amplitude
 
-                let isInSelection = x >= selStartX && x <= selEndX
-                let barColor = isInSelection ? selectedColor : unselectedColor
+                // Only apply selection coloring in Edit mode
+                let barColor: Color
+                if showsSelectionHighlight {
+                    let isInSelection = x >= selStartX && x <= selEndX
+                    barColor = isInSelection ? selectedColor : unselectedColor
+                } else {
+                    barColor = unselectedColor
+                }
 
                 var linePath = Path()
                 linePath.move(to: CGPoint(x: x, y: yTop))

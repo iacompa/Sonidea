@@ -313,12 +313,20 @@ final class AudioSessionManager {
     func configureForOverdub(quality: RecordingQualityPreset, settings: AppSettings) throws {
         let session = AVAudioSession.sharedInstance()
 
-        // Category options for overdub: allow bluetooth but NOT default to speaker
-        var options: AVAudioSession.CategoryOptions = [
-            .allowBluetooth,
-            .allowBluetoothA2DP
+        // IMPORTANT: For overdub (simultaneous record + playback), we CANNOT use A2DP.
+        // A2DP is output-only (no microphone). We must use HFP for Bluetooth which supports
+        // both input and output. Use .allowBluetooth (enables HFP) but NOT .allowBluetoothA2DP.
+        let options: AVAudioSession.CategoryOptions = [
+            .allowBluetooth  // Enables HFP profile which supports mic + output
+            // Note: Do NOT include .allowBluetoothA2DP - it's output-only and will fail recording
+            // Note: Do NOT include .defaultToSpeaker - overdub requires headphones
         ]
-        // Note: We specifically do NOT include .defaultToSpeaker for overdub
+
+        #if DEBUG
+        print("🔧 [AudioSession] Configuring for overdub")
+        print("   Category: playAndRecord")
+        print("   Options: allowBluetooth (HFP for mic support)")
+        #endif
 
         // Use playAndRecord for simultaneous playback and recording
         try session.setCategory(.playAndRecord, mode: .default, options: options)
@@ -336,6 +344,24 @@ final class AudioSessionManager {
 
         // Store actual sample rate
         actualSampleRate = session.sampleRate
+
+        #if DEBUG
+        print("   Actual sample rate: \(session.sampleRate) Hz")
+        print("   IO buffer duration: \(session.ioBufferDuration) sec")
+        logCurrentRoute(context: "configureForOverdub")
+        #endif
+
+        // Verify we have a valid input route
+        let currentInputs = session.currentRoute.inputs
+        if currentInputs.isEmpty {
+            print("⚠️ [AudioSession] No input route available after overdub configuration")
+        } else {
+            #if DEBUG
+            for input in currentInputs {
+                print("   Input available: \(input.portName) (\(input.portType.rawValue))")
+            }
+            #endif
+        }
 
         // Apply preferred input (prefer built-in mic for overdub unless user has external)
         applyPreferredInput(from: settings)

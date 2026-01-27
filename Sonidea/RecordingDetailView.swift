@@ -611,8 +611,13 @@ struct RecordingDetailView: View {
     }
 
     // MARK: - Waveform Height Resize Handle
+    // TODO: Fix jitter/flicker when dragging to resize waveform height.
+    // Attempted fixes: .animation(nil), .transaction(disablesAnimations), .drawingGroup(), .geometryGroup(),
+    // using geometry.size.height instead of waveformHeight param, removing double .frame().
+    // Issue persists - likely caused by Canvas redraw or GeometryReader timing. Investigate further.
 
     @State private var heightDragStartAdjustment: CGFloat = 0
+    @State private var isDraggingHeight: Bool = false
 
     private var waveformHeightResizeHandle: some View {
         VStack(spacing: 0) {
@@ -620,13 +625,14 @@ struct RecordingDetailView: View {
             Capsule()
                 .fill(palette.textTertiary)
                 .frame(width: 40, height: 4)
-                .padding(.vertical, 8)
+                .padding(.vertical, 2)
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .gesture(
             DragGesture()
                 .onChanged { value in
+                    isDraggingHeight = true
                     let delta = value.translation.height
                     let newAdjustment = heightDragStartAdjustment + delta
                     // Clamp to valid range
@@ -640,6 +646,7 @@ struct RecordingDetailView: View {
                     }
                 }
                 .onEnded { _ in
+                    isDraggingHeight = false
                     heightDragStartAdjustment = editWaveformHeightAdjustment
                 }
         )
@@ -883,7 +890,13 @@ struct RecordingDetailView: View {
                     .frame(height: compactWaveformHeight)
                 }
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
+            .transaction { transaction in
+                // Disable ALL animations during height drag to prevent jitter
+                if isDraggingHeight {
+                    transaction.disablesAnimations = true
+                }
+            }
+            .animation(isDraggingHeight ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: isEditingWaveform)
             .padding(.top, 8)  // Only top padding; bottom gap comes from VStack spacing
 
             // Edit mode: Height resize handle
@@ -893,7 +906,7 @@ struct RecordingDetailView: View {
 
             // Edit mode: Selection info and actions
             if isEditingWaveform {
-                VStack(spacing: 12) {
+                VStack(spacing: 4) {
                     // Silence debug strip (only when highlighting silence)
                     if case .highlighted = silenceMode {
                         SilenceDebugStrip(

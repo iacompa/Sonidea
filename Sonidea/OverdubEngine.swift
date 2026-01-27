@@ -248,38 +248,106 @@ final class OverdubEngine {
             throw OverdubEngineError.headphonesRequired
         }
 
-        // Create recording file
-        let settings = recordingSettings(for: quality)
+        // Get audio session for validation
+        let session = AVAudioSession.sharedInstance()
+
+        #if DEBUG
+        // Log audio session state for debugging
+        print("🎙️ [OverdubEngine] Starting recording - Debug info:")
+        print("   Session category: \(session.category.rawValue)")
+        print("   Session mode: \(session.mode.rawValue)")
+        print("   Session sample rate: \(session.sampleRate)")
+        print("   IO buffer duration: \(session.ioBufferDuration)")
+        print("   Input channels: \(session.inputNumberOfChannels)")
+        print("   Output channels: \(session.outputNumberOfChannels)")
+        print("   Route inputs: \(session.currentRoute.inputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
+        print("   Route outputs: \(session.currentRoute.outputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
+        #endif
+
+        // Verify we have a valid input route
+        if session.currentRoute.inputs.isEmpty {
+            throw OverdubEngineError.recordingFailed("No audio input available. Please check your microphone connection.")
+        }
+
+        // Get input node and validate its format
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        let file = try AVAudioFile(
-            forWriting: outputURL,
-            settings: settings,
-            commonFormat: inputFormat.commonFormat,
-            interleaved: inputFormat.isInterleaved
-        )
+        #if DEBUG
+        print("   Input node format: \(inputFormat)")
+        print("   Input format sample rate: \(inputFormat.sampleRate)")
+        print("   Input format channels: \(inputFormat.channelCount)")
+        #endif
+
+        // Validate input format - error 560226676 occurs when format is invalid
+        guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+            throw OverdubEngineError.recordingFailed("Invalid audio input format. Sample rate: \(inputFormat.sampleRate), channels: \(inputFormat.channelCount). Try disconnecting and reconnecting your audio device.")
+        }
+
+        // Create recording file with validated format
+        let settings = recordingSettings(for: quality)
+
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(
+                forWriting: outputURL,
+                settings: settings,
+                commonFormat: inputFormat.commonFormat,
+                interleaved: inputFormat.isInterleaved
+            )
+        } catch {
+            #if DEBUG
+            print("❌ [OverdubEngine] Failed to create audio file: \(error)")
+            if let nsError = error as NSError? {
+                print("   Error domain: \(nsError.domain)")
+                print("   Error code: \(nsError.code)")
+                print("   User info: \(nsError.userInfo)")
+            }
+            #endif
+            throw OverdubEngineError.recordingFailed("Could not create recording file: \(error.localizedDescription)")
+        }
 
         self.recordingFile = file
         self.recordingFileURL = outputURL
 
-        // Install tap on input to record
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
-            do {
-                try file.write(from: buffer)
-            } catch {
-                print("❌ [OverdubEngine] Error writing buffer: \(error)")
-            }
+        // Install tap on input to record - use the validated input format
+        do {
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+                do {
+                    try file.write(from: buffer)
+                } catch {
+                    print("❌ [OverdubEngine] Error writing buffer: \(error)")
+                }
 
-            // Update meter
-            Task { @MainActor in
-                self?.updateMeterFromBuffer(buffer)
+                // Update meter
+                Task { @MainActor in
+                    self?.updateMeterFromBuffer(buffer)
+                }
             }
+        } catch {
+            #if DEBUG
+            print("❌ [OverdubEngine] Failed to install tap: \(error)")
+            #endif
+            throw OverdubEngineError.recordingFailed("Could not access microphone: \(error.localizedDescription)")
         }
 
         // Start engine if not running
         if !engine.isRunning {
-            try engine.start()
+            do {
+                try engine.start()
+            } catch {
+                // Clean up tap before throwing
+                inputNode.removeTap(onBus: 0)
+                #if DEBUG
+                print("❌ [OverdubEngine] Failed to start engine: \(error)")
+                if let nsError = error as NSError? {
+                    print("   Error domain: \(nsError.domain)")
+                    print("   Error code: \(nsError.code)")
+                    print("   User info: \(nsError.userInfo)")
+                }
+                #endif
+                throw OverdubEngineError.recordingFailed("Could not start audio engine: \(error.localizedDescription)")
+            }
         }
 
         // Start playback of base and layers
@@ -463,16 +531,19 @@ final class OverdubEngine {
 enum OverdubEngineError: Error, LocalizedError {
     case engineNotPrepared
     case headphonesRequired
+    case noInputAvailable
     case recordingFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .engineNotPrepared:
-            return "Audio engine not prepared"
+            return "Audio engine not prepared. Please try again."
         case .headphonesRequired:
-            return "Headphones required for overdub"
+            return "Headphones are required for recording over a track to prevent feedback."
+        case .noInputAvailable:
+            return "No microphone input available. If using Bluetooth headphones, ensure they support hands-free calling (HFP). Some Bluetooth audio devices only support playback."
         case .recordingFailed(let reason):
-            return "Recording failed: \(reason)"
+            return reason
         }
     }
 }

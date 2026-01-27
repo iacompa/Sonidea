@@ -164,41 +164,28 @@ struct WaveformCanvas: View {
     }
 }
 
-// MARK: - Details Waveform View (matches Edit mode style)
+// MARK: - Details Waveform View (uses same renderer as Edit mode)
 
-/// Waveform view for Details panel that matches the Edit mode visual style.
+/// Waveform view for Details panel - uses the SAME WaveformBarsView as Edit mode.
+/// This is a compact/mini version with no edit overlays (selection, handles, etc).
 /// Supports zoom, pan, and follow-track (center playhead during playback).
 struct DetailsWaveformView: View {
     let waveformData: WaveformData?
-    let fallbackSamples: [Float]  // Used if high-res data not loaded yet
+    let fallbackSamples: [Float]  // Unused - kept for API compatibility
     let progress: Double
     let duration: TimeInterval
     var isPlaying: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
 
-    // Zoom and pan state
-    @State private var zoomScale: CGFloat = 1.0
-    @State private var visibleStartProgress: Double = 0  // 0-1 progress into the track
-    @State private var initialPinchZoom: CGFloat = 1.0
+    // Use the SAME WaveformTimeline as Edit mode for identical zoom/pan behavior
+    @State private var timeline: WaveformTimeline?
     @State private var isPanning = false
-    @State private var panStartProgress: Double = 0
-
-    private let minZoom: CGFloat = 1.0
-    private let maxZoom: CGFloat = 100.0  // Match Edit mode max zoom
+    @State private var panStartTime: TimeInterval = 0
+    @State private var initialPinchZoom: CGFloat = 1.0
 
     private var palette: ThemePalette {
         colorScheme == .dark ? ThemePalette.systemDark : ThemePalette.systemLight
-    }
-
-    /// Visible duration as fraction of total (0-1)
-    private var visibleDurationFraction: Double {
-        1.0 / Double(zoomScale)
-    }
-
-    /// End progress of visible window
-    private var visibleEndProgress: Double {
-        min(1.0, visibleStartProgress + visibleDurationFraction)
     }
 
     var body: some View {
@@ -206,283 +193,169 @@ struct DetailsWaveformView: View {
             let width = geometry.size.width
             let height = geometry.size.height
 
-            DetailsWaveformCanvas(
-                waveformData: waveformData,
-                fallbackSamples: fallbackSamples,
-                progress: progress,
-                duration: duration,
-                zoomScale: zoomScale,
-                visibleStartProgress: visibleStartProgress,
-                visibleDurationFraction: visibleDurationFraction,
-                width: width,
-                height: height,
-                colorScheme: colorScheme,
-                palette: palette
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .background(
+            if let timeline = timeline, waveformData != nil {
+                ZStack {
+                    // Use the SAME WaveformBarsView as Edit mode, but simplified for Details:
+                    // - No selection highlight
+                    // - No horizontal grid lines (cleaner look)
+                    WaveformBarsView(
+                        waveformData: waveformData,
+                        timeline: timeline,
+                        selectionStart: 0,  // No selection in Details mode
+                        selectionEnd: 0,
+                        width: width,
+                        height: height,
+                        palette: palette,
+                        colorScheme: colorScheme,
+                        showsSelectionHighlight: false,
+                        showsHorizontalGrid: false  // Cleaner look for Details
+                    )
+
+                    // Playhead overlay (same style as Edit mode)
+                    DetailsPlayheadView(
+                        progress: progress,
+                        timeline: timeline,
+                        width: width,
+                        height: height,
+                        palette: palette,
+                        isPlaying: isPlaying
+                    )
+                }
+                .frame(height: height)
+                // Pinch to zoom (same as Edit mode)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            if initialPinchZoom == 1.0 {
+                                initialPinchZoom = timeline.zoomScale
+                            }
+                            let newScale = initialPinchZoom * value
+                            timeline.zoomScale = min(max(newScale, 1.0), WaveformTimeline.maxZoom)
+                        }
+                        .onEnded { _ in
+                            initialPinchZoom = 1.0
+                        }
+                )
+                // Pan when zoomed (same as Edit mode)
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if timeline.zoomScale > 1.0 {
+                                if !isPanning {
+                                    isPanning = true
+                                    panStartTime = timeline.visibleStartTime
+                                }
+                                let deltaX = -value.translation.width
+                                let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
+                                let newStartTime = panStartTime + timeDelta
+                                let clampedStart = max(0, min(newStartTime, timeline.duration - timeline.visibleDuration))
+                                if abs(clampedStart - timeline.visibleStartTime) > 0.0001 {
+                                    timeline.visibleStartTime = clampedStart
+                                }
+                            }
+                        }
+                        .onEnded { _ in
+                            isPanning = false
+                        }
+                )
+                // Double-tap to toggle zoom (same as Edit mode)
+                .onTapGesture(count: 2) {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        if timeline.zoomScale > 1.5 {
+                            timeline.reset()
+                        } else {
+                            let currentTime = progress * duration
+                            timeline.zoom(to: 4.0, centeredOn: currentTime)
+                        }
+                    }
+                }
+                // Zoom indicator
+                .overlay(alignment: .topTrailing) {
+                    if timeline.zoomScale > 1.05 {
+                        HStack(spacing: 4) {
+                            Text("\(Int(timeline.zoomScale * 100))%")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(palette.textSecondary)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    timeline.reset()
+                                }
+                            } label: {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(palette.accent)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(palette.inputBackground.opacity(0.9))
+                        .clipShape(Capsule())
+                        .padding(6)
+                    }
+                }
+            } else {
+                // Loading state - show empty container
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03))
-            )
-            // Pinch to zoom
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        if initialPinchZoom == 1.0 {
-                            initialPinchZoom = zoomScale
-                        }
-                        let newScale = initialPinchZoom * value
-                        zoomScale = min(max(newScale, minZoom), maxZoom)
-                        // Clamp visible start
-                        let maxStart = max(0, 1.0 - visibleDurationFraction)
-                        visibleStartProgress = min(visibleStartProgress, maxStart)
-                    }
-                    .onEnded { _ in
-                        initialPinchZoom = 1.0
-                    }
-            )
-            // Pan when zoomed
-            .simultaneousGesture(
-                DragGesture()
-                    .onChanged { value in
-                        if zoomScale > 1.0 {
-                            if !isPanning {
-                                isPanning = true
-                                panStartProgress = visibleStartProgress
-                            }
-                            // Convert drag to progress delta
-                            let progressDelta = -Double(value.translation.width / width) * visibleDurationFraction
-                            var newStart = panStartProgress + progressDelta
-                            // Clamp to valid range
-                            let maxStart = max(0, 1.0 - visibleDurationFraction)
-                            newStart = max(0, min(newStart, maxStart))
-                            visibleStartProgress = newStart
-                        }
-                    }
-                    .onEnded { _ in
-                        isPanning = false
-                    }
-            )
-            // Double-tap to toggle zoom
-            .onTapGesture(count: 2) {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    if zoomScale > 1.5 {
-                        // Reset to full view
-                        zoomScale = 1.0
-                        visibleStartProgress = 0
-                    } else {
-                        // Zoom to 4x centered on playhead
-                        zoomScale = 4.0
-                        let halfVisible = visibleDurationFraction / 2
-                        visibleStartProgress = max(0, min(progress - halfVisible, 1.0 - visibleDurationFraction))
-                    }
-                }
+                    .fill(palette.inputBackground.opacity(0.3))
             }
-            // Zoom indicator
-            .overlay(alignment: .topTrailing) {
-                if zoomScale > 1.05 {
-                    HStack(spacing: 4) {
-                        Text("\(Int(zoomScale * 100))%")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(palette.textSecondary)
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                zoomScale = 1.0
-                                visibleStartProgress = 0
-                            }
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(palette.accent)
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(palette.inputBackground.opacity(0.9))
-                    .clipShape(Capsule())
-                    .padding(6)
-                }
+        }
+        .onAppear {
+            if timeline == nil && duration > 0 {
+                timeline = WaveformTimeline(duration: duration)
+            }
+        }
+        .onChange(of: duration) { _, newDuration in
+            if newDuration > 0 && (timeline == nil || timeline?.duration != newDuration) {
+                timeline = WaveformTimeline(duration: newDuration)
             }
         }
         // Follow-track: center playhead when zoomed and playing
         .onChange(of: progress) { _, newProgress in
-            if isPlaying && zoomScale > 1.0 && !isPanning {
-                // Center the playhead
-                let halfVisible = visibleDurationFraction / 2
-                var newStart = newProgress - halfVisible
-                // Clamp to valid range
-                let maxStart = max(0, 1.0 - visibleDurationFraction)
-                newStart = max(0, min(newStart, maxStart))
-                visibleStartProgress = newStart
+            guard let timeline = timeline else { return }
+            if isPlaying && timeline.zoomScale > 1.0 && !isPanning {
+                // Apply audio latency compensation (same as Edit mode)
+                let audioLatencyCompensation: TimeInterval = 0.05
+                let compensatedProgress = max(0, newProgress - (audioLatencyCompensation / duration))
+                let currentTime = compensatedProgress * duration
+                timeline.centerOnTime(currentTime)
             }
         }
     }
+
+    /// Audio latency compensation for playhead display (matches Edit mode)
+    private static let audioLatencyCompensation: TimeInterval = 0.05
 }
 
-/// Canvas component for DetailsWaveformView - matches Edit mode (WaveformBarsView) exactly
-/// Uses time-based grid lines for proper alignment at all zoom levels
-private struct DetailsWaveformCanvas: View {
-    let waveformData: WaveformData?
-    let fallbackSamples: [Float]
+/// Simple playhead line for Details mode (no drag interaction)
+private struct DetailsPlayheadView: View {
     let progress: Double
-    let duration: TimeInterval
-    let zoomScale: CGFloat
-    let visibleStartProgress: Double
-    let visibleDurationFraction: Double
+    let timeline: WaveformTimeline
     let width: CGFloat
     let height: CGFloat
-    let colorScheme: ColorScheme
     let palette: ThemePalette
+    var isPlaying: Bool = false
 
-    // Calculate tick intervals based on visible duration (matches Edit mode exactly)
-    private func tickIntervals(visibleDuration: TimeInterval) -> (major: TimeInterval, minor: TimeInterval) {
-        switch visibleDuration {
-        case 0..<0.05:   return (0.01, 0.002)   // 10ms major, 2ms minor (extreme zoom)
-        case 0.05..<0.2: return (0.05, 0.01)    // 50ms major, 10ms minor
-        case 0.2..<0.5:  return (0.1, 0.02)     // 100ms major, 20ms minor
-        case 0.5..<1:    return (0.2, 0.05)     // 200ms major, 50ms minor
-        case 1..<2:      return (0.5, 0.1)      // 500ms major, 100ms minor
-        case 2..<5:      return (1, 0.2)        // 1s major, 200ms minor
-        case 5..<10:     return (2, 0.5)        // 2s major, 500ms minor
-        case 10..<30:    return (5, 1)          // 5s major, 1s minor
-        case 30..<60:    return (10, 2)         // 10s major, 2s minor
-        case 60..<120:   return (15, 5)         // 15s major, 5s minor
-        case 120..<300:  return (30, 10)        // 30s major, 10s minor
-        case 300..<600:  return (60, 15)        // 1min major, 15s minor
-        default:         return (120, 30)       // 2min major, 30s minor
+    // Audio latency compensation - matches Edit mode (50ms)
+    private let audioLatencyCompensation: TimeInterval = 0.05
+
+    private var compensatedProgress: Double {
+        if isPlaying && timeline.duration > 0 {
+            return max(0, progress - (audioLatencyCompensation / timeline.duration))
         }
-    }
-
-    // Convert time to x coordinate (matches Edit mode exactly)
-    private func timeToX(_ time: TimeInterval, visibleStartTime: TimeInterval, visibleDuration: TimeInterval, width: CGFloat) -> CGFloat {
-        let progress = (time - visibleStartTime) / visibleDuration
-        return CGFloat(progress) * width
+        return progress
     }
 
     var body: some View {
-        Canvas { context, size in
-            let actualWidth = size.width
-            let actualHeight = size.height
-            guard actualWidth > 0, actualHeight > 0, duration > 0 else { return }
+        let currentTime = compensatedProgress * timeline.duration
+        let x = timeline.timeToX(currentTime, width: width)
 
-            // Calculate visible time range
-            let visibleStartTime = visibleStartProgress * duration
-            let visibleEndTime = min(duration, (visibleStartProgress + visibleDurationFraction) * duration)
-            let visibleDuration = visibleEndTime - visibleStartTime
-
-            // Get samples for visible range
-            let samples: [Float]
-            if let data = waveformData {
-                let targetSamples = max(1, Int(actualWidth / 2))
-                samples = data.samples(from: visibleStartTime, to: visibleEndTime, targetCount: targetSamples)
-            } else {
-                // Slice fallback samples for visible range
-                let startIdx = Int(visibleStartProgress * Double(fallbackSamples.count))
-                let endIdx = min(fallbackSamples.count, Int((visibleStartProgress + visibleDurationFraction) * Double(fallbackSamples.count)))
-                if startIdx < endIdx {
-                    samples = Array(fallbackSamples[startIdx..<endIdx])
-                } else {
-                    samples = fallbackSamples
-                }
+        // Only show if playhead is in visible range
+        if x >= 0 && x <= width && compensatedProgress > 0.001 && compensatedProgress < 0.999 {
+            Path { path in
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: height))
             }
-
-            guard !samples.isEmpty else { return }
-
-            let centerY = actualHeight / 2
-            let padding: CGFloat = 4
-            let maxAmplitude = (actualHeight / 2) - padding
-
-            // Calculate playhead position within visible window
-            let playheadProgress = (progress - visibleStartProgress) / visibleDurationFraction
-            let playheadX = CGFloat(playheadProgress) * actualWidth
-
-            // Theme colors (matching Edit mode exactly)
-            let gridColor: Color = colorScheme == .dark ? .white.opacity(0.08) : .black.opacity(0.06)
-            let waveformColor: Color = colorScheme == .dark ? .white.opacity(0.5) : Color(.systemGray)
-            let playheadColor: Color = colorScheme == .dark ? .white : palette.accent
-
-            // === 1. Draw Grid (time-based, matching Edit mode) ===
-
-            // Get tick intervals based on visible duration
-            let (majorInterval, minorInterval) = tickIntervals(visibleDuration: visibleDuration)
-
-            // Draw minor vertical grid lines (lighter)
-            let firstMinorTick = ceil(visibleStartTime / minorInterval) * minorInterval
-            var minorTime = firstMinorTick
-            while minorTime <= visibleEndTime {
-                let x = timeToX(minorTime, visibleStartTime: visibleStartTime, visibleDuration: visibleDuration, width: actualWidth)
-                var gridLine = Path()
-                gridLine.move(to: CGPoint(x: x, y: 0))
-                gridLine.addLine(to: CGPoint(x: x, y: actualHeight))
-                context.stroke(gridLine, with: .color(gridColor.opacity(0.5)), lineWidth: 0.5)
-                minorTime += minorInterval
-            }
-
-            // Draw major vertical grid lines (more visible)
-            let firstMajorTick = ceil(visibleStartTime / majorInterval) * majorInterval
-            var majorTime = firstMajorTick
-            while majorTime <= visibleEndTime {
-                let x = timeToX(majorTime, visibleStartTime: visibleStartTime, visibleDuration: visibleDuration, width: actualWidth)
-                var gridLine = Path()
-                gridLine.move(to: CGPoint(x: x, y: 0))
-                gridLine.addLine(to: CGPoint(x: x, y: actualHeight))
-                context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
-                majorTime += majorInterval
-            }
-
-            // Horizontal grid lines (amplitude markers)
-            let horizontalGridCount = 4
-            let horizontalSpacing = actualHeight / CGFloat(horizontalGridCount)
-            for i in 1..<horizontalGridCount {
-                let y = CGFloat(i) * horizontalSpacing
-                var gridLine = Path()
-                gridLine.move(to: CGPoint(x: 0, y: y))
-                gridLine.addLine(to: CGPoint(x: actualWidth, y: y))
-                context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
-            }
-
-            // Center line
-            var centerLine = Path()
-            centerLine.move(to: CGPoint(x: 0, y: centerY))
-            centerLine.addLine(to: CGPoint(x: actualWidth, y: centerY))
-            context.stroke(centerLine, with: .color(gridColor.opacity(1.5)), lineWidth: 0.5)
-
-            // === 2. Draw Waveform (same as Edit mode, without selection coloring) ===
-
-            let sampleCount = samples.count
-            let xStep = actualWidth / CGFloat(sampleCount)
-
-            // Cap line width: minimum 1, maximum 3 (same as Edit mode)
-            let lineWidth = min(3, max(1, xStep * 0.7))
-
-            for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * xStep + xStep / 2
-
-                // Sample is 0-1 normalized amplitude
-                let amplitude = CGFloat(sample) * maxAmplitude
-
-                // Draw symmetric around center
-                let yTop = centerY - amplitude
-                let yBottom = centerY + amplitude
-
-                var linePath = Path()
-                linePath.move(to: CGPoint(x: x, y: yTop))
-                linePath.addLine(to: CGPoint(x: x, y: yBottom))
-
-                context.stroke(
-                    linePath,
-                    with: .color(waveformColor),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                )
-            }
-
-            // === 3. Draw Playhead (matching Edit mode style) ===
-            if progress > 0.001 && progress < 0.999 {
-                var playheadPath = Path()
-                playheadPath.move(to: CGPoint(x: playheadX, y: 0))
-                playheadPath.addLine(to: CGPoint(x: playheadX, y: actualHeight))
-                context.stroke(playheadPath, with: .color(playheadColor), lineWidth: 2)
-            }
+            .stroke(palette.accent, lineWidth: 2)
         }
     }
 }
