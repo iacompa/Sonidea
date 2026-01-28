@@ -9,35 +9,36 @@
 import Foundation
 import StoreKit
 import Observation
+import UserNotifications
 
 // MARK: - Subscription Plan
 
 enum SubscriptionPlan: String, CaseIterable {
     case monthly = "com.iacompa.sonidea.sub.monthly"
+    case sixMonth = "com.iacompa.sonidea.sub.sixmonth"
     case annual = "com.iacompa.sonidea.sub.annual"
-    case lifetime = "com.iacompa.sonidea.lifetime"
 
     var displayName: String {
         switch self {
         case .monthly: return "Monthly"
+        case .sixMonth: return "6 Months"
         case .annual: return "Annual"
-        case .lifetime: return "Lifetime"
         }
     }
 
     var description: String {
         switch self {
         case .monthly: return "$3.99/month"
+        case .sixMonth: return "$19.99/6 months"
         case .annual: return "$29.99/year"
-        case .lifetime: return "$99.99 one-time"
         }
     }
 
     var tagline: String {
         switch self {
-        case .monthly: return "Flexible"
+        case .monthly: return "Less than a coffee ☕"
+        case .sixMonth: return "Great Value"
         case .annual: return "Best Value"
-        case .lifetime: return "Pay Once"
         }
     }
 
@@ -73,7 +74,6 @@ let roadmapItems: [RoadmapItem] = [
 RoadmapItem(title: "VST3/AU Plugin for DAW imports", icon: "puzzlepiece.extension"),
     RoadmapItem(title: "Android release", icon: "iphone.and.arrow.forward"),
     RoadmapItem(title: "More themes", icon: "paintpalette"),
-    RoadmapItem(title: "Advanced waveform editing", icon: "waveform.path.ecg"),
 ]
 
 // MARK: - Subscription Manager
@@ -164,6 +164,34 @@ final class SupportManager {
         static let trialStartDate = "subscription.trialStartDate"
         static let isSubscribed = "subscription.isSubscribed"
         static let currentPlan = "subscription.currentPlan"
+        static let sharedAlbumWarningScheduled = "subscription.sharedAlbumWarningScheduled"
+        static let sharedAlbumRemovalScheduled = "subscription.sharedAlbumRemovalScheduled"
+    }
+
+    // MARK: - Shared Album Trial Warning
+
+    /// Whether we've scheduled the shared album warning notification
+    var sharedAlbumWarningScheduled: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.sharedAlbumWarningScheduled) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.sharedAlbumWarningScheduled) }
+    }
+
+    /// Whether we've scheduled the shared album removal notification
+    var sharedAlbumRemovalScheduled: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.sharedAlbumRemovalScheduled) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.sharedAlbumRemovalScheduled) }
+    }
+
+    /// Returns true if user is on trial and has 2 or fewer days remaining
+    var isTrialAboutToExpire: Bool {
+        guard isTrialActive, !isSubscribed else { return false }
+        return trialDaysRemaining <= 2
+    }
+
+    /// Returns the exact date when trial expires
+    var trialExpirationDate: Date? {
+        guard let start = trialStartDate else { return nil }
+        return start.addingTimeInterval(7 * 24 * 60 * 60)
     }
 
     // MARK: - Intro Offer (Annual plan only)
@@ -258,12 +286,8 @@ final class SupportManager {
         }
 
         if !foundActive {
-            // Check if lifetime was purchased (non-consumable persists differently)
-            // Keep subscribed if previously verified and no revocation
-            if currentPlan != .lifetime {
-                isSubscribed = false
-                currentPlanRawValue = nil
-            }
+            isSubscribed = false
+            currentPlanRawValue = nil
         }
     }
 
@@ -341,4 +365,82 @@ final class SupportManager {
     func onRecordingSaved(totalRecordings: Int) {}
     func onExportSuccess(totalRecordings: Int) {}
     func onTranscriptionSuccess(totalRecordings: Int) {}
+
+    // MARK: - Shared Album Trial Expiration Handling
+
+    /// Schedule notifications for shared album trial expiration (called when user has shared albums)
+    func scheduleSharedAlbumTrialWarnings() {
+        guard !isSubscribed, let expirationDate = trialExpirationDate else { return }
+
+        // Don't re-schedule if already done
+        guard !sharedAlbumWarningScheduled else { return }
+
+        let center = UNUserNotificationCenter.current()
+
+        // Request notification permission
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else { return }
+
+            Task { @MainActor in
+                // Schedule warning 2 days before expiration
+                let warningDate = expirationDate.addingTimeInterval(-2 * 24 * 60 * 60)
+                if warningDate > Date() {
+                    let warningContent = UNMutableNotificationContent()
+                    warningContent.title = "Shared Albums Access Ending Soon"
+                    warningContent.body = "Your free trial ends in 2 days. Subscribe to keep access to your shared albums."
+                    warningContent.sound = .default
+
+                    let warningTrigger = UNTimeIntervalNotificationTrigger(
+                        timeInterval: warningDate.timeIntervalSinceNow,
+                        repeats: false
+                    )
+                    let warningRequest = UNNotificationRequest(
+                        identifier: "sharedAlbum.trialWarning",
+                        content: warningContent,
+                        trigger: warningTrigger
+                    )
+                    try? await center.add(warningRequest)
+                }
+
+                // Schedule warning 1 day before expiration
+                let finalWarningDate = expirationDate.addingTimeInterval(-1 * 24 * 60 * 60)
+                if finalWarningDate > Date() {
+                    let finalContent = UNMutableNotificationContent()
+                    finalContent.title = "Last Day for Shared Albums"
+                    finalContent.body = "Your free trial ends tomorrow. You'll be removed from shared albums unless you subscribe."
+                    finalContent.sound = .default
+
+                    let finalTrigger = UNTimeIntervalNotificationTrigger(
+                        timeInterval: finalWarningDate.timeIntervalSinceNow,
+                        repeats: false
+                    )
+                    let finalRequest = UNNotificationRequest(
+                        identifier: "sharedAlbum.trialFinalWarning",
+                        content: finalContent,
+                        trigger: finalTrigger
+                    )
+                    try? await center.add(finalRequest)
+                }
+
+                self.sharedAlbumWarningScheduled = true
+            }
+        }
+    }
+
+    /// Cancel shared album warning notifications (called when user subscribes)
+    func cancelSharedAlbumTrialWarnings() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [
+            "sharedAlbum.trialWarning",
+            "sharedAlbum.trialFinalWarning"
+        ])
+        sharedAlbumWarningScheduled = false
+        sharedAlbumRemovalScheduled = false
+    }
+
+    /// Reset warning flags (called when user re-subscribes after lapse)
+    func resetSharedAlbumWarningFlags() {
+        sharedAlbumWarningScheduled = false
+        sharedAlbumRemovalScheduled = false
+    }
 }

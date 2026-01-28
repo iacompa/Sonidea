@@ -118,6 +118,8 @@ struct SharedAlbumMapView: View {
                         sharedInfo: selected.sharedInfo,
                         album: album
                     )
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
                 }
             }
         }

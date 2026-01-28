@@ -6,6 +6,7 @@ enum ProFeatureContext: String, Identifiable {
     case tags
     case icloudSync
     case autoIcons
+    case recordingQuality
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum ProFeatureContext: String, Identifiable {
         case .tags: return "Unlock Tags"
         case .icloudSync: return "Unlock iCloud Sync"
         case .autoIcons: return "Unlock Auto Icons"
+        case .recordingQuality: return "Unlock High Quality Recording"
         }
     }
 
@@ -26,6 +28,7 @@ enum ProFeatureContext: String, Identifiable {
         case .tags: return "Organize your recordings with custom tags and smart filtering."
         case .icloudSync: return "Keep your recordings in sync across all your Apple devices."
         case .autoIcons: return "Automatically detect and assign icons to your recordings."
+        case .recordingQuality: return "Record in high quality AAC, lossless ALAC, or uncompressed WAV formats."
         }
     }
 
@@ -36,6 +39,7 @@ enum ProFeatureContext: String, Identifiable {
         case .tags: return "tag.fill"
         case .icloudSync: return "icloud.fill"
         case .autoIcons: return "sparkles"
+        case .recordingQuality: return "dial.high.fill"
         }
     }
 }

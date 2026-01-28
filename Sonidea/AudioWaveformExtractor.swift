@@ -160,8 +160,8 @@ actor AudioWaveformExtractor {
     private let baseSamplesPerSecond = 1000 // LOD0: 1000 samples/sec = 1ms resolution
 
     // Silence detection settings (dBFS-based with hysteresis + debounce)
-    private let silenceThresholdDB: Float = -45.0       // dBFS threshold to enter silence
-    private let nonSilenceThresholdDB: Float = -40.0    // dBFS threshold to exit silence (hysteresis)
+    private let silenceThresholdDB: Float = -55.0       // dBFS threshold to enter silence
+    private let nonSilenceThresholdDB: Float = -50.0    // dBFS threshold to exit silence (hysteresis)
     private let minSilenceDuration: TimeInterval = 0.5  // 500ms minimum silence to cut (applied AFTER roll)
     private let silencePreRollMs: Double = 50.0         // Pre-roll before cut (ms) - protect consonants
     private let silencePostRollMs: Double = 50.0        // Post-roll after cut (ms) - protect transients
@@ -302,6 +302,13 @@ actor AudioWaveformExtractor {
 
         logger.debug("Silence detection: threshold=\(silenceThreshold)dB, hysteresis=\(nonSilenceThreshold)dB, window=\(self.rmsWindowMs)ms, hop=\(self.rmsHopMs)ms, enterHold=\(enterHoldCount), exitHold=\(exitHoldCount)")
 
+        #if DEBUG
+        // Debug: collect dB statistics to verify detection is working correctly
+        var debugDBValues: [Float] = []
+        var debugSilentFrameCount = 0
+        var debugLoudFrameCount = 0
+        #endif
+
         // ============================================================
         // STEP 1: Detect silence using RMS→dBFS + hysteresis + debounce
         // ============================================================
@@ -340,7 +347,21 @@ actor AudioWaveformExtractor {
             // Convert RMS to dBFS: dBFS = 20 * log10(rms), floor at -96 dBFS
             let dBFS: Float = maxChannelRMS > 0.000001 ? 20.0 * log10(maxChannelRMS) : -96.0
 
+            #if DEBUG
+            // Collect debug stats (sample every 10th frame to avoid too much data)
+            if frameIndex % 10 == 0 {
+                debugDBValues.append(dBFS)
+            }
+            if dBFS <= silenceThreshold {
+                debugSilentFrameCount += 1
+            } else {
+                debugLoudFrameCount += 1
+            }
+            #endif
+
             let frameTime = Double(frameIndex) * hopDuration
+            // SILENCE = audio level BELOW threshold (quiet)
+            // NON-SILENCE = audio level ABOVE threshold (loud)
             let isBelowSilenceThreshold = dBFS <= silenceThreshold
             let isAboveNonSilenceThreshold = dBFS > nonSilenceThreshold
 
@@ -467,6 +488,33 @@ actor AudioWaveformExtractor {
 
         let totalSilence = silenceRanges.reduce(0.0) { $0 + $1.duration }
         logger.info("Detected \(silenceRanges.count) removable silence ranges (from \(rawSilenceRanges.count) raw), total: \(String(format: "%.1f", totalSilence))s")
+
+        #if DEBUG
+        // Print comprehensive debug summary
+        let totalFrames = debugSilentFrameCount + debugLoudFrameCount
+        let silentPercent = totalFrames > 0 ? (Double(debugSilentFrameCount) / Double(totalFrames)) * 100 : 0
+        let minDB = debugDBValues.min() ?? -96
+        let maxDB = debugDBValues.max() ?? 0
+        let avgDB = debugDBValues.isEmpty ? -96 : debugDBValues.reduce(0, +) / Float(debugDBValues.count)
+
+        print("🔇 SILENCE DETECTION DEBUG:")
+        print("   File: \(url.lastPathComponent)")
+        print("   Duration: \(String(format: "%.1f", duration))s")
+        print("   Threshold: \(silenceThreshold) dB (silence = level BELOW this)")
+        print("   Hysteresis exit: \(nonSilenceThreshold) dB (exit silence when ABOVE this)")
+        print("   dB range: min=\(String(format: "%.1f", minDB)), max=\(String(format: "%.1f", maxDB)), avg=\(String(format: "%.1f", avgDB))")
+        print("   Frames: \(debugSilentFrameCount) silent, \(debugLoudFrameCount) loud (\(String(format: "%.1f", silentPercent))% silent)")
+        print("   Raw silence regions: \(rawSilenceRanges.count)")
+        print("   After merge: \(mergedRanges.count)")
+        print("   After roll: \(rolledRanges.count)")
+        print("   Final (≥\(minSilence)s): \(silenceRanges.count) regions, \(String(format: "%.1f", totalSilence))s total")
+        if !silenceRanges.isEmpty {
+            print("   First 3 silence ranges:")
+            for (i, range) in silenceRanges.prefix(3).enumerated() {
+                print("     [\(i)] \(String(format: "%.2f", range.start))s - \(String(format: "%.2f", range.end))s (\(String(format: "%.2f", range.duration))s)")
+            }
+        }
+        #endif
 
         return silenceRanges
     }

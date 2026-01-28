@@ -2120,8 +2120,10 @@ struct SearchTimelineView: View {
     @Binding var selectedRecording: RecordingItem?
 
     private var timelineGroups: [TimelineGroup] {
+        // Filter out trashed recordings
+        let activeRecordings = appState.recordings.filter { !$0.isTrashed }
         let items = TimelineBuilder.buildTimeline(
-            recordings: appState.recordings,
+            recordings: activeRecordings,
             projects: appState.projects
         )
         return TimelineBuilder.groupByDay(items)
@@ -3013,7 +3015,22 @@ struct SettingsSheetView: View {
                     // Recording Quality
                     Picker("Quality", selection: $appState.appSettings.recordingQuality) {
                         ForEach(RecordingQualityPreset.allCases) { preset in
-                            Text(preset.displayName).tag(preset)
+                            HStack {
+                                Text(preset.displayName)
+                                if preset != .standard && !appState.supportManager.canUseProFeatures {
+                                    Image(systemName: "lock.fill")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .tag(preset)
+                        }
+                    }
+                    .onChange(of: appState.appSettings.recordingQuality) { oldValue, newValue in
+                        // Prevent free users from selecting premium quality presets
+                        if !appState.supportManager.canUseProFeatures && newValue != .standard {
+                            appState.appSettings.recordingQuality = .standard
+                            proUpgradeContext = .recordingQuality
                         }
                     }
                     .listRowBackground(palette.cardBackground)

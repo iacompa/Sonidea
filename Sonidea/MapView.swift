@@ -165,14 +165,18 @@ struct GPSInsightsMapView: View {
                     dragOffset = -value.translation.height
                 }
                 .onEnded { value in
-                    let velocity = value.predictedEndTranslation.height - value.translation.height
+                    // Use predicted velocity for flick detection
+                    let predictedEndY = value.predictedEndLocation.y
+                    let currentY = value.location.y
+                    let velocityY = predictedEndY - currentY
+
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                         // Determine state based on drag direction and velocity
-                        if velocity < -100 {
-                            // Swiped up fast
+                        if velocityY < -50 {
+                            // Swiped up fast (flick to expand)
                             sheetState = .expanded
-                        } else if velocity > 100 {
-                            // Swiped down fast
+                        } else if velocityY > 50 {
+                            // Swiped down fast (flick to collapse)
                             sheetState = .collapsed
                         } else {
                             // Slow drag - snap to nearest
@@ -511,10 +515,10 @@ struct SpotCategorySection: View {
 
     private func rankColor(for rank: Int) -> Color {
         switch rank {
-        case 1: return .orange
-        case 2: return .gray
-        case 3: return .brown
-        default: return .secondary
+        case 1: return palette.accent
+        case 2: return palette.textSecondary
+        case 3: return palette.accent.opacity(0.6)
+        default: return palette.textTertiary
         }
     }
 }
@@ -558,10 +562,10 @@ struct SpotListRow: View {
                             HStack(spacing: 2) {
                                 Image(systemName: "heart.fill")
                                     .font(.system(size: 9))
-                                    .foregroundColor(.pink)
+                                    .foregroundColor(palette.recordButton)
                                 Text("\(spot.favoriteCount)")
                                     .font(.caption)
-                                    .foregroundColor(.pink)
+                                    .foregroundColor(palette.recordButton)
                             }
                         }
                     }
@@ -583,10 +587,10 @@ struct SpotListRow: View {
 
     private var rankColor: Color {
         switch rank {
-        case 1: return .yellow.opacity(0.9)
-        case 2: return .gray.opacity(0.7)
-        case 3: return .orange.opacity(0.7)
-        default: return palette.textSecondary.opacity(0.5)
+        case 1: return palette.accent
+        case 2: return palette.textSecondary
+        case 3: return palette.accent.opacity(0.6)
+        default: return palette.textTertiary
         }
     }
 }
@@ -604,18 +608,18 @@ struct RecordingMapPin: View {
                 .fill(palette.recordButton.opacity(0.3))
                 .frame(width: 36, height: 36)
 
-            // White background circle
+            // Background circle - adapts to color scheme for visibility on maps
             Circle()
-                .fill(Color.white)
+                .fill(colorScheme == .dark ? Color.black : Color.white)
                 .frame(width: 28, height: 28)
-                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                .shadow(color: colorScheme == .dark ? .white.opacity(0.15) : .black.opacity(0.2), radius: 2, y: 1)
 
             // Themed record button color
             Circle()
                 .fill(palette.recordButton)
                 .frame(width: 22, height: 22)
 
-            // Waveform icon
+            // Waveform icon - white to contrast with record button color
             Image(systemName: "waveform")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(.white)

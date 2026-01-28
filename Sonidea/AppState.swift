@@ -703,11 +703,19 @@ final class AppState {
 
     /// Add a newly created shared album
     func addSharedAlbum(_ album: Album) {
+        // Pro feature check - don't add if user doesn't have access
+        guard supportManager.canUseProFeatures else {
+            return
+        }
+
         albums.append(album)
         saveAlbums()
 
         // Trigger iCloud sync
         triggerSyncForAlbum(album)
+
+        // Schedule trial expiration warnings if on trial
+        scheduleSharedAlbumTrialWarningsIfNeeded()
     }
 
     /// Remove a shared album (when leaving or owner stops sharing)
@@ -723,6 +731,63 @@ final class AppState {
 
         saveAlbums()
         saveRecordings()
+    }
+
+    // MARK: - Free User Shared Album Enforcement
+
+    /// Check if user can access shared albums (pro feature)
+    var canAccessSharedAlbums: Bool {
+        supportManager.canUseProFeatures
+    }
+
+    /// Check and enforce shared album access on app launch/foreground.
+    /// Removes free users from shared albums when trial expires.
+    func enforceSharedAlbumAccess() async {
+        // If user has pro access, nothing to enforce
+        guard !supportManager.canUseProFeatures else {
+            // User subscribed - cancel any pending warnings
+            supportManager.cancelSharedAlbumTrialWarnings()
+            return
+        }
+
+        let userSharedAlbums = sharedAlbums
+
+        // If user has shared albums but no pro access, remove them
+        if !userSharedAlbums.isEmpty {
+            // Leave all shared albums
+            for album in userSharedAlbums {
+                do {
+                    // Leave the CloudKit share (this also removes their recordings)
+                    if !album.isOwner {
+                        try await sharedAlbumManager.leaveSharedAlbum(album)
+                    } else {
+                        // If they're the owner, we can't force them to leave - but they lose access
+                        // Just remove from local state; share stays in CloudKit
+                    }
+                } catch {
+                    // Log error but continue - we'll remove from local state anyway
+                    print("Failed to leave shared album \(album.name): \(error.localizedDescription)")
+                }
+
+                // Remove from local state
+                removeSharedAlbum(album)
+            }
+
+            // Clear caches
+            clearSharedRecordingInfoCache()
+        }
+    }
+
+    /// Schedule trial expiration notifications if user has shared albums
+    func scheduleSharedAlbumTrialWarningsIfNeeded() {
+        // Only schedule if user is on trial and has shared albums
+        guard supportManager.isTrialActive,
+              !supportManager.isSubscribed,
+              !sharedAlbums.isEmpty else {
+            return
+        }
+
+        supportManager.scheduleSharedAlbumTrialWarnings()
     }
 
     /// Update shared album properties (participant count, etc.)
@@ -791,8 +856,14 @@ final class AppState {
 
     // MARK: - Enhanced Shared Album Management
 
+    /// Cached current CloudKit user ID (populated on launch / shared album access)
+    var cachedCurrentUserId: String?
+
     /// Cache for shared recording metadata
     var sharedRecordingInfoCache: [UUID: SharedRecordingItem] = [:]
+
+    /// Local activity events (for simulator/offline — merged into activity feed)
+    var localActivityEvents: [SharedAlbumActivityEvent] = []
 
     /// Get shared recording info for a recording (from cache or creates default)
     func sharedRecordingInfo(for recording: RecordingItem, in album: Album) -> SharedRecordingItem? {
@@ -826,6 +897,7 @@ final class AppState {
 
         // Check permission: admin can delete anything, members only if allowed
         let userId = await sharedAlbumManager.getCurrentUserId() ?? "unknown"
+        cachedCurrentUserId = userId
         let isOwnRecording = sharedInfo.creatorId == userId
         let canDelete = album.canDeleteAnyRecording || (isOwnRecording && album.canDeleteOwnRecording)
         guard canDelete else {
@@ -1820,6 +1892,9 @@ final class AppState {
 
     /// Check if a recording can have overdub layers added
     func canAddOverdubLayer(to recording: RecordingItem) -> Bool {
+        // Overdub is a premium feature
+        guard supportManager.canUseProFeatures else { return false }
+
         // If not part of an overdub group yet, it can start one
         guard let groupId = recording.overdubGroupId else { return true }
 

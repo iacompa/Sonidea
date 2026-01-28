@@ -53,6 +53,11 @@ struct SharedRecordingItem: Identifiable, Codable, Equatable {
     /// Human-readable place name
     var sharedPlaceName: String?
 
+    // MARK: - Download Permission
+
+    /// Whether other users are allowed to download (cache locally) this recording
+    var allowDownload: Bool = false
+
     // MARK: - Verified Status
 
     /// Whether this recording has been verified/authenticated
@@ -93,6 +98,7 @@ struct SharedRecordingItem: Identifiable, Codable, Equatable {
         sensitiveApproved: Bool = false,
         sensitiveApprovedBy: String? = nil,
         sensitiveApprovedAt: Date? = nil,
+        allowDownload: Bool = false,
         locationSharingMode: LocationSharingMode = .none,
         sharedLatitude: Double? = nil,
         sharedLongitude: Double? = nil,
@@ -112,6 +118,7 @@ struct SharedRecordingItem: Identifiable, Codable, Equatable {
         self.sensitiveApproved = sensitiveApproved
         self.sensitiveApprovedBy = sensitiveApprovedBy
         self.sensitiveApprovedAt = sensitiveApprovedAt
+        self.allowDownload = allowDownload
         self.locationSharingMode = locationSharingMode
         self.sharedLatitude = sharedLatitude
         self.sharedLongitude = sharedLongitude

@@ -83,16 +83,18 @@ struct TipJarView: View {
                 .cornerRadius(12)
 
             case .subscribed(let plan):
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                    Text("Subscribed — \(plan.displayName)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(palette.textPrimary)
+                VStack(spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundColor(.green)
+                        Text("\(plan.displayName) Pro")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(palette.textPrimary)
+                    }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
                 .background(Color.green.opacity(0.1))
                 .cornerRadius(12)
@@ -117,14 +119,31 @@ struct TipJarView: View {
 
     // MARK: - Plans
 
+    @State private var showAllPlans = false
+
+    /// Plans visible based on current subscription
+    private var visiblePlans: [SubscriptionPlan] {
+        guard let current = manager.currentPlan, manager.isSubscribed else {
+            // Free / trial — show all
+            return SubscriptionPlan.allCases
+        }
+        if showAllPlans { return SubscriptionPlan.allCases }
+        // Only show higher tiers
+        switch current {
+        case .monthly: return [.sixMonth, .annual]
+        case .sixMonth: return [.annual]
+        case .annual: return []
+        }
+    }
+
     private var plansSection: some View {
         VStack(spacing: 12) {
-            Text("Choose a Plan")
+            Text(manager.isSubscribed ? "Upgrade Your Plan" : "Choose a Plan")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            ForEach(SubscriptionPlan.allCases, id: \.self) { plan in
+            ForEach(visiblePlans, id: \.self) { plan in
                 PlanCard(plan: plan, isBestValue: plan == .annual) {
                     Task {
                         await manager.purchase(plan: plan)
@@ -139,69 +158,125 @@ struct TipJarView: View {
                         .padding(.top, -4)
                 }
             }
+
+            // "See other plans" for subscribed users who haven't expanded (not on annual)
+            if manager.isSubscribed && manager.currentPlan != .annual && !showAllPlans {
+                Button {
+                    withAnimation { showAllPlans = true }
+                } label: {
+                    Text("See all plans")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                }
+            }
         }
     }
 
     // MARK: - Features
 
     private var featuresSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Free Forever")
-                .font(.headline)
-                .foregroundColor(palette.textPrimary)
-                .padding(.horizontal, 4)
+        VStack(spacing: 16) {
+            // Free tier
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "gift.fill")
+                        .font(.subheadline)
+                        .foregroundColor(.green)
+                    Text("Free Forever")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(palette.textPrimary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color.green.opacity(0.08))
 
-            VStack(alignment: .leading, spacing: 10) {
-                FeatureRow(icon: "mic.fill", text: "Unlimited recordings")
-                FeatureRow(icon: "play.fill", text: "Full playback")
-                FeatureRow(icon: "magnifyingglass", text: "Search & organize")
-                FeatureRow(icon: "map.fill", text: "Map view")
+                VStack(spacing: 0) {
+                    FeatureCheckRow(icon: "mic.fill", text: "Unlimited recordings", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "play.fill", text: "Full playback", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "magnifyingglass", text: "Search & organize", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "map.fill", text: "Map view", included: true)
+                }
+                .padding(.vertical, 4)
             }
-            .padding()
             .background(palette.cardBackground)
             .cornerRadius(12)
 
-            Text("Pro Features")
-                .font(.headline)
-                .foregroundColor(palette.textPrimary)
-                .padding(.horizontal, 4)
-                .padding(.top, 4)
+            // Pro tier
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "star.fill")
+                        .font(.subheadline)
+                        .foregroundColor(palette.accent)
+                    Text("Pro")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(palette.textPrimary)
+                    Spacer()
+                    Text("Everything in Free, plus:")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(palette.accent.opacity(0.08))
 
-            VStack(alignment: .leading, spacing: 10) {
-                FeatureRow(icon: "waveform", text: "Pro waveform editor")
-                FeatureRow(icon: "person.2.fill", text: "Shared albums & collaboration")
-                FeatureRow(icon: "tag.fill", text: "Tags & smart filtering")
-                FeatureRow(icon: "icloud.fill", text: "iCloud sync")
-                FeatureRow(icon: "sparkles", text: "Auto-select icons")
-                FeatureRow(icon: "square.on.square", text: "Multi-track overdub")
-                FeatureRow(icon: "paintpalette.fill", text: "All themes")
-                FeatureRow(icon: "square.and.arrow.up.fill", text: "Export in all formats")
+                VStack(spacing: 0) {
+                    FeatureCheckRow(icon: "waveform", text: "Pro waveform editor", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "person.2.fill", text: "Shared albums & collaboration", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "tag.fill", text: "Tags & smart filtering", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "icloud.fill", text: "iCloud sync", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "sparkles", text: "Auto-select icons", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "square.on.square", text: "Multi-track overdub", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "square.and.arrow.up.fill", text: "Export in all formats", included: true)
+                }
+                .padding(.vertical, 4)
             }
-            .padding()
             .background(palette.cardBackground)
             .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(palette.accent.opacity(0.2), lineWidth: 1)
+            )
         }
     }
 
     // MARK: - Roadmap
 
     private var roadmapSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Coming Soon")
-                .font(.headline)
-                .foregroundColor(palette.textPrimary)
-                .padding(.horizontal, 4)
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "road.lanes")
+                    .font(.subheadline)
+                    .foregroundColor(palette.accent)
+                Text("Coming Soon")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(palette.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(palette.accent.opacity(0.05))
 
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(roadmapItems) { item in
+            VStack(spacing: 0) {
+                ForEach(Array(roadmapItems.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: 12) {
                         Image(systemName: item.icon)
-                            .font(.caption)
+                            .font(.system(size: 14))
                             .foregroundColor(palette.accent)
-                            .frame(width: 20)
+                            .frame(width: 24)
                         Text(item.title)
                             .font(.subheadline)
                             .foregroundColor(palette.textPrimary)
+                        Spacer()
                         if item.isNew {
                             Text("NEW")
                                 .font(.system(size: 9, weight: .bold))
@@ -212,12 +287,17 @@ struct TipJarView: View {
                                 .cornerRadius(4)
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+
+                    if index < roadmapItems.count - 1 {
+                        Divider().padding(.leading, 52)
+                    }
                 }
             }
-            .padding()
-            .background(palette.cardBackground)
-            .cornerRadius(12)
         }
+        .background(palette.cardBackground)
+        .cornerRadius(12)
     }
 
     // MARK: - Restore
@@ -400,6 +480,31 @@ struct FeatureRow: View {
                 .font(.subheadline)
                 .foregroundColor(palette.textPrimary)
         }
+    }
+}
+
+struct FeatureCheckRow: View {
+    @Environment(\.themePalette) private var palette
+    let icon: String
+    let text: String
+    let included: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(palette.accent)
+                .frame(width: 24)
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(palette.textPrimary)
+            Spacer()
+            Image(systemName: included ? "checkmark" : "xmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(included ? .green : palette.textTertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 

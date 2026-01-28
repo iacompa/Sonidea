@@ -39,12 +39,21 @@ enum ActivityEventType: String, Codable, CaseIterable {
     case settingRetentionDaysChanged
     case albumRenamed
 
+    // Download permission events
+    case recordingDownloadEnabled
+    case recordingDownloadDisabled
+
+    // Comment events
+    case commentAdded
+    case commentDeleted
+
     /// Human-readable category for filtering
     var category: ActivityCategory {
         switch self {
         case .recordingAdded, .recordingDeleted, .recordingRestored, .recordingRenamed,
              .recordingMarkedSensitive, .recordingUnmarkedSensitive,
-             .sensitiveRecordingApproved, .sensitiveRecordingRejected:
+             .sensitiveRecordingApproved, .sensitiveRecordingRejected,
+             .recordingDownloadEnabled, .recordingDownloadDisabled:
             return .recordings
         case .locationEnabled, .locationDisabled, .locationModeChanged:
             return .location
@@ -53,6 +62,8 @@ enum ActivityEventType: String, Codable, CaseIterable {
         case .settingAllowDeletesChanged, .settingTrashRestoreChanged,
              .settingLocationDefaultChanged, .settingRetentionDaysChanged, .albumRenamed:
             return .settings
+        case .commentAdded, .commentDeleted:
+            return .recordings
         }
     }
 
@@ -78,6 +89,10 @@ enum ActivityEventType: String, Codable, CaseIterable {
              .settingLocationDefaultChanged, .settingRetentionDaysChanged:
             return "gearshape.fill"
         case .albumRenamed: return "folder.fill"
+        case .recordingDownloadEnabled: return "arrow.down.circle.fill"
+        case .recordingDownloadDisabled: return "arrow.down.circle"
+        case .commentAdded: return "bubble.left.fill"
+        case .commentDeleted: return "bubble.left"
         }
     }
 
@@ -104,6 +119,14 @@ enum ActivityEventType: String, Codable, CaseIterable {
             return .blue
         case .settingAllowDeletesChanged, .settingTrashRestoreChanged,
              .settingLocationDefaultChanged, .settingRetentionDaysChanged:
+            return .gray
+        case .recordingDownloadEnabled:
+            return .blue
+        case .recordingDownloadDisabled:
+            return .gray
+        case .commentAdded:
+            return .blue
+        case .commentDeleted:
             return .gray
         }
     }
@@ -270,6 +293,32 @@ struct SharedAlbumActivityEvent: Identifiable, Codable, Equatable {
                 return "\(actorDisplayName) renamed album from \"\(oldName)\" to \"\(newName)\""
             }
             return "\(actorDisplayName) renamed the album"
+
+        case .recordingDownloadEnabled:
+            if let title = targetRecordingTitle {
+                return "\(actorDisplayName) enabled downloads for \"\(title)\""
+            }
+            return "\(actorDisplayName) enabled downloads for a recording"
+
+        case .recordingDownloadDisabled:
+            if let title = targetRecordingTitle {
+                return "\(actorDisplayName) disabled downloads for \"\(title)\""
+            }
+            return "\(actorDisplayName) disabled downloads for a recording"
+
+        case .commentAdded:
+            if let commentText = newValue, let title = targetRecordingTitle {
+                return "\(actorDisplayName) commented \"\(commentText)\" on \"\(title)\""
+            } else if let title = targetRecordingTitle {
+                return "\(actorDisplayName) commented on \"\(title)\""
+            }
+            return "\(actorDisplayName) added a comment"
+
+        case .commentDeleted:
+            if let title = targetRecordingTitle {
+                return "\(actorDisplayName) deleted a comment on \"\(title)\""
+            }
+            return "\(actorDisplayName) deleted a comment"
         }
     }
 

@@ -179,13 +179,17 @@ struct SharedAlbumActivityView: View {
             // Use mock data in debug mode
             if appState.isSharedAlbumsDebugMode {
                 await MainActor.run {
-                    events = appState.debugMockActivityFeed()
+                    let mockEvents = appState.debugMockActivityFeed()
+                    let localEvents = appState.localActivityEvents.filter { $0.albumId == album.id }
+                    events = (mockEvents + localEvents).sorted { $0.timestamp > $1.timestamp }
                     isLoading = false
                 }
             } else {
                 let fetched = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 100)
                 await MainActor.run {
-                    events = fetched
+                    // Merge CloudKit events with local events (for simulator/offline)
+                    let localEvents = appState.localActivityEvents.filter { $0.albumId == album.id }
+                    events = (fetched + localEvents).sorted { $0.timestamp > $1.timestamp }
                     isLoading = false
                 }
             }

@@ -30,6 +30,7 @@ enum SharedAlbumError: Error, LocalizedError {
     case invalidRole
     case offline
     case shareNoLongerExists
+    case downloadNotAllowed
 
     var errorDescription: String? {
         switch self {
@@ -61,6 +62,8 @@ enum SharedAlbumError: Error, LocalizedError {
             return "You're offline. This action will be retried when connectivity returns."
         case .shareNoLongerExists:
             return "This shared album is no longer available. The owner may have stopped sharing."
+        case .downloadNotAllowed:
+            return "The creator has not enabled downloads for this recording."
         }
     }
 }
@@ -77,6 +80,9 @@ final class SharedAlbumManager {
     var error: String?
     var isOnline = true
     var shareStale = false  // Set true when owner has stopped sharing
+
+    /// Cached current user ID for synchronous access (populated on first use)
+    private(set) var cachedCurrentUserId: String?
 
     // MARK: - Configuration
 
@@ -251,6 +257,11 @@ final class SharedAlbumManager {
         // Non-owners leave by fetching the share from the shared database
         // and using CKDatabase to remove the accepted share
         do {
+            // Remove this user's recordings from the shared album before leaving
+            if let currentUserId = await getCurrentUserId() {
+                try? await removeUserRecordings(userId: currentUserId, album: album)
+            }
+
             // First try to fetch all accepted shares and find the matching one
             let allZones = try await sharedDatabase.allRecordZones()
             let matchingZone = allZones.first { $0.zoneID.zoneName == "SharedAlbum-\(album.id.uuidString)" }
@@ -338,6 +349,9 @@ final class SharedAlbumManager {
             record["sharedPlaceName"] = recording.locationLabel
         }
 
+        // Download permission (default: off — creator must opt-in)
+        record["allowDownload"] = false
+
         // Verification status
         record["isVerified"] = recording.hasProof
         record["verifiedAt"] = recording.proofCloudCreatedAt
@@ -421,6 +435,7 @@ final class SharedAlbumManager {
                         sensitiveApproved: record["sensitiveApproved"] as? Bool ?? false,
                         sensitiveApprovedBy: record["sensitiveApprovedBy"] as? String,
                         sensitiveApprovedAt: record["sensitiveApprovedAt"] as? Date,
+                        allowDownload: record["allowDownload"] as? Bool ?? false,
                         locationSharingMode: LocationSharingMode(rawValue: record["locationSharingMode"] as? String ?? "none") ?? .none,
                         sharedLatitude: record["sharedLatitude"] as? Double,
                         sharedLongitude: record["sharedLongitude"] as? Double,
@@ -618,6 +633,9 @@ final class SharedAlbumManager {
         do {
             try await privateDatabase.save(share)
             logger.info("Removed participant successfully")
+
+            // Remove the participant's recordings from the shared album
+            try? await removeUserRecordings(userId: participantId, album: album)
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
@@ -960,6 +978,108 @@ final class SharedAlbumManager {
         )
     }
 
+    // MARK: - Comments
+
+    /// Add a comment to a shared album recording
+    func addComment(recordingId: UUID, recordingTitle: String, album: Album, text: String) async throws -> SharedAlbumComment {
+        guard album.isShared else { throw SharedAlbumError.permissionDenied }
+
+        let (db, zoneID) = try await databaseAndZone(for: album)
+        let userId = await getCurrentUserId() ?? "unknown"
+        let displayName = await getCurrentUserDisplayName()
+
+        let comment = SharedAlbumComment(
+            recordingId: recordingId,
+            authorId: userId,
+            authorDisplayName: displayName,
+            text: text
+        )
+
+        let recordID = CKRecord.ID(recordName: "comment-\(comment.id.uuidString)", zoneID: zoneID)
+        let record = CKRecord(recordType: "SharedAlbumComment", recordID: recordID)
+        record["recordingId"] = recordingId.uuidString
+        record["authorId"] = comment.authorId
+        record["authorDisplayName"] = comment.authorDisplayName
+        record["text"] = comment.text
+        record["createdAt"] = comment.createdAt
+
+        try await db.save(record)
+        logger.debug("Added comment on recording \(recordingId)")
+
+        // Log activity (non-critical)
+        let event = SharedAlbumActivityEvent(
+            albumId: album.id,
+            actorId: userId,
+            actorDisplayName: displayName,
+            eventType: .commentAdded,
+            targetRecordingId: recordingId,
+            targetRecordingTitle: recordingTitle,
+            newValue: text
+        )
+        try? await logActivity(event: event, for: album)
+
+        return comment
+    }
+
+    /// Fetch comments for a recording in a shared album
+    func fetchComments(for recordingId: UUID, album: Album) async -> [SharedAlbumComment] {
+        guard album.isShared else { return [] }
+
+        let predicate = NSPredicate(format: "recordingId == %@", recordingId.uuidString)
+        let query = CKQuery(recordType: "SharedAlbumComment", predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
+
+        do {
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let (results, _) = try await db.records(matching: query, inZoneWith: zoneID, resultsLimit: 100)
+
+            var comments: [SharedAlbumComment] = []
+            for (_, result) in results {
+                if case .success(let record) = result,
+                   let comment = parseCommentRecord(record) {
+                    comments.append(comment)
+                }
+            }
+            return comments.sorted { $0.createdAt < $1.createdAt }
+        } catch {
+            logger.error("Failed to fetch comments: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// Delete own comment
+    func deleteComment(commentId: UUID, album: Album) async throws {
+        guard album.isShared else { throw SharedAlbumError.permissionDenied }
+
+        let (db, zoneID) = try await databaseAndZone(for: album)
+        let recordID = CKRecord.ID(recordName: "comment-\(commentId.uuidString)", zoneID: zoneID)
+        try await db.deleteRecord(withID: recordID)
+        logger.debug("Deleted comment \(commentId)")
+    }
+
+    private func parseCommentRecord(_ record: CKRecord) -> SharedAlbumComment? {
+        guard let recordingIdStr = record["recordingId"] as? String,
+              let recordingId = UUID(uuidString: recordingIdStr),
+              let authorId = record["authorId"] as? String,
+              let authorDisplayName = record["authorDisplayName"] as? String,
+              let text = record["text"] as? String,
+              let createdAt = record["createdAt"] as? Date else {
+            return nil
+        }
+
+        let idString = record.recordID.recordName.replacingOccurrences(of: "comment-", with: "")
+        guard let commentId = UUID(uuidString: idString) else { return nil }
+
+        return SharedAlbumComment(
+            id: commentId,
+            recordingId: recordingId,
+            authorId: authorId,
+            authorDisplayName: authorDisplayName,
+            text: text,
+            createdAt: createdAt
+        )
+    }
+
     // MARK: - Settings Management
 
     /// Update album settings
@@ -1200,11 +1320,108 @@ final class SharedAlbumManager {
         }
     }
 
+    // MARK: - User Recording Cleanup (Leave/Remove)
+
+    /// Remove all SharedRecording CKRecords created by a specific user from a shared album.
+    /// Used when a user leaves or is removed — their local files are untouched.
+    func removeUserRecordings(userId: String, album: Album) async throws {
+        guard album.isShared else { return }
+
+        logger.info("Removing recordings by user \(userId) from album \(album.name)")
+
+        let predicate = NSPredicate(format: "creatorId == %@", userId)
+        let query = CKQuery(recordType: "SharedRecording", predicate: predicate)
+
+        do {
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let (results, _) = try await db.records(matching: query, inZoneWith: zoneID, resultsLimit: 500)
+
+            var recordIDsToDelete: [CKRecord.ID] = []
+            for (recordID, result) in results {
+                if case .success = result {
+                    recordIDsToDelete.append(recordID)
+                }
+            }
+
+            guard !recordIDsToDelete.isEmpty else {
+                logger.info("No recordings found for user \(userId) in album \(album.name)")
+                return
+            }
+
+            try await db.modifyRecords(saving: [], deleting: recordIDsToDelete)
+            logger.info("Removed \(recordIDsToDelete.count) recordings by user \(userId)")
+
+            // Log activity for each deletion
+            let currentUserId = await getCurrentUserId() ?? userId
+            let currentDisplayName = await getCurrentUserDisplayName()
+            for recordID in recordIDsToDelete {
+                let event = SharedAlbumActivityEvent.recordingDeleted(
+                    albumId: album.id,
+                    actorId: currentUserId,
+                    actorDisplayName: currentDisplayName,
+                    recordingId: UUID(uuidString: recordID.recordName) ?? UUID(),
+                    recordingTitle: "(removed with participant)"
+                )
+                try? await logActivity(event: event, for: album)
+            }
+        } catch {
+            logger.error("Failed to remove user recordings: \(error.localizedDescription)")
+            throw SharedAlbumError.networkError(error)
+        }
+    }
+
+    // MARK: - Download Permission Toggle
+
+    /// Toggle the allowDownload flag on a shared recording (creator only)
+    func toggleDownloadPermission(recordingId: UUID, album: Album, allow: Bool) async throws {
+        guard album.isShared else { return }
+
+        logger.info("Setting allowDownload=\(allow) for recording \(recordingId)")
+        isProcessing = true
+        defer { isProcessing = false }
+
+        do {
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
+            let record = try await db.record(for: recordID)
+
+            record["allowDownload"] = allow
+            try await db.save(record)
+
+            // Log activity
+            if let currentUserId = await getCurrentUserId() {
+                let currentDisplayName = await getCurrentUserDisplayName()
+                let eventType: ActivityEventType = allow ? .recordingDownloadEnabled : .recordingDownloadDisabled
+                let event = SharedAlbumActivityEvent(
+                    albumId: album.id,
+                    actorId: currentUserId,
+                    actorDisplayName: currentDisplayName,
+                    eventType: eventType,
+                    targetRecordingId: recordingId
+                )
+                try await logActivity(event: event, for: album)
+            }
+
+            logger.info("Updated download permission successfully")
+        } catch {
+            logger.error("Failed to toggle download permission: \(error.localizedDescription)")
+            throw SharedAlbumError.networkError(error)
+        }
+    }
+
     // MARK: - Audio Asset Download
 
     /// Download audio for a shared recording from CloudKit
     /// Returns a local file URL where the audio has been cached
-    func fetchRecordingAudio(recordingId: UUID, album: Album) async throws -> URL {
+    func fetchRecordingAudio(recordingId: UUID, album: Album, sharedInfo: SharedRecordingItem? = nil) async throws -> URL {
+        // Check download permission: if not the creator and downloads are disabled, block
+        if let info = sharedInfo {
+            let currentUserId = await getCurrentUserId() ?? ""
+            if info.creatorId != currentUserId && !info.allowDownload {
+                throw SharedAlbumError.downloadNotAllowed
+            }
+        }
+
         // Check local cache first
         let cacheDir = sharedAlbumCacheDirectory(albumId: album.id)
         let cachedFile = cacheDir.appendingPathComponent("\(recordingId.uuidString).m4a")
@@ -1251,13 +1468,25 @@ final class SharedAlbumManager {
 
     /// Get current user's CloudKit ID
     func getCurrentUserId() async -> String? {
+        // Return cached value if available
+        if let cached = cachedCurrentUserId {
+            return cached
+        }
+
         do {
             let userRecordID = try await container.userRecordID()
-            return userRecordID.recordName
+            let userId = userRecordID.recordName
+            cachedCurrentUserId = userId
+            return userId
         } catch {
             logger.error("Failed to get current user ID: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// Refresh the cached user ID (call on app launch or when needed)
+    func refreshCachedUserId() async {
+        _ = await getCurrentUserId()
     }
 
     /// Fetch stored participant roles from CloudKit

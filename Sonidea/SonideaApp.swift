@@ -37,6 +37,12 @@ struct SonideaApp: App {
                         await appState.sharedAlbumManager.purgeAllExpiredTrash()
                         appState.sharedAlbumManager.evictAudioCacheIfNeeded()
                     }
+
+                    // Enforce shared album access (remove free users from shared albums)
+                    Task {
+                        await appState.enforceSharedAlbumAccess()
+                        appState.scheduleSharedAlbumTrialWarningsIfNeeded()
+                    }
                 }
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     if newPhase == .active {
@@ -63,6 +69,11 @@ struct SonideaApp: App {
                         // Purge expired shared album trash on foreground
                         Task {
                             await appState.sharedAlbumManager.purgeAllExpiredTrash()
+                        }
+
+                        // Enforce shared album access on foreground (in case trial expired while backgrounded)
+                        Task {
+                            await appState.enforceSharedAlbumAccess()
                         }
                     } else if newPhase == .background {
                         // When going to background, verify Live Activity state matches recording state

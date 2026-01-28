@@ -25,7 +25,7 @@ final class SilenceRMSMeter {
     private(set) var isBelowThreshold: Bool = true
 
     /// Silence threshold in dBFS
-    var thresholdDBFS: Float = -45.0
+    var thresholdDBFS: Float = -55.0
 
     /// Hysteresis offset (enter at threshold - offset, exit at threshold + offset)
     var hysteresisDB: Float = 2.0
@@ -198,14 +198,8 @@ struct SilenceDebugStrip: View {
                     .frame(width: max(2, levelWidth), height: stripHeight - 4)
                     .offset(x: 2, y: 2)
 
-                // Threshold marker
+                // Threshold indicator: small notch at top only (no vertical line)
                 let thresholdX = levelPosition(for: thresholdDBFS, in: width)
-                Rectangle()
-                    .fill(palette.accent)
-                    .frame(width: 2, height: stripHeight)
-                    .offset(x: thresholdX - 1)
-
-                // Small threshold indicator notch at top
                 Triangle()
                     .fill(palette.accent)
                     .frame(width: 6, height: 4)

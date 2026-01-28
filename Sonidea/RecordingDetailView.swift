@@ -75,6 +75,7 @@ struct RecordingDetailView: View {
 
     @State private var showManageTags = false
     @State private var showChooseAlbum = false
+    @State private var showSharedAlbumDetail = false
     @State private var showShareSheet = false
     @State private var showSpeedPicker = false
     @State private var showProjectSheet = false
@@ -160,6 +161,12 @@ struct RecordingDetailView: View {
     @State private var iconWasModified = false
     @State private var editedSecondaryIcons: [String]  // Secondary icons for top bar (max 2)
     @State private var secondaryIconsWasModified = false
+
+    // Download permission state (shared albums)
+    @State private var allowDownload = false
+    @State private var isTogglingDownload = false
+    @State private var isRevertingDownload = false
+    @State private var downloadPermissionLoaded = false
 
     // Playback error state
     @State private var showPlaybackError = false
@@ -462,11 +469,30 @@ struct RecordingDetailView: View {
             } message: {
                 Text(playback.loadError?.errorDescription ?? "The recording file could not be opened.")
             }
+            .alert("Download Not Allowed", isPresented: $showDownloadNotAllowedAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("The creator has set this recording to stream only. You can listen but not download or export it.")
+            }
+            .alert("Download Permission", isPresented: $showDownloadPermissionInfo) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Control whether others in this shared album can download your recording.\n\n• Stream only: Others can listen but not save a copy\n• Allow download: Others can save a local copy and export")
+            }
             .sheet(isPresented: $showManageTags) {
                 ManageTagsSheet()
             }
             .sheet(isPresented: $showChooseAlbum) {
                 ChooseAlbumSheet(recording: $currentRecording)
+            }
+            .sheet(isPresented: $showSharedAlbumDetail) {
+                if let album = appState.album(for: currentRecording.albumID), album.isShared {
+                    NavigationStack {
+                        SharedAlbumDetailView(album: album)
+                            .environment(appState)
+                            .environment(\.themePalette, palette)
+                    }
+                }
             }
             .sheet(isPresented: $showShareSheet) {
                 if let url = exportedWAVURL {
@@ -1289,7 +1315,7 @@ struct RecordingDetailView: View {
     private func highlightSilentParts() {
         isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
-        let detectionThreshold: Float = -45.0
+        let detectionThreshold: Float = -55.0
 
         Task {
             // Clear silence cache to ensure fresh detection with current parameters
@@ -1805,6 +1831,11 @@ struct RecordingDetailView: View {
                     action: { showChooseAlbum = true }
                 )
 
+                // Row 2.5: Download permission (only for shared albums)
+                if let album = appState.album(for: currentRecording.albumID), album.isShared {
+                    downloadPermissionRow(album: album)
+                }
+
                 // Row 3: Project - popover attached to ROW ITSELF with .rect(.bounds) anchor
                 PickerRow(
                     label: "PROJECT",
@@ -1925,6 +1956,165 @@ struct RecordingDetailView: View {
     // MARK: - Details Card Computed Properties
 
     /// Display value for Project row
+    // MARK: - Download Permission Row (Shared Albums)
+
+    @ViewBuilder
+    private func downloadPermissionRow(album: Album) -> some View {
+        let info = appState.sharedRecordingInfoCache[currentRecording.id]
+        let userId = appState.cachedCurrentUserId
+
+        // Determine if current user is the creator - only when data is loaded
+        // If cache is empty, fall back to album ownership (creator added it)
+        let isCreator: Bool = {
+            guard downloadPermissionLoaded else { return false }
+            // If we have cache info and user ID, use exact match
+            if let info = info, let userId = userId {
+                return info.creatorId == userId
+            }
+            // Fallback: album owner is considered creator of their recordings
+            return album.isOwner
+        }()
+
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("DOWNLOAD PERMISSION")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(palette.textTertiary)
+
+                        // Info button
+                        Button {
+                            showDownloadPermissionInfo = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 12))
+                                .foregroundColor(palette.textTertiary)
+                        }
+                    }
+
+                    if !downloadPermissionLoaded {
+                        // Loading state
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Loading...")
+                                .font(.system(size: 16))
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    } else if isCreator {
+                        HStack(spacing: 8) {
+                            Image(systemName: allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
+                                .foregroundColor(allowDownload ? .blue : .gray)
+
+                            Text(allowDownload ? "Others can download" : "Stream only")
+                                .font(.system(size: 16))
+                                .foregroundColor(palette.textPrimary)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: (info?.allowDownload ?? false) ? "arrow.down.circle.fill" : "arrow.down.circle")
+                                .foregroundColor((info?.allowDownload ?? false) ? .blue : .gray)
+
+                            Text((info?.allowDownload ?? false) ? "Download available" : "Stream only")
+                                .font(.system(size: 16))
+                                .foregroundColor(palette.textPrimary)
+                        }
+                    }
+                }
+
+                Spacer()
+
+                if downloadPermissionLoaded && isCreator {
+                    if isTogglingDownload {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        // Simple button approach - tap to toggle
+                        Button {
+                            print("🔘 Download button tapped, current: \(allowDownload)")
+                            let newValue = !allowDownload
+                            allowDownload = newValue
+                            performDownloadToggle(to: newValue, album: album)
+                        } label: {
+                            Image(systemName: allowDownload ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 24))
+                                .foregroundColor(allowDownload ? palette.accent : palette.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, CardStyle.horizontalPadding)
+            .padding(.vertical, CardStyle.verticalPadding)
+
+            Rectangle()
+                .fill(palette.textSecondary.opacity(CardStyle.dividerOpacity))
+                .frame(height: 0.5)
+                .padding(.leading, CardStyle.horizontalPadding)
+        }
+        .task(id: currentRecording.id) {
+            // Reset state for new recording
+            downloadPermissionLoaded = false
+
+            // Load user ID first if needed
+            if appState.cachedCurrentUserId == nil {
+                appState.cachedCurrentUserId = await appState.sharedAlbumManager.getCurrentUserId()
+            }
+            // Set initial value from cache
+            let cachedInfo = appState.sharedRecordingInfoCache[currentRecording.id]
+            allowDownload = cachedInfo?.allowDownload ?? false
+
+            #if DEBUG
+            print("📥 Download Permission Row loaded:")
+            print("   - Recording ID: \(currentRecording.id)")
+            print("   - User ID: \(appState.cachedCurrentUserId ?? "nil")")
+            print("   - Cache info: \(cachedInfo != nil ? "exists" : "nil")")
+            print("   - Album isOwner: \(album.isOwner)")
+            print("   - allowDownload: \(allowDownload)")
+            #endif
+
+            // Mark as loaded - this triggers re-render with correct isCreator
+            downloadPermissionLoaded = true
+        }
+    }
+
+    @State private var showDownloadPermissionInfo = false
+
+    private func performDownloadToggle(to newValue: Bool, album: Album) {
+        guard !isTogglingDownload else {
+            print("⚠️ Toggle blocked - already toggling")
+            return
+        }
+        print("🔄 Toggle download permission to: \(newValue)")
+        isTogglingDownload = true
+        Task {
+            do {
+                try await appState.sharedAlbumManager.toggleDownloadPermission(
+                    recordingId: currentRecording.id,
+                    album: album,
+                    allow: newValue
+                )
+                print("✅ Toggle succeeded")
+                // Update the cache on success
+                await MainActor.run {
+                    if var cached = appState.sharedRecordingInfoCache[currentRecording.id] {
+                        cached.allowDownload = newValue
+                        appState.sharedRecordingInfoCache[currentRecording.id] = cached
+                    }
+                    isTogglingDownload = false
+                }
+            } catch {
+                print("❌ Toggle failed: \(error)")
+                // Revert on failure
+                await MainActor.run {
+                    allowDownload = !newValue
+                    isTogglingDownload = false
+                }
+            }
+        }
+    }
+
     private var projectDisplayValue: String {
         if currentRecording.belongsToProject,
            let project = appState.project(for: currentRecording.projectId) {
@@ -1946,15 +2136,41 @@ struct RecordingDetailView: View {
         }
 
         if album.isShared {
-            // Shared album - gold glow styling (matches AlbumTitleView)
+            // Shared album - gold glow styling + View button
             return AnyView(
-                Text(album.name)
-                    .font(.system(size: 16))
-                    .foregroundColor(.sharedAlbumGold)
-                    .shadow(color: Color.sharedAlbumGold.opacity(0.7), radius: 6, x: 0, y: 0)
-                    .shadow(color: Color.sharedAlbumGold.opacity(0.35), radius: 12, x: 0, y: 0)
-                    .lineLimit(1)
-                    .accessibilityLabel("\(album.name), shared album")
+                HStack(spacing: 10) {
+                    Text(album.name)
+                        .font(.system(size: 16))
+                        .foregroundColor(.sharedAlbumGold)
+                        .shadow(color: Color.sharedAlbumGold.opacity(0.7), radius: 6, x: 0, y: 0)
+                        .shadow(color: Color.sharedAlbumGold.opacity(0.35), radius: 12, x: 0, y: 0)
+                        .lineLimit(1)
+                    Button {
+                        showSharedAlbumDetail = true
+                    } label: {
+                        Text("View")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.sharedAlbumGold)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        removeFromSharedAlbum()
+                    } label: {
+                        Text("Remove")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.red.opacity(0.85))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .accessibilityLabel("\(album.name), shared album")
             )
         } else {
             // Normal album - standard styling
@@ -2204,6 +2420,12 @@ struct RecordingDetailView: View {
         if let updated = appState.recording(for: currentRecording.id) {
             currentRecording = updated
         }
+    }
+
+    private func removeFromSharedAlbum() {
+        guard let album = appState.album(for: currentRecording.albumID), album.isShared else { return }
+        _ = appState.setAlbum(nil, for: currentRecording)
+        refreshRecording()
     }
 
     // MARK: - Location Section
@@ -2561,7 +2783,21 @@ struct RecordingDetailView: View {
         }
     }
 
+    @State private var showDownloadNotAllowedAlert = false
+
     private func shareRecording() {
+        // Check download permission for shared album recordings
+        if let album = appState.album(for: currentRecording.albumID), album.isShared {
+            let sharedInfo = appState.sharedRecordingInfoCache[currentRecording.id]
+            let isCreator = sharedInfo?.creatorId == appState.cachedCurrentUserId
+            let canDownload = isCreator || (sharedInfo?.allowDownload ?? false)
+
+            if !canDownload {
+                showDownloadNotAllowedAlert = true
+                return
+            }
+        }
+
         isExporting = true
         Task {
             do {

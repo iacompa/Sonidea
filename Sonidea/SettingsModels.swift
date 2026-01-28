@@ -234,7 +234,7 @@ struct EQSettings: Codable, Equatable {
 
 struct SilenceSkipSettings: Codable, Equatable {
     var enabled: Bool = false
-    var threshold: Float = -40  // dB threshold (-60 to -20)
+    var threshold: Float = -55  // dB threshold (-60 to -20)
     var minDuration: Double = 0.5  // minimum silence duration to skip (seconds)
 
     static let `default` = SilenceSkipSettings()

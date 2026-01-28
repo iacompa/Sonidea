@@ -23,9 +23,19 @@ struct CreateSharedAlbumSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                // Icon
-                ZStack {
+            // Pro feature guard - dismiss if user doesn't have access
+            if !appState.supportManager.canUseProFeatures {
+                Color.clear.onAppear { dismiss() }
+            } else {
+                createAlbumContent
+            }
+        }
+    }
+
+    private var createAlbumContent: some View {
+        VStack(spacing: 24) {
+            // Icon
+            ZStack {
                     Circle()
                         .fill(
                             LinearGradient(
@@ -132,7 +142,6 @@ struct CreateSharedAlbumSheet: View {
                     }
                 )
             }
-        }
     }
 
     private func createSharedAlbum() {
@@ -896,6 +905,7 @@ struct SharedAlbumDetailView: View {
     @State private var shareIsStale = false
     @State private var showLeaveAlbum = false
     @State private var showAddRecordingInfo = false
+    @State private var showProRequired = false
 
     private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.compactMap { recording in
@@ -906,17 +916,13 @@ struct SharedAlbumDetailView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Album header
-                SharedAlbumBanner(album: album)
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-
-                // Tab bar
-                tabBar
-
-                // Tab content
-                tabContent
+            Group {
+                if !appState.supportManager.canUseProFeatures {
+                    // Pro required - show blocking message
+                    proRequiredView
+                } else {
+                    mainContent
+                }
             }
             .background(palette.background)
             .navigationTitle(album.name)
@@ -929,40 +935,42 @@ struct SharedAlbumDetailView: View {
                     .foregroundColor(palette.accent)
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button {
-                            showParticipants = true
-                        } label: {
-                            Label("Participants", systemImage: "person.2")
-                        }
-
-                        if album.canEditSettings {
+                if appState.supportManager.canUseProFeatures {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Menu {
                             Button {
-                                showSettings = true
+                                showParticipants = true
                             } label: {
-                                Label("Settings", systemImage: "gearshape")
+                                Label("Participants", systemImage: "person.2")
                             }
-                        }
 
-                        Button {
-                            showTrash = true
+                            if album.canEditSettings {
+                                Button {
+                                    showSettings = true
+                                } label: {
+                                    Label("Settings", systemImage: "gearshape")
+                                }
+                            }
+
+                            Button {
+                                showTrash = true
+                            } label: {
+                                Label("Trash (\(trashItems.count))", systemImage: "trash")
+                            }
+
+                            if !album.isOwner {
+                                Divider()
+
+                                Button(role: .destructive) {
+                                    showLeaveAlbum = true
+                                } label: {
+                                    Label("Leave Album", systemImage: "rectangle.portrait.and.arrow.right")
+                                }
+                            }
                         } label: {
-                            Label("Trash (\(trashItems.count))", systemImage: "trash")
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundColor(palette.accent)
                         }
-
-                        if !album.isOwner {
-                            Divider()
-
-                            Button(role: .destructive) {
-                                showLeaveAlbum = true
-                            } label: {
-                                Label("Leave Album", systemImage: "rectangle.portrait.and.arrow.right")
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundColor(palette.accent)
                     }
                 }
             }
@@ -1002,10 +1010,63 @@ struct SharedAlbumDetailView: View {
                     sharedInfo: selectedSharedInfo,
                     album: album
                 )
+                .environment(appState)
+                .environment(\.themePalette, palette)
             }
             .onAppear {
                 loadData()
             }
+        }
+    }
+
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            // Album header
+            SharedAlbumBanner(album: album)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+            // Tab bar
+            tabBar
+
+            // Tab content
+            tabContent
+        }
+    }
+
+    private var proRequiredView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "lock.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.orange)
+
+            Text("Pro Feature Required")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(palette.textPrimary)
+
+            Text("Shared Albums are a Pro feature. Subscribe to access shared albums and collaborate with others.")
+                .font(.subheadline)
+                .foregroundColor(palette.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Button {
+                dismiss()
+            } label: {
+                Text("Go Back")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+            .padding(.horizontal, 24)
+
+            Spacer()
         }
     }
 
@@ -1299,7 +1360,8 @@ struct SharedAlbumDetailView: View {
                     currentUserId = userId
                     recordings = albumRecordings
                     sharedRecordingInfos = sharedInfos
-                    activityEvents = activity
+                    let localEvents = appState.localActivityEvents.filter { $0.albumId == album.id }
+                    activityEvents = (activity + localEvents).sorted { $0.timestamp > $1.timestamp }
                     trashItems = trash
                     albumSettings = settings ?? .default
                 }
@@ -1323,6 +1385,23 @@ struct SharedRecordingDetailView: View {
     @State private var showDemoAlert = false
     @State private var isLoadingAudio = false
     @State private var audioLoadError: String?
+    @State private var comments: [SharedAlbumComment] = []
+    @State private var newCommentText = ""
+    @State private var isSubmittingComment = false
+    @State private var commentError: String?
+    @State private var allowDownload: Bool = false
+    @State private var isTogglingDownload = false
+    @State private var isRevertingDownload = false
+    @State private var currentUserId: String?
+
+    private var isCreator: Bool {
+        guard let userId = currentUserId, let info = sharedInfo else { return false }
+        return info.creatorId == userId
+    }
+
+    private var canDownload: Bool {
+        isCreator || (sharedInfo?.allowDownload ?? false)
+    }
 
     private var isDemoRecording: Bool {
         appState.isSharedAlbumsDebugMode && !FileManager.default.fileExists(atPath: recording.fileURL.path)
@@ -1343,6 +1422,11 @@ struct SharedRecordingDetailView: View {
                         creatorSection(info: info)
                     }
 
+                    // Download permission (only in shared albums)
+                    if album.isShared, let info = sharedInfo {
+                        downloadPermissionSection(info: info)
+                    }
+
                     // Playback controls
                     playbackSection
 
@@ -1360,6 +1444,11 @@ struct SharedRecordingDetailView: View {
                     if !recording.notes.isEmpty {
                         notesSection
                     }
+
+                    // Comments (Pro feature)
+                    if appState.supportManager.canUseProFeatures {
+                        commentsSection
+                    }
                 }
                 .padding()
             }
@@ -1374,6 +1463,15 @@ struct SharedRecordingDetailView: View {
                     .foregroundColor(palette.accent)
                 }
             }
+            .onAppear {
+                allowDownload = sharedInfo?.allowDownload ?? false
+                Task {
+                    currentUserId = await appState.sharedAlbumManager.getCurrentUserId()
+                }
+                if appState.supportManager.canUseProFeatures {
+                    loadComments()
+                }
+            }
             .onDisappear {
                 playback.stop()
             }
@@ -1381,6 +1479,11 @@ struct SharedRecordingDetailView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("This is a demo recording for testing purposes. Playback is not available for demo content.")
+            }
+            .alert("Download Permission", isPresented: $showDownloadPermissionInfo) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Control whether others in this shared album can download your recording.\n\n• Stream only: Others can listen but not save a copy\n• Allow download: Others can save a local copy and export")
             }
         }
     }
@@ -1497,6 +1600,104 @@ struct SharedRecordingDetailView: View {
         .padding()
         .background(palette.cardBackground)
         .cornerRadius(12)
+    }
+
+    @State private var showDownloadPermissionInfo = false
+
+    private func downloadPermissionSection(info: SharedRecordingItem) -> some View {
+        VStack(spacing: 12) {
+            if isCreator {
+                // Creator sees a toggle to allow/disallow downloads
+                HStack(spacing: 12) {
+                    Image(systemName: allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
+                        .font(.title3)
+                        .foregroundColor(allowDownload ? .blue : .gray)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("Allow others to download")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textPrimary)
+
+                            Button {
+                                showDownloadPermissionInfo = true
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                        }
+
+                        Text(allowDownload ? "Others can save a local copy" : "Others can only stream")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    Spacer()
+
+                    if isTogglingDownload {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Button {
+                            let newValue = !allowDownload
+                            allowDownload = newValue
+                            toggleDownload(newValue)
+                        } label: {
+                            Image(systemName: allowDownload ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 28))
+                                .foregroundColor(allowDownload ? .blue : .gray)
+                        }
+                    }
+                }
+            } else {
+                // Non-creator sees the current permission status
+                HStack(spacing: 12) {
+                    Image(systemName: info.allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
+                        .font(.title3)
+                        .foregroundColor(info.allowDownload ? .blue : .gray)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(info.allowDownload ? "Download available" : "Stream only")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textPrimary)
+
+                        Text(info.allowDownload ? "Creator has enabled downloads" : "Creator has not enabled downloads")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    Spacer()
+                }
+            }
+        }
+        .padding()
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func toggleDownload(_ allow: Bool) {
+        guard let info = sharedInfo else { return }
+        isTogglingDownload = true
+        Task {
+            do {
+                try await appState.sharedAlbumManager.toggleDownloadPermission(
+                    recordingId: info.recordingId,
+                    album: album,
+                    allow: allow
+                )
+                // Success - keep the new value
+                await MainActor.run {
+                    isTogglingDownload = false
+                }
+            } catch {
+                // Revert on failure
+                await MainActor.run {
+                    allowDownload = !allow
+                    isTogglingDownload = false
+                }
+            }
+        }
     }
 
     private var playbackSection: some View {
@@ -1736,6 +1937,164 @@ struct SharedRecordingDetailView: View {
         .cornerRadius(12)
     }
 
+    // MARK: - Comments
+
+    private var commentsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "bubble.left.fill")
+                    .foregroundColor(palette.accent)
+                Text("Comments")
+                    .font(.headline)
+                    .foregroundColor(palette.textPrimary)
+                Spacer()
+                if !comments.isEmpty {
+                    Text("\(comments.count)")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                }
+            }
+
+            // Input
+            HStack(spacing: 8) {
+                TextField("Add a comment...", text: $newCommentText)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(isSubmittingComment)
+                    .onChange(of: newCommentText) {
+                        if newCommentText.count > 50 {
+                            newCommentText = String(newCommentText.prefix(50))
+                        }
+                    }
+
+                Button {
+                    submitComment()
+                } label: {
+                    if isSubmittingComment {
+                        ProgressView()
+                            .frame(width: 20, height: 20)
+                    } else {
+                        Image(systemName: "paperplane.fill")
+                            .foregroundColor(
+                                newCommentText.trimmingCharacters(in: .whitespaces).isEmpty
+                                    ? palette.textTertiary : palette.accent
+                            )
+                    }
+                }
+                .disabled(newCommentText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmittingComment)
+            }
+
+            // List
+            if comments.isEmpty {
+                Text("No comments yet. Be the first to comment!")
+                    .font(.caption)
+                    .foregroundColor(palette.textSecondary)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(comments) { comment in
+                        CommentRow(comment: comment, onDelete: {
+                            deleteComment(comment)
+                        })
+                        if comment.id != comments.last?.id {
+                            Divider().padding(.leading, 44)
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+    }
+
+    private func loadComments() {
+        Task {
+            let fetched = await appState.sharedAlbumManager.fetchComments(
+                for: recording.id,
+                album: album
+            )
+            comments = fetched
+        }
+    }
+
+    private func submitComment() {
+        let trimmed = newCommentText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        isSubmittingComment = true
+        commentError = nil
+        Task {
+            var authorName = "You"
+            do {
+                let comment = try await appState.sharedAlbumManager.addComment(
+                    recordingId: recording.id,
+                    recordingTitle: recording.title,
+                    album: album,
+                    text: trimmed
+                )
+                comments.append(comment)
+                authorName = comment.authorDisplayName
+                newCommentText = ""
+            } catch {
+                // CloudKit unavailable (e.g. simulator) — save locally for display
+                let localComment = SharedAlbumComment(
+                    recordingId: recording.id,
+                    authorId: "local",
+                    authorDisplayName: "You",
+                    text: trimmed
+                )
+                comments.append(localComment)
+                newCommentText = ""
+            }
+
+            // Always add local activity event for immediate visibility in activity tab
+            // (CloudKit also logs it server-side, but this ensures instant local display)
+            let event = SharedAlbumActivityEvent(
+                albumId: album.id,
+                actorId: "local",
+                actorDisplayName: authorName,
+                eventType: .commentAdded,
+                targetRecordingId: recording.id,
+                targetRecordingTitle: recording.title,
+                newValue: trimmed
+            )
+            appState.localActivityEvents.append(event)
+
+            isSubmittingComment = false
+        }
+    }
+
+    private func deleteComment(_ comment: SharedAlbumComment) {
+        // Only allow deleting own comments
+        guard let currentUserId = appState.sharedAlbumManager.cachedCurrentUserId,
+              comment.authorId == currentUserId else {
+            return
+        }
+
+        Task {
+            do {
+                try await appState.sharedAlbumManager.deleteComment(
+                    commentId: comment.id,
+                    album: album
+                )
+                comments.removeAll { $0.id == comment.id }
+
+                // Add activity event for comment deletion
+                let event = SharedAlbumActivityEvent(
+                    albumId: album.id,
+                    actorId: currentUserId,
+                    actorDisplayName: comment.authorDisplayName,
+                    eventType: .commentDeleted,
+                    targetRecordingId: recording.id,
+                    targetRecordingTitle: recording.title
+                )
+                appState.localActivityEvents.append(event)
+            } catch {
+                print("Failed to delete comment: \(error)")
+            }
+        }
+    }
+
     private func formatTime(_ seconds: TimeInterval) -> String {
         let clamped = max(0, seconds)
         let mins = Int(clamped) / 60
@@ -1790,6 +2149,62 @@ struct BadgeChip: View {
         .padding(.vertical, 6)
         .background(color.opacity(0.15))
         .cornerRadius(8)
+    }
+}
+
+// MARK: - Comment Row
+
+struct CommentRow: View {
+    @Environment(\.themePalette) private var palette
+    @Environment(AppState.self) private var appState
+
+    let comment: SharedAlbumComment
+    let onDelete: () -> Void
+
+    private var isOwnComment: Bool {
+        // Compare against current cached user id if available
+        guard let currentUserId = appState.sharedAlbumManager.cachedCurrentUserId else {
+            return false
+        }
+        return comment.authorId == currentUserId
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(palette.accent.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                Text(comment.authorInitials)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(palette.accent)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(comment.authorDisplayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.textPrimary)
+                    Text(comment.relativeTime)
+                        .font(.caption2)
+                        .foregroundColor(palette.textTertiary)
+                    Spacer()
+                }
+
+                Text(comment.text)
+                    .font(.subheadline)
+                    .foregroundColor(palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 8)
+        .contextMenu {
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 }
 
