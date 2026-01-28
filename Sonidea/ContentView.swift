@@ -2918,6 +2918,11 @@ struct SettingsSheetView: View {
     @State private var isResetButtonAnimating = false
     @State private var activeHelpTopic: HelpTopic?
     @State private var showAutoIconInfo = false
+    @State private var showResetStep1 = false
+    @State private var showResetStep2 = false
+    @State private var resetConfirmText = ""
+    @State private var resetConfirmationChecked = false
+    @State private var showResetLoading = false
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -3568,6 +3573,24 @@ struct SettingsSheetView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
                 }
+
+                // MARK: - Factory Reset
+                Section {
+                    Button(role: .destructive) {
+                        showResetStep1 = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise")
+                                .foregroundColor(.red)
+                            Text("Reset App")
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+                } footer: {
+                    Text("Erase all recordings, albums, tags, projects, and settings. The app will return to its initial state.")
+                        .foregroundColor(palette.textSecondary)
+                }
             }
             .scrollContentBackground(.hidden)
             .background(palette.groupedBackground)
@@ -3584,6 +3607,90 @@ struct SettingsSheetView: View {
                     Button("Done") { dismiss() }
                         .foregroundColor(palette.accent)
                 }
+            }
+            .alert("Reset App?", isPresented: $showResetStep1) {
+                Button("Cancel", role: .cancel) {}
+                Button("I Understand, Continue", role: .destructive) {
+                    resetConfirmText = ""
+                    showResetLoading = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        showResetLoading = false
+                        showResetStep2 = true
+                    }
+                }
+            } message: {
+                Text("This will permanently delete ALL your recordings, albums, tags, projects, overdubs, and settings.\n\nPlease back up any recordings you want to keep before proceeding.")
+            }
+            .fullScreenCover(isPresented: $showResetLoading) {
+                ZStack {
+                    palette.background.ignoresSafeArea()
+                    VStack(spacing: 24) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.red)
+                        Text("Preparing reset...")
+                            .font(.headline)
+                            .foregroundColor(palette.textSecondary)
+                    }
+                }
+            }
+            .sheet(isPresented: $showResetStep2) {
+                NavigationStack {
+                    VStack(spacing: 24) {
+                        Spacer()
+
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 56))
+                            .foregroundColor(.red)
+
+                        Text("This Cannot Be Undone")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(palette.textPrimary)
+
+                        Text("Type RESET below to confirm you want to erase all app data and return to factory settings.")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+
+                        TextField("Type RESET", text: $resetConfirmText)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.characters)
+                            .padding(.horizontal, 40)
+
+                        Button(role: .destructive) {
+                            appState.factoryReset()
+                            showResetStep2 = false
+                            dismiss()
+                        } label: {
+                            Text("Erase Everything")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(resetConfirmText == "RESET" ? Color.red : Color.gray.opacity(0.3))
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
+                        .disabled(resetConfirmText != "RESET")
+                        .padding(.horizontal, 40)
+
+                        Spacer()
+                    }
+                    .background(palette.background)
+                    .navigationTitle("Confirm Reset")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Cancel") {
+                                showResetStep2 = false
+                            }
+                            .foregroundColor(palette.accent)
+                        }
+                    }
+                }
+                .presentationDetents([.medium, .large])
             }
             .tint(palette.accent)
             .sheet(isPresented: $showGuide) {

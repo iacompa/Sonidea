@@ -1682,6 +1682,59 @@ final class AppState {
         overdubGroups = saved
     }
 
+    // MARK: - Factory Reset
+
+    func factoryReset() {
+        // Stop any active recording
+        if recorder.recordingState.isActive {
+            _ = recorder.stopRecording()
+        }
+
+        // Delete all files from documents directory
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if let files = try? FileManager.default.contentsOfDirectory(at: documentsPath, includingPropertiesForKeys: nil) {
+            for file in files {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+
+        // Clear all data arrays
+        recordings = []
+        albums = []
+        tags = []
+        projects = []
+        overdubGroups = []
+
+        // Reset recording number
+        nextRecordingNumber = 1
+
+        // Reset settings and theme to defaults
+        appSettings = .default
+        selectedTheme = .system
+
+        // Clear ALL UserDefaults for a clean slate
+        let allKeys = [
+            recordingsKey, tagsKey, albumsKey, projectsKey,
+            overdubGroupsKey, nextNumberKey, selectedThemeKey,
+            appSettingsKey, draftsMigrationKey, tagMigrationKey,
+            recordButtonPosXKey, recordButtonPosYKey
+        ]
+        for key in allKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+
+        // Re-create default system items
+        ensureDraftsAlbum()
+        ensureFavoriteTagExists()
+
+        // Save clean state
+        saveRecordings()
+        saveAlbums()
+        saveTags()
+        saveProjects()
+        saveOverdubGroups()
+    }
+
     // MARK: - Overdub Group Management
 
     /// Get overdub group by ID
