@@ -2,8 +2,7 @@
 //  TipJarView.swift
 //  Sonidea
 //
-//  Tip jar UI with 4 core tiers + "Other amount..." for custom tips.
-//  Uses 106 consumable IAP products ($1-$100 + 6 approved larger amounts).
+//  Subscription and upgrade page. Shows plans, trial status, and roadmap.
 //
 
 import SwiftUI
@@ -15,9 +14,7 @@ struct TipJarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
 
-    @State private var showCustomAmountSheet = false
-
-    private var supportManager: SupportManager {
+    private var manager: SupportManager {
         appState.supportManager
     }
 
@@ -25,184 +22,137 @@ struct TipJarView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Supporter badge (if tipped before)
-                    if supportManager.hasTippedBefore {
-                        supporterBadge
-                    }
+                    // Status banner
+                    statusBanner
 
-                    // Story/Mission Card
-                    storyCard
+                    // Plan cards
+                    plansSection
 
-                    // Tip Tiers (4 core tiers only)
-                    tiersSection
+                    // Features list
+                    featuresSection
 
-                    // Other Amount row (styled like tier cards)
-                    otherAmountButton
-
-                    // Supporter Perks
-                    perksSection
-
-                    // Roadmap Preview
+                    // Roadmap
                     roadmapSection
 
-                    // Suggestions Link
+                    // Restore purchases
+                    restoreButton
+
+                    // Suggestions & Review
                     suggestionsButton
-
-                    // Review Button
                     reviewButton
-
-                    // Thank you footer
-                    thankYouFooter
                 }
                 .padding()
             }
             .background(palette.groupedBackground)
-            .navigationTitle("Support Sonidea")
+            .navigationTitle("Sonidea Pro")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .foregroundColor(palette.accent)
                 }
             }
-            .onAppear {
-                supportManager.onTipJarOpened()
-            }
-            .sheet(isPresented: $showCustomAmountSheet) {
-                CustomAmountSheet()
-                    .environment(appState)
-                    .environment(\.themePalette, palette)
-                    .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
-            }
-            .alert("Purchase Error", isPresented: .constant(supportManager.purchaseError != nil)) {
+            .alert("Purchase Error", isPresented: .constant(manager.purchaseError != nil)) {
                 Button("OK") {
                     appState.supportManager.purchaseError = nil
                 }
             } message: {
-                Text(supportManager.purchaseError ?? "")
+                Text(manager.purchaseError ?? "")
             }
         }
     }
 
-    // MARK: - Supporter Badge
+    // MARK: - Status Banner
 
-    private var supporterBadge: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "star.fill")
-                .font(.caption)
-                .foregroundColor(.orange)
-            Text("Supporter")
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(palette.textPrimary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(palette.inputBackground)
-        .cornerRadius(16)
-    }
-
-    // MARK: - Story Card
-
-    private var storyCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(palette.accent)
-                Text("Free forever — powered by tips.")
-                    .font(.subheadline)
-                    .foregroundColor(palette.textSecondary)
-            }
-
-            Text("Sonidea helps artists capture ideas fast.")
-                .font(.body)
-                .foregroundColor(palette.textPrimary)
-
-            Text("It will be free forever.")
-                .font(.body)
-                .fontWeight(.medium)
-                .foregroundColor(palette.textPrimary)
-
-            Text("If it's saved you even one idea, a tip helps keep the app polished, reliable, and improving.")
-                .font(.callout)
-                .foregroundColor(palette.textSecondary)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.cardBackground)
-        .cornerRadius(12)
-    }
-
-    // MARK: - Tip Tiers (4 core tiers only)
-
-    private var tiersSection: some View {
-        VStack(spacing: 12) {
-            ForEach(TipTier.allTiers) { tier in
-                TipTierButton(tier: tier) {
-                    purchaseTier(tier)
-                }
-                .disabled(supportManager.isPurchasing)
-            }
-        }
-    }
-
-    private func purchaseTier(_ tier: TipTier) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        supportManager.incrementTierTapCount(tierId: tier.id)
-
-        Task {
-            await supportManager.purchase(productID: tier.productID)
-        }
-    }
-
-    // MARK: - Other Amount Button (styled like tier cards)
-
-    private var otherAmountButton: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            showCustomAmountSheet = true
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Other amount…")
-                        .font(.headline)
+    private var statusBanner: some View {
+        Group {
+            switch manager.subscriptionStatus {
+            case .trial:
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.fill")
+                        .foregroundColor(.blue)
+                    Text("\(manager.trialDaysRemaining) days left in free trial")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
                         .foregroundColor(palette.textPrimary)
-                    Text("Choose any tip amount you'd like.")
-                        .font(.caption)
-                        .foregroundColor(palette.textSecondary)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(12)
 
-                Spacer()
+            case .subscribed(let plan):
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                    Text("Subscribed — \(plan.displayName)")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textPrimary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(Color.green.opacity(0.1))
+                .cornerRadius(12)
 
-                Image(systemName: "chevron.right")
-                    .font(.subheadline)
-                    .foregroundColor(palette.textSecondary)
+            case .expired:
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Your free trial has ended")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(palette.textPrimary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(12)
             }
-            .padding()
-            .background(palette.cardBackground)
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
-            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Other amount")
-        .accessibilityHint("Opens a sheet to choose any custom tip amount")
     }
 
-    // MARK: - Perks Section
+    // MARK: - Plans
 
-    private var perksSection: some View {
+    private var plansSection: some View {
+        VStack(spacing: 12) {
+            Text("Choose a Plan")
+                .font(.headline)
+                .foregroundColor(palette.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ForEach(SubscriptionPlan.allCases, id: \.self) { plan in
+                PlanCard(plan: plan, isBestValue: plan == .annual) {
+                    Task {
+                        await manager.purchase(plan: plan)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Features
+
+    private var featuresSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Supporter Perks")
+            Text("Everything Included")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)
 
-            VStack(alignment: .leading, spacing: 8) {
-                PerkRow(icon: "hand.raised.fill", color: .blue, text: "Vote for next feature")
-                PerkRow(icon: "person.2.fill", color: .purple, text: "Name on Supporters wall (coming soon)")
+            VStack(alignment: .leading, spacing: 10) {
+                FeatureRow(icon: "mic.fill", text: "Unlimited recordings")
+                FeatureRow(icon: "waveform", text: "Pro waveform editor")
+                FeatureRow(icon: "square.on.square", text: "Multi-track overdub")
+                FeatureRow(icon: "text.viewfinder", text: "AI transcription")
+                FeatureRow(icon: "person.2.fill", text: "Shared albums")
+                FeatureRow(icon: "tag.fill", text: "Tags, albums & projects")
+                FeatureRow(icon: "icloud.fill", text: "iCloud sync")
+                FeatureRow(icon: "paintpalette.fill", text: "All themes")
+                FeatureRow(icon: "square.and.arrow.up.fill", text: "Export in all formats")
             }
             .padding()
             .background(palette.cardBackground)
@@ -210,24 +160,34 @@ struct TipJarView: View {
         }
     }
 
-    // MARK: - Roadmap Section
+    // MARK: - Roadmap
 
     private var roadmapSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("App Goals")
+            Text("Coming Soon")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(roadmapItems) { item in
                     HStack(spacing: 12) {
-                        Image(systemName: "circle")
-                            .font(.caption2)
+                        Image(systemName: item.icon)
+                            .font(.caption)
                             .foregroundColor(palette.accent)
+                            .frame(width: 20)
                         Text(item.title)
                             .font(.subheadline)
                             .foregroundColor(palette.textPrimary)
+                        if item.isNew {
+                            Text("NEW")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(palette.accent)
+                                .cornerRadius(4)
+                        }
                     }
                 }
             }
@@ -237,11 +197,32 @@ struct TipJarView: View {
         }
     }
 
-    // MARK: - Suggestions Button (styled like tier cards)
+    // MARK: - Restore
+
+    private var restoreButton: some View {
+        Button {
+            Task {
+                await manager.restorePurchases()
+            }
+        } label: {
+            HStack {
+                if manager.isPurchasing {
+                    ProgressView()
+                        .tint(palette.textSecondary)
+                        .padding(.trailing, 4)
+                }
+                Text("Restore Purchases")
+                    .font(.subheadline)
+                    .foregroundColor(palette.textSecondary)
+            }
+        }
+        .disabled(manager.isPurchasing)
+    }
+
+    // MARK: - Suggestions
 
     private var suggestionsButton: some View {
         Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
             if let url = URL(string: "https://forms.gle/wtBwxDbjACds9dxt9") {
                 openURL(url)
             }
@@ -251,14 +232,12 @@ struct TipJarView: View {
                     Text("Send us app suggestions")
                         .font(.headline)
                         .foregroundColor(palette.textPrimary)
-                    Text("Got an idea or found something annoying? Tell us — it helps a lot.")
+                    Text("Got an idea or found something annoying? Tell us.")
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                         .lineLimit(2)
                 }
-
                 Spacer()
-
                 Image(systemName: "arrow.up.right")
                     .font(.subheadline)
                     .foregroundColor(palette.textSecondary)
@@ -274,12 +253,14 @@ struct TipJarView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Review Button
+    // MARK: - Review
 
     private var reviewButton: some View {
         Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            requestReview()
+            if let windowScene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
+                SKStoreReviewController.requestReview(in: windowScene)
+            }
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -291,9 +272,7 @@ struct TipJarView: View {
                         .foregroundColor(palette.textSecondary)
                         .lineLimit(2)
                 }
-
                 Spacer()
-
                 Image(systemName: "star")
                     .font(.subheadline)
                     .foregroundColor(palette.textSecondary)
@@ -308,49 +287,44 @@ struct TipJarView: View {
         }
         .buttonStyle(.plain)
     }
-
-    private func requestReview() {
-        if let windowScene = UIApplication.shared.connectedScenes
-            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
-            SKStoreReviewController.requestReview(in: windowScene)
-        }
-    }
-
-    // MARK: - Thank You Footer
-
-    private var thankYouFooter: some View {
-        Text("Thank you for keeping Sonidea free.")
-            .font(.footnote)
-            .foregroundColor(palette.textSecondary)
-            .multilineTextAlignment(.center)
-            .padding(.top, 8)
-    }
 }
 
-// MARK: - Tip Tier Button
+// MARK: - Plan Card
 
-struct TipTierButton: View {
-    let tier: TipTier
-    let action: () -> Void
-
+struct PlanCard: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
+
+    let plan: SubscriptionPlan
+    let isBestValue: Bool
+    let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(tier.title)
-                        .font(.headline)
-                        .foregroundColor(palette.textPrimary)
-                    Text(tier.impact)
+                    HStack(spacing: 6) {
+                        Text(plan.displayName)
+                            .font(.headline)
+                            .foregroundColor(palette.textPrimary)
+                        if isBestValue {
+                            Text("BEST VALUE")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.green)
+                                .cornerRadius(4)
+                        }
+                    }
+                    Text(plan.tagline)
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                 }
 
                 Spacer()
 
-                Text(appState.supportManager.priceForProduct(tier.productID) ?? tier.amount)
+                Text(appState.supportManager.priceForPlan(plan) ?? plan.description)
                     .font(.headline)
                     .fontWeight(.semibold)
                     .foregroundColor(palette.accent)
@@ -360,27 +334,25 @@ struct TipTierButton: View {
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(palette.accent.opacity(0.3), lineWidth: 1)
+                    .stroke(isBestValue ? Color.green : palette.accent.opacity(0.3), lineWidth: isBestValue ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(tier.title), \(tier.amount)")
-        .accessibilityHint(tier.impact)
+        .disabled(appState.supportManager.isPurchasing)
     }
 }
 
-// MARK: - Perk Row
+// MARK: - Feature Row
 
-struct PerkRow: View {
+struct FeatureRow: View {
     @Environment(\.themePalette) private var palette
     let icon: String
-    let color: Color
     let text: String
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
-                .foregroundColor(color)
+                .foregroundColor(palette.accent)
                 .frame(width: 24)
             Text(text)
                 .font(.subheadline)
@@ -389,360 +361,131 @@ struct PerkRow: View {
     }
 }
 
-// MARK: - Custom Amount Sheet
+// MARK: - Paywall View (shown when trial expired)
 
-struct CustomAmountSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppState.self) private var appState
-    @Environment(\.themePalette) private var palette
-    @FocusState private var isTextFieldFocused: Bool
-
-    // Text input state
-    @State private var amountText: String = ""
-
-    // Dropdown state
-    @State private var approvedExpanded: Bool = false
-
-    // Derived amount value (nil if invalid/empty)
-    private var amountValue: Int? {
-        guard !amountText.isEmpty else { return nil }
-        return Int(amountText)
-    }
-
-    // Validation
-    private var isValidCustom: Bool {
-        guard let value = amountValue else { return false }
-        return TipTier.isValidCustomAmount(value)
-    }
-
-    private var isApprovedLarge: Bool {
-        guard let value = amountValue else { return false }
-        return TipTier.isApprovedLargerAmount(value)
-    }
-
-    private var canTip: Bool {
-        isValidCustom || isApprovedLarge
-    }
-
-    // Show "for larger tips" message when typed value > 100 and not an approved amount
-    private var showLargerTipsMessage: Bool {
-        guard let value = amountValue else { return false }
-        return value > 100 && !isApprovedLarge
-    }
-
-    // Display amount (0 if empty/invalid)
-    private var displayAmount: Int {
-        amountValue ?? 0
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Large amount display
-                    Text("$\(displayAmount)")
-                        .font(.system(size: 56, weight: .bold, design: .rounded))
-                        .foregroundColor(canTip ? palette.textPrimary : palette.textSecondary)
-                        .contentTransition(.numericText())
-                        .animation(.spring(response: 0.3), value: displayAmount)
-                        .padding(.top, 24)
-
-                    // Text input field
-                    VStack(spacing: 8) {
-                        HStack {
-                            Text("$")
-                                .font(.title2)
-                                .fontWeight(.medium)
-                                .foregroundColor(palette.textSecondary)
-
-                            TextField("Enter amount", text: $amountText)
-                                .font(.title2)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.leading)
-                                .foregroundColor(palette.textPrimary)
-                                .focused($isTextFieldFocused)
-                                .onChange(of: amountText) { _, newValue in
-                                    // Strip non-digits
-                                    let filtered = newValue.filter { $0.isNumber }
-                                    if filtered != newValue {
-                                        amountText = filtered
-                                    }
-                                }
-                                .accessibilityLabel("Enter tip amount")
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .background(palette.inputBackground)
-                        .cornerRadius(12)
-
-                        Text("Enter dollar amount (USD) $1–$100")
-                            .font(.caption)
-                            .foregroundColor(palette.textTertiary)
-                    }
-                    .padding(.horizontal)
-
-                    // "For larger tips" message
-                    if showLargerTipsMessage {
-                        Text("For larger tips, choose an approved amount below.")
-                            .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                            .transition(.opacity)
-                    }
-
-                    // Approved larger amounts dropdown
-                    approvedAmountsSection
-                        .padding(.horizontal)
-
-                    Spacer(minLength: 40)
-
-                    // CTA Button
-                    VStack(spacing: 12) {
-                        Button {
-                            purchaseAmount()
-                        } label: {
-                            HStack {
-                                if appState.supportManager.isPurchasing {
-                                    ProgressView()
-                                        .tint(.white)
-                                } else {
-                                    Text("Tip $\(displayAmount)")
-                                        .font(.headline)
-                                }
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(canTip ? palette.accent : Color.gray)
-                            .cornerRadius(12)
-                        }
-                        .disabled(!canTip || appState.supportManager.isPurchasing)
-                        .accessibilityLabel("Tip $\(displayAmount)")
-
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                        .frame(height: 44)
-                    }
-                    .padding(.horizontal)
-                    .padding(.bottom)
-                }
-            }
-            .background(palette.background)
-            .navigationTitle("Other Amount")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .keyboard) {
-                    Button("Done") {
-                        isTextFieldFocused = false
-                    }
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: showLargerTipsMessage)
-            .animation(.easeInOut(duration: 0.25), value: approvedExpanded)
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-
-    // MARK: - Approved Larger Amounts Section
-
-    private var approvedAmountsSection: some View {
-        VStack(spacing: 0) {
-            // Disclosure button
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                approvedExpanded.toggle()
-            } label: {
-                HStack {
-                    Text("Approved larger amounts")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(palette.textPrimary)
-
-                    Spacer()
-
-                    Image(systemName: approvedExpanded ? "chevron.up" : "chevron.down")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
-                }
-                .padding()
-                .background(palette.cardBackground)
-                .cornerRadius(approvedExpanded ? 12 : 12)
-            }
-            .buttonStyle(.plain)
-
-            // Expanded content
-            if approvedExpanded {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Info line
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .font(.caption)
-                            .foregroundColor(palette.textTertiary)
-                        Text("These are the approved amounts we can accept for larger tips.")
-                            .font(.caption)
-                            .foregroundColor(palette.textTertiary)
-                    }
-                    .padding(.horizontal, 4)
-
-                    // Amount pills
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 10) {
-                        ForEach(TipTier.approvedLargerAmounts, id: \.self) { amount in
-                            ApprovedAmountPill(
-                                amount: amount,
-                                isSelected: amountValue == amount
-                            ) {
-                                selectApprovedAmount(amount)
-                            }
-                        }
-                    }
-                }
-                .padding()
-                .background(palette.inputBackground)
-                .cornerRadius(12)
-                .padding(.top, -8)
-            }
-        }
-    }
-
-    // MARK: - Actions
-
-    private func selectApprovedAmount(_ amount: Int) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        amountText = "\(amount)"
-        isTextFieldFocused = false
-    }
-
-    private func purchaseAmount() {
-        guard canTip, let amount = amountValue else { return }
-
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        isTextFieldFocused = false
-
-        guard let productID = TipTier.productID(for: amount) else { return }
-
-        Task {
-            await appState.supportManager.purchase(productID: productID)
-            if appState.supportManager.purchaseError == nil {
-                dismiss()
-            }
-        }
-    }
-}
-
-// MARK: - Approved Amount Pill
-
-struct ApprovedAmountPill: View {
-    @Environment(\.themePalette) private var palette
-    let amount: Int
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text("$\(amount)")
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(isSelected ? .white : palette.accent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(isSelected ? palette.accent : palette.cardBackground)
-                .cornerRadius(10)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(isSelected ? Color.clear : palette.accent.opacity(0.3), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("$\(amount)")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-// MARK: - Ask Prompt Sheet
-
-struct AskPromptSheet: View {
-    @Environment(\.dismiss) private var dismiss
+struct PaywallView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
 
-    let onSupport: () -> Void
+    @State private var showSubscription = false
+    @State private var isExporting = false
+    @State private var showShareSheet = false
+    @State private var exportedZIPURL: URL?
 
     var body: some View {
-        VStack(spacing: 20) {
-            // Handle bar
-            RoundedRectangle(cornerRadius: 2.5)
-                .fill(palette.stroke)
-                .frame(width: 36, height: 5)
-                .padding(.top, 8)
-
-            // Icon
-            Image(systemName: "heart.circle.fill")
-                .font(.system(size: 48))
-                .foregroundColor(.pink)
-
-            // Title
-            Text("Keep Sonidea free")
-                .font(.title3)
-                .fontWeight(.semibold)
-                .foregroundColor(palette.textPrimary)
-
-            // Body
-            Text("If Sonidea helps you capture ideas, consider leaving a tip.")
-                .font(.subheadline)
-                .foregroundColor(palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
+        VStack(spacing: 32) {
             Spacer()
 
-            // Buttons
-            VStack(spacing: 12) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 56))
+                .foregroundColor(palette.textSecondary)
+
+            VStack(spacing: 8) {
+                Text("Your Free Trial Has Ended")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(palette.textPrimary)
+
+                Text("Subscribe to continue using Sonidea, or export your recordings.")
+                    .font(.subheadline)
+                    .foregroundColor(palette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+
+            VStack(spacing: 14) {
                 Button {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    appState.supportManager.acceptAskPrompt()
-                    dismiss()
-                    onSupport()
+                    showSubscription = true
                 } label: {
-                    Text("Support Sonidea")
+                    Text("View Plans")
                         .font(.headline)
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, 16)
                         .background(palette.accent)
-                        .cornerRadius(12)
+                        .cornerRadius(14)
                 }
 
                 Button {
-                    appState.supportManager.dismissAskPrompt()
-                    dismiss()
+                    exportAllRecordings()
                 } label: {
-                    Text("Not now")
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Export All Recordings")
+                    }
+                    .font(.headline)
+                    .foregroundColor(palette.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(palette.cardBackground)
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(palette.accent.opacity(0.3), lineWidth: 1)
+                    )
+                }
+
+                Button {
+                    Task {
+                        await appState.supportManager.restorePurchases()
+                    }
+                } label: {
+                    Text("Restore Purchases")
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)
                 }
             }
-            .padding(.horizontal)
-            .padding(.bottom)
+            .padding(.horizontal, 32)
+
+            Spacer()
         }
-        .background(Color(.systemBackground))
+        .background(palette.background)
+        .overlay {
+            if isExporting {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .overlay {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Preparing export...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showSubscription) {
+            TipJarView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let url = exportedZIPURL {
+                ShareSheet(items: [url])
+            }
+        }
+    }
+
+    private func exportAllRecordings() {
+        isExporting = true
+        Task {
+            do {
+                let zipURL = try await AudioExporter.shared.exportRecordings(
+                    appState.activeRecordings,
+                    scope: .all,
+                    albumLookup: { appState.album(for: $0) },
+                    tagsLookup: { appState.tags(for: $0) }
+                )
+                exportedZIPURL = zipURL
+                isExporting = false
+                showShareSheet = true
+            } catch {
+                isExporting = false
+            }
+        }
     }
 }
-
-// MARK: - Preview
 
 #Preview {
     TipJarView()

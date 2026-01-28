@@ -56,8 +56,6 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTipJar = false
-    @State private var showAskPromptFromMain = false
-    @State private var showThankYouToast = false
     @State private var showRecoveryAlert = false
     @State private var showSaveErrorAlert = false
     @State private var saveErrorMessage = ""
@@ -78,6 +76,11 @@ struct ContentView: View {
     private let buttonDiameter: CGFloat = 80
 
     var body: some View {
+        if !appState.supportManager.isFullAccessUnlocked {
+            PaywallView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+        } else {
         GeometryReader { geometry in
             let safeArea = geometry.safeAreaInsets
             let containerSize = geometry.size
@@ -189,38 +192,8 @@ struct ContentView: View {
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .sheet(isPresented: $showAskPromptFromMain) {
-            AskPromptSheet {
-                showTipJar = true
-            }
-            .environment(appState)
-            .environment(\.themePalette, palette)
-            .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
-            .presentationDetents([.height(300)])
-            .presentationDragIndicator(.hidden)
-        }
-        .onChange(of: appState.supportManager.shouldShowAskPromptSheet) { _, shouldShow in
-            if shouldShow {
-                showAskPromptFromMain = true
-                appState.supportManager.shouldShowAskPromptSheet = false
-            }
-        }
         .onChange(of: appState.recorder.recordingState) { _, newState in
             appState.onRecordingStateChanged(isRecording: newState.isActive)
-        }
-        .onChange(of: appState.supportManager.shouldShowThankYouToast) { _, shouldShow in
-            if shouldShow {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                    showThankYouToast = true
-                }
-                appState.supportManager.shouldShowThankYouToast = false
-                // Auto-dismiss after 3 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        showThankYouToast = false
-                    }
-                }
-            }
         }
         .onAppear {
             appState.onAppBecameActive()
@@ -271,13 +244,7 @@ struct ContentView: View {
         } message: {
             Text(saveErrorMessage)
         }
-        .overlay(alignment: .top) {
-            if showThankYouToast {
-                ThankYouToast()
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .padding(.top, 60)
-            }
-        }
+        } // else (full access)
     }
 
     // Helper to get audio duration for recovered recordings
@@ -701,7 +668,7 @@ struct ContentView: View {
                 }
 
                 Button { showTipJar = true } label: {
-                    Image(systemName: "heart.fill")
+                    Image(systemName: "crown.fill")
                         .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
                         .foregroundColor(iconColor)
@@ -764,7 +731,6 @@ struct VoiceMemosRecordButton: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     @State private var isPulsing = false
-    @State private var goldRingRotation: Double = 0
 
     private var recordingState: RecordingState {
         appState.recorder.recordingState
@@ -782,48 +748,13 @@ struct VoiceMemosRecordButton: View {
         recordingState == .paused
     }
 
-    private var isSupporter: Bool {
-        appState.supportManager.hasTippedBefore
-    }
-
     // Theme-aware record button color
     private var recordColor: Color {
         palette.recordButton
     }
 
-    // Gold gradient for supporter ring
-    private var goldGradient: AngularGradient {
-        AngularGradient(
-            gradient: Gradient(colors: [
-                Color(red: 1.0, green: 0.84, blue: 0.0),      // Gold
-                Color(red: 1.0, green: 0.92, blue: 0.5),      // Light gold
-                Color(red: 0.85, green: 0.65, blue: 0.13),    // Dark gold
-                Color(red: 1.0, green: 0.84, blue: 0.0),      // Gold
-            ]),
-            center: .center,
-            startAngle: .degrees(goldRingRotation),
-            endAngle: .degrees(goldRingRotation + 360)
-        )
-    }
-
     var body: some View {
         ZStack {
-            // Supporter gold ring (behind main button)
-            if isSupporter {
-                Circle()
-                    .stroke(goldGradient, lineWidth: 3)
-                    .frame(width: 92, height: 92)
-                    .opacity(isActive ? 0.3 : 0.9)
-                    .onAppear {
-                        // Only animate if Reduce Motion is off
-                        if !reduceMotion {
-                            withAnimation(.linear(duration: 25).repeatForever(autoreverses: false)) {
-                                goldRingRotation = 360
-                            }
-                        }
-                    }
-            }
-
             // Main recording ring - pulsing when recording, solid when paused
             Circle()
                 .stroke(isActive ? recordColor : recordColor.opacity(0.3), lineWidth: 4)
@@ -884,29 +815,6 @@ struct VoiceMemosRecordButton: View {
 }
 
 // MARK: - Thank You Toast
-
-struct ThankYouToast: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "star.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.orange)
-
-            Text("Thank you for supporting Sonidea!")
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.primary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            Capsule()
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        )
-        .accessibilityLabel("Thank you for supporting Sonidea")
-    }
-}
 
 // MARK: - Premium Recording HUD Card
 
@@ -2947,23 +2855,6 @@ struct SettingsSheetView: View {
 
         NavigationStack {
             List {
-                // MARK: Supporter Badge (if tipped)
-                if appState.supportManager.hasTippedBefore {
-                    Section {
-                        HStack(spacing: 6) {
-                            Image(systemName: "star.fill")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                            Text("Supporter")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(palette.textPrimary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowBackground(palette.cardBackground)
-                    }
-                }
-
                 // MARK: Quick Access Section
                 Section {
                     Button { showLockScreenHelp = true } label: {
