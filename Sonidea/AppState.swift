@@ -105,6 +105,46 @@ final class AppState {
 
         // Connect shared album manager
         sharedAlbumManager.appState = self
+
+        // Handle Pro access loss - reset Pro-gated settings
+        supportManager.onProAccessLost = { [weak self] in
+            self?.enforceFreeTierSettings()
+        }
+
+        // Enforce free tier settings on launch if Pro access is already lost
+        if !supportManager.canUseProFeatures {
+            enforceFreeTierSettings()
+        }
+    }
+
+    // MARK: - Pro Feature Enforcement
+
+    /// Reset all Pro-gated settings to free tier defaults when Pro access is lost.
+    /// This prevents users from exploiting features after trial/subscription ends.
+    func enforceFreeTierSettings() {
+        var settingsChanged = false
+
+        // Auto-select icon is a Pro feature
+        if appSettings.autoSelectIcon {
+            appSettings.autoSelectIcon = false
+            settingsChanged = true
+        }
+
+        // Recording quality: only .standard is free
+        if appSettings.recordingQuality != .standard {
+            appSettings.recordingQuality = .standard
+            settingsChanged = true
+        }
+
+        // iCloud sync is a Pro feature
+        if appSettings.iCloudSyncEnabled {
+            appSettings.iCloudSyncEnabled = false
+            settingsChanged = true
+        }
+
+        if settingsChanged {
+            saveAppSettings()
+        }
     }
 
     // MARK: - Record Button Position Management
@@ -306,8 +346,8 @@ final class AppState {
             }
         }
 
-        // Auto-classify icon if enabled
-        if appSettings.autoSelectIcon {
+        // Auto-classify icon if enabled (Pro feature)
+        if appSettings.autoSelectIcon && supportManager.canUseProFeatures {
             Task {
                 await autoClassifyIcon(recording: recording)
             }

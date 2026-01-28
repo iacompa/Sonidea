@@ -85,6 +85,8 @@ struct ProUpgradeSheet: View {
                 .font(.subheadline)
                 .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 32)
 
             Text("Included with Sonidea Pro")
@@ -117,7 +119,7 @@ struct ProUpgradeSheet: View {
         }
         .frame(maxWidth: .infinity)
         .background(palette.sheetBackground)
-        .presentationDetents([.height(340)])
+        .presentationDetents([.height(380)])
         .presentationDragIndicator(.visible)
     }
 }

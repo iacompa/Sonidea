@@ -89,6 +89,9 @@ final class SupportManager {
     var products: [Product] = []
     var isLoadingProducts = true
 
+    /// Callback invoked when Pro access is lost (trial expired or subscription cancelled)
+    var onProAccessLost: (() -> Void)?
+
     #if DEBUG
     /// Debug override: nil = normal behavior, true = force pro, false = force free
     var debugProOverride: Bool? = nil
@@ -286,8 +289,14 @@ final class SupportManager {
         }
 
         if !foundActive {
+            let wasSubscribed = isSubscribed
             isSubscribed = false
             currentPlanRawValue = nil
+
+            // Notify if Pro access was lost (was subscribed, now not, and trial also expired)
+            if wasSubscribed && !isTrialActive {
+                onProAccessLost?()
+            }
         }
     }
 
@@ -297,6 +306,11 @@ final class SupportManager {
             if currentPlanRawValue == transaction.productID {
                 isSubscribed = false
                 currentPlanRawValue = nil
+
+                // Notify if Pro access was lost (subscription revoked and trial expired)
+                if !isTrialActive {
+                    onProAccessLost?()
+                }
             }
         } else {
             isSubscribed = true
