@@ -10,6 +10,7 @@ import SwiftUI
 struct TagManagerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
 
     @State private var searchQuery = ""
     @State private var isEditMode = false
@@ -18,6 +19,8 @@ struct TagManagerView: View {
     @State private var editingTag: Tag?
     @State private var showMergeSheet = false
     @State private var showDeleteProtectedAlert = false
+    @State private var proUpgradeContext: ProFeatureContext? = nil
+    @State private var showTipJar = false
 
     private var filteredTags: [Tag] {
         if searchQuery.isEmpty {
@@ -64,6 +67,10 @@ struct TagManagerView: View {
                             if isEditMode {
                                 toggleSelection(tag)
                             } else {
+                                guard appState.supportManager.canUseProFeatures else {
+                                    proUpgradeContext = .tags
+                                    return
+                                }
                                 editingTag = tag
                             }
                         }
@@ -99,6 +106,10 @@ struct TagManagerView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack {
                         Button {
+                            guard appState.supportManager.canUseProFeatures else {
+                                proUpgradeContext = .tags
+                                return
+                            }
                             showCreateTag = true
                         } label: {
                             Image(systemName: "plus")
@@ -123,6 +134,26 @@ struct TagManagerView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("The \"favorite\" tag is protected and cannot be deleted.")
+            }
+            .sheet(item: $proUpgradeContext) { context in
+                ProUpgradeSheet(
+                    context: context,
+                    onViewPlans: {
+                        proUpgradeContext = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showTipJar = true
+                        }
+                    },
+                    onDismiss: {
+                        proUpgradeContext = nil
+                    }
+                )
+                .environment(\.themePalette, palette)
+            }
+            .sheet(isPresented: $showTipJar) {
+                TipJarView()
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
             }
         }
     }

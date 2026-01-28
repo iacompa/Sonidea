@@ -107,6 +107,8 @@ struct RecordingDetailView: View {
     @State private var pendingAudioEdit: URL?  // Pending edited file URL before save
     @State private var pendingDuration: TimeInterval?  // Pending duration after edit
     @State private var hasAudioEdits = false  // Track if audio was modified
+    @State private var proUpgradeContext: ProFeatureContext? = nil
+    @State private var showTipJar = false
     @State private var editHistory = EditHistory()  // Undo/redo support
     @State private var showSkipSilenceResult = false  // Toast for skip silence result
     @State private var skipSilenceResultMessage = ""  // Message for skip silence toast
@@ -529,6 +531,26 @@ struct RecordingDetailView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
+            .sheet(item: $proUpgradeContext) { context in
+                ProUpgradeSheet(
+                    context: context,
+                    onViewPlans: {
+                        proUpgradeContext = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showTipJar = true
+                        }
+                    },
+                    onDismiss: {
+                        proUpgradeContext = nil
+                    }
+                )
+                .environment(\.themePalette, palette)
+            }
+            .sheet(isPresented: $showTipJar) {
+                TipJarView()
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
+            }
             .fullScreenCover(isPresented: $showOverdubSession) {
                 OverdubSessionView(
                     baseRecording: currentRecording,
@@ -721,6 +743,10 @@ struct RecordingDetailView: View {
                                 silenceMode = .idle  // Clear any highlighted silence
                                 isEditingWaveform = false
                             } else {
+                                guard appState.supportManager.canUseProFeatures else {
+                                    proUpgradeContext = .editMode
+                                    return
+                                }
                                 // Enter edit mode - ensure playback is loaded for accurate duration
                                 // This prevents waveform timeline using stale currentRecording.duration
                                 if !playback.isLoaded {
@@ -1833,6 +1859,10 @@ struct RecordingDetailView: View {
                     Spacer()
 
                     Button("Manage") {
+                        guard appState.supportManager.canUseProFeatures else {
+                            proUpgradeContext = .tags
+                            return
+                        }
                         showManageTags = true
                     }
                     .font(.system(size: 13, weight: .medium))
@@ -1857,6 +1887,10 @@ struct RecordingDetailView: View {
                                         tag: tag,
                                         isSelected: currentRecording.tagIDs.contains(tag.id)
                                     ) {
+                                        guard appState.supportManager.canUseProFeatures else {
+                                            proUpgradeContext = .tags
+                                            return
+                                        }
                                         currentRecording = appState.toggleTag(tag, for: currentRecording)
                                     }
                                 }

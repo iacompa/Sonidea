@@ -67,6 +67,9 @@ struct ContentView: View {
     // Long-press reset pill
     @State private var showResetPill = false
 
+    // Trial nudge state
+    @State private var currentNudge: TrialNudge? = nil
+
     // Move hint animation state
     @State private var showMoveHint = false
     @State private var hintNudgeOffset: CGFloat = 0
@@ -76,11 +79,6 @@ struct ContentView: View {
     private let buttonDiameter: CGFloat = 80
 
     var body: some View {
-        if !appState.supportManager.isFullAccessUnlocked {
-            PaywallView()
-                .environment(appState)
-                .environment(\.themePalette, palette)
-        } else {
         GeometryReader { geometry in
             let safeArea = geometry.safeAreaInsets
             let containerSize = geometry.size
@@ -192,6 +190,21 @@ struct ContentView: View {
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
+        .sheet(item: $currentNudge) { nudge in
+            TrialNudgeSheet(
+                nudge: nudge,
+                recordingCount: appState.activeRecordings.count,
+                onCTA: { action in
+                    currentNudge = nil
+                    handleTrialNudgeCTA(action)
+                },
+                onDismiss: {
+                    currentNudge = nil
+                }
+            )
+            .environment(\.themePalette, palette)
+            .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
         .onChange(of: appState.recorder.recordingState) { _, newState in
             appState.onRecordingStateChanged(isRecording: newState.isActive)
         }
@@ -207,6 +220,8 @@ struct ContentView: View {
             }
             // Check if we should show the move hint
             checkAndShowMoveHint()
+            // Check for trial nudge
+            checkTrialNudge()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -214,6 +229,8 @@ struct ContentView: View {
                 if appState.recorder.consumePendingStopRequest() && appState.recorder.recordingState.isActive {
                     saveRecording()
                 }
+                // Check for trial nudge on foreground
+                checkTrialNudge()
             }
         }
         .alert("Recover Recording?", isPresented: $showRecoveryAlert) {
@@ -244,7 +261,6 @@ struct ContentView: View {
         } message: {
             Text(saveErrorMessage)
         }
-        } // else (full access)
     }
 
     // Helper to get audio duration for recovered recordings
@@ -446,6 +462,42 @@ struct ContentView: View {
     }
 
     // MARK: - Move Hint Logic
+
+    private func checkTrialNudge() {
+        let sm = appState.supportManager
+        guard case .trial = sm.subscriptionStatus else { return }
+        let nm = appState.trialNudgeManager
+        guard nm.canShowNudge(isRecording: appState.recorder.isRecording, isPlayingBack: false) else { return }
+        guard let nudge = nm.nextNudgeToShow(trialStartDate: sm.trialStartDate) else { return }
+        nm.markShown(nudge)
+        // Slight delay to avoid showing during transitions
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            currentNudge = nudge
+        }
+    }
+
+    private func handleTrialNudgeCTA(_ action: TrialNudgeCTA) {
+        switch action {
+        case .openGuide:
+            showSettings = true
+            // The guide is inside SettingsSheetView; user can navigate from there
+        case .openOverdub:
+            // Overdub is accessed per-recording; just dismiss
+            break
+        case .openExport:
+            break
+        case .viewStats:
+            break
+        case .createSharedAlbum:
+            showSettings = true
+            // Shared album creation is in settings
+        case .openPaywall:
+            showTipJar = true
+        case .dismiss:
+            break
+        }
+    }
 
     private func checkAndShowMoveHint() {
         // Don't show if currently recording
@@ -668,10 +720,10 @@ struct ContentView: View {
                 }
 
                 Button { showTipJar = true } label: {
-                    Image(systemName: "crown.fill")
+                    Image(systemName: appState.supportManager.canUseProFeatures ? "checkmark.seal.fill" : "star.circle.fill")
                         .symbolRenderingMode(.monochrome)
                         .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(iconColor)
+                        .foregroundColor(appState.supportManager.canUseProFeatures ? iconColor : palette.accent)
                         .frame(width: 44, height: 44)
                 }
             }
@@ -2696,6 +2748,7 @@ struct SettingsSectionHeader: View {
     let topic: HelpTopic?
     let onInfoTap: (() -> Void)?
     var isGold: Bool = false
+    var showProBadge: Bool = false
 
     @Environment(\.themePalette) private var palette
 
@@ -2703,6 +2756,10 @@ struct SettingsSectionHeader: View {
         HStack(spacing: 6) {
             Text(title)
                 .foregroundColor(isGold ? Color.sharedAlbumGold : palette.textSecondary)
+
+            if showProBadge {
+                ProBadge()
+            }
 
             if let _ = topic, let onTap = onInfoTap {
                 Button {
@@ -2831,6 +2888,14 @@ struct SettingsSheetView: View {
     @State private var resetConfirmText = ""
     @State private var resetConfirmationChecked = false
     @State private var showResetLoading = false
+    @State private var proUpgradeContext: ProFeatureContext? = nil
+    @State private var showTipJar = false
+
+    private func requirePro(_ context: ProFeatureContext) -> Bool {
+        if appState.supportManager.canUseProFeatures { return true }
+        proUpgradeContext = context
+        return false
+    }
 
     // Sync status color based on state
     private var syncStatusColor: Color {
@@ -3047,6 +3112,12 @@ struct SettingsSheetView: View {
                     HStack {
                         Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
                             .tint(palette.toggleOnTint)
+                            .onChange(of: appState.appSettings.autoSelectIcon) { _, enabled in
+                                if enabled && !appState.supportManager.canUseProFeatures {
+                                    appState.appSettings.autoSelectIcon = false
+                                    proUpgradeContext = .autoIcons
+                                }
+                            }
 
                         Button {
                             showAutoIconInfo = true
@@ -3059,8 +3130,11 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Smart Detection")
-                        .foregroundColor(palette.textSecondary)
+                    HStack(spacing: 6) {
+                        Text("Smart Detection")
+                        if !appState.supportManager.canUseProFeatures { ProBadge() }
+                    }
+                    .foregroundColor(palette.textSecondary)
                 } footer: {
                     Text("Automatically detect audio type (voice, guitar, drums, keys) and set the recording icon.")
                         .foregroundColor(palette.textSecondary)
@@ -3123,7 +3197,14 @@ struct SettingsSheetView: View {
                     Toggle("iCloud Sync", isOn: $appState.appSettings.iCloudSyncEnabled)
                         .tint(palette.toggleOnTint)
                         .listRowBackground(palette.cardBackground)
-                        .onChange(of: appState.appSettings.iCloudSyncEnabled) { _, enabled in
+                        .onChange(of: appState.appSettings.iCloudSyncEnabled) { oldValue, enabled in
+                            if enabled && !appState.supportManager.canUseProFeatures {
+                                appState.appSettings.iCloudSyncEnabled = false
+                                proUpgradeContext = .icloudSync
+                                return
+                            }
+                            // Avoid acting on programmatic revert (false -> false)
+                            guard oldValue != enabled else { return }
                             Task {
                                 if enabled {
                                     await appState.syncManager.enableSync()
@@ -3184,7 +3265,8 @@ struct SettingsSheetView: View {
                     SettingsSectionHeader(
                         title: "iCloud",
                         topic: .iCloud,
-                        onInfoTap: { activeHelpTopic = .iCloud }
+                        onInfoTap: { activeHelpTopic = .iCloud },
+                        showProBadge: !appState.supportManager.canUseProFeatures
                     )
                 } footer: {
                     Text("Sync recordings, tags, albums, and projects across all your devices.")
@@ -3193,7 +3275,11 @@ struct SettingsSheetView: View {
 
                 // MARK: - Shared Albums Section
                 Section {
-                    Button { showCreateSharedAlbumSheet = true } label: {
+                    Button {
+                        if requirePro(.sharedAlbums) {
+                            showCreateSharedAlbumSheet = true
+                        }
+                    } label: {
                         HStack(spacing: 12) {
                             // Gold gradient icon
                             ZStack {
@@ -3297,7 +3383,8 @@ struct SettingsSheetView: View {
                         title: "Collaboration",
                         topic: .collaboration,
                         onInfoTap: { activeHelpTopic = .collaboration },
-                        isGold: true
+                        isGold: true,
+                        showProBadge: !appState.supportManager.canUseProFeatures
                     )
                 } footer: {
                     #if DEBUG
@@ -3315,7 +3402,11 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Button { showTagManager = true } label: {
+                    Button {
+                        if requirePro(.tags) {
+                            showTagManager = true
+                        }
+                    } label: {
                         HStack {
                             Image(systemName: "tag.fill")
                                 .foregroundColor(palette.accent)
@@ -3334,7 +3425,8 @@ struct SettingsSheetView: View {
                     SettingsSectionHeader(
                         title: "Tags",
                         topic: .tags,
-                        onInfoTap: { activeHelpTopic = .tags }
+                        onInfoTap: { activeHelpTopic = .tags },
+                        showProBadge: !appState.supportManager.canUseProFeatures
                     )
                 }
 
@@ -3464,6 +3556,35 @@ struct SettingsSheetView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
                 }
+
+                #if DEBUG
+                // MARK: - Debug Tier Testing
+                Section {
+                    let mgr = appState.supportManager
+                    Picker("Tier Override", selection: Binding<Int>(
+                        get: {
+                            if mgr.debugProOverride == nil { return 0 }
+                            return mgr.debugProOverride == true ? 1 : 2
+                        },
+                        set: { val in
+                            switch val {
+                            case 1: mgr.debugProOverride = true
+                            case 2: mgr.debugProOverride = false
+                            default: mgr.debugProOverride = nil
+                            }
+                        }
+                    )) {
+                        Text("Normal").tag(0)
+                        Text("Force Pro").tag(1)
+                        Text("Force Free").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("DEBUG")
+                        .foregroundColor(.red)
+                }
+                #endif
 
                 // MARK: - Factory Reset
                 Section {
@@ -3606,6 +3727,26 @@ struct SettingsSheetView: View {
             }
             .sheet(isPresented: $showTagManager) {
                 TagManagerView()
+            }
+            .sheet(item: $proUpgradeContext) { context in
+                ProUpgradeSheet(
+                    context: context,
+                    onViewPlans: {
+                        proUpgradeContext = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showTipJar = true
+                        }
+                    },
+                    onDismiss: {
+                        proUpgradeContext = nil
+                    }
+                )
+                .environment(\.themePalette, palette)
+            }
+            .sheet(isPresented: $showTipJar) {
+                TipJarView()
+                    .environment(appState)
+                    .environment(\.themePalette, palette)
             }
             .sheet(isPresented: $showTrashView) {
                 TrashView()

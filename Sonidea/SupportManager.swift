@@ -3,7 +3,7 @@
 //  Sonidea
 //
 //  Manages subscriptions, trial status, and paywall logic.
-//  Provides 30-day free trial, then requires monthly/annual/lifetime subscription.
+//  Provides 7-day free trial, then requires monthly/annual/lifetime subscription.
 //
 
 import Foundation
@@ -27,8 +27,8 @@ enum SubscriptionPlan: String, CaseIterable {
 
     var description: String {
         switch self {
-        case .monthly: return "$1.99/month"
-        case .annual: return "$19.99/year"
+        case .monthly: return "$3.99/month"
+        case .annual: return "$29.99/year"
         case .lifetime: return "$99.99 one-time"
         }
     }
@@ -70,8 +70,7 @@ struct RoadmapItem: Identifiable {
 }
 
 let roadmapItems: [RoadmapItem] = [
-    RoadmapItem(title: "AI-powered track analysis & auto-tagging", icon: "sparkles", isNew: true),
-    RoadmapItem(title: "VST3/AU Plugin for DAW imports", icon: "puzzlepiece.extension"),
+RoadmapItem(title: "VST3/AU Plugin for DAW imports", icon: "puzzlepiece.extension"),
     RoadmapItem(title: "Android release", icon: "iphone.and.arrow.forward"),
     RoadmapItem(title: "More themes", icon: "paintpalette"),
     RoadmapItem(title: "Advanced waveform editing", icon: "waveform.path.ecg"),
@@ -90,6 +89,11 @@ final class SupportManager {
     var products: [Product] = []
     var isLoadingProducts = true
 
+    #if DEBUG
+    /// Debug override: nil = normal behavior, true = force pro, false = force free
+    var debugProOverride: Bool? = nil
+    #endif
+
     // MARK: - Trial
 
     var trialStartDate: Date? {
@@ -99,13 +103,13 @@ final class SupportManager {
 
     var isTrialActive: Bool {
         guard let start = trialStartDate else { return false }
-        return Date().timeIntervalSince(start) < 30 * 24 * 60 * 60
+        return Date().timeIntervalSince(start) < 7 * 24 * 60 * 60
     }
 
     var trialDaysRemaining: Int {
         guard let start = trialStartDate else { return 0 }
         let elapsed = Date().timeIntervalSince(start)
-        let remaining = (30 * 24 * 60 * 60) - elapsed
+        let remaining = (7 * 24 * 60 * 60) - elapsed
         return max(0, Int(ceil(remaining / (24 * 60 * 60))))
     }
 
@@ -128,6 +132,13 @@ final class SupportManager {
 
     var isFullAccessUnlocked: Bool {
         isTrialActive || isSubscribed
+    }
+
+    var canUseProFeatures: Bool {
+        #if DEBUG
+        if let override = debugProOverride { return override }
+        #endif
+        return isTrialActive || isSubscribed
     }
 
     var subscriptionStatus: SubscriptionStatus {
@@ -154,6 +165,12 @@ final class SupportManager {
         static let isSubscribed = "subscription.isSubscribed"
         static let currentPlan = "subscription.currentPlan"
     }
+
+    // MARK: - Intro Offer (Annual plan only)
+
+    var isAnnualTrialEligible: Bool = false
+    var annualIntroOfferDuration: String?
+    var annualIntroOfferPrice: String?
 
     // MARK: - Transaction listener
 
@@ -192,10 +209,38 @@ final class SupportManager {
         isLoadingProducts = true
         do {
             products = try await Product.products(for: SubscriptionPlan.allProductIDs)
+            await updateAnnualIntroOfferEligibility()
             isLoadingProducts = false
         } catch {
             print("Failed to load products: \(error)")
             isLoadingProducts = false
+        }
+    }
+
+    func updateAnnualIntroOfferEligibility() async {
+        guard let annualProduct = products.first(where: { $0.id == SubscriptionPlan.annual.rawValue }),
+              let subscription = annualProduct.subscription else {
+            isAnnualTrialEligible = false
+            return
+        }
+
+        let eligible = await subscription.isEligibleForIntroOffer
+        isAnnualTrialEligible = eligible
+
+        if eligible, let introOffer = subscription.introductoryOffer {
+            annualIntroOfferPrice = introOffer.displayPrice
+            let period = introOffer.period
+            let value = period.value
+            switch period.unit {
+            case .day: annualIntroOfferDuration = "\(value)-day"
+            case .week: annualIntroOfferDuration = "\(value)-week"
+            case .month: annualIntroOfferDuration = "\(value)-month"
+            case .year: annualIntroOfferDuration = "\(value)-year"
+            @unknown default: annualIntroOfferDuration = nil
+            }
+        } else {
+            annualIntroOfferDuration = nil
+            annualIntroOfferPrice = nil
         }
     }
 

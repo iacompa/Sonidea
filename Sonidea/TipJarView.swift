@@ -99,9 +99,9 @@ struct TipJarView: View {
 
             case .expired:
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    Text("Your free trial has ended")
+                    Image(systemName: "star.circle.fill")
+                        .foregroundColor(palette.accent)
+                    Text("Upgrade to unlock Pro features")
                         .font(.subheadline)
                         .fontWeight(.medium)
                         .foregroundColor(palette.textPrimary)
@@ -109,7 +109,7 @@ struct TipJarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity)
-                .background(Color.orange.opacity(0.1))
+                .background(palette.accent.opacity(0.1))
                 .cornerRadius(12)
             }
         }
@@ -130,6 +130,14 @@ struct TipJarView: View {
                         await manager.purchase(plan: plan)
                     }
                 }
+
+                if plan == .annual && manager.isAnnualTrialEligible {
+                    Text("Cancel anytime. Trial converts to yearly unless canceled at least 24 hours before the end.")
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.textSecondary)
+                        .padding(.horizontal, 4)
+                        .padding(.top, -4)
+                }
             }
         }
     }
@@ -138,19 +146,34 @@ struct TipJarView: View {
 
     private var featuresSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Everything Included")
+            Text("Free Forever")
                 .font(.headline)
                 .foregroundColor(palette.textPrimary)
                 .padding(.horizontal, 4)
 
             VStack(alignment: .leading, spacing: 10) {
                 FeatureRow(icon: "mic.fill", text: "Unlimited recordings")
+                FeatureRow(icon: "play.fill", text: "Full playback")
+                FeatureRow(icon: "magnifyingglass", text: "Search & organize")
+                FeatureRow(icon: "map.fill", text: "Map view")
+            }
+            .padding()
+            .background(palette.cardBackground)
+            .cornerRadius(12)
+
+            Text("Pro Features")
+                .font(.headline)
+                .foregroundColor(palette.textPrimary)
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
                 FeatureRow(icon: "waveform", text: "Pro waveform editor")
-                FeatureRow(icon: "square.on.square", text: "Multi-track overdub")
-                FeatureRow(icon: "text.viewfinder", text: "AI transcription")
-                FeatureRow(icon: "person.2.fill", text: "Shared albums")
-                FeatureRow(icon: "tag.fill", text: "Tags, albums & projects")
+                FeatureRow(icon: "person.2.fill", text: "Shared albums & collaboration")
+                FeatureRow(icon: "tag.fill", text: "Tags & smart filtering")
                 FeatureRow(icon: "icloud.fill", text: "iCloud sync")
+                FeatureRow(icon: "sparkles", text: "Auto-select icons")
+                FeatureRow(icon: "square.on.square", text: "Multi-track overdub")
                 FeatureRow(icon: "paintpalette.fill", text: "All themes")
                 FeatureRow(icon: "square.and.arrow.up.fill", text: "Export in all formats")
             }
@@ -299,6 +322,25 @@ struct PlanCard: View {
     let isBestValue: Bool
     let action: () -> Void
 
+    private var isAnnualWithTrial: Bool {
+        plan == .annual && appState.supportManager.isAnnualTrialEligible
+    }
+
+    private var taglineText: String {
+        if isAnnualWithTrial {
+            let price = appState.supportManager.priceForPlan(plan) ?? plan.description
+            return "7-day free trial, then \(price)/year"
+        }
+        return plan.tagline
+    }
+
+    private var buttonText: String {
+        if isAnnualWithTrial {
+            return "Start 7-day free trial"
+        }
+        return appState.supportManager.priceForPlan(plan) ?? plan.description
+    }
+
     var body: some View {
         Button(action: action) {
             HStack {
@@ -317,14 +359,14 @@ struct PlanCard: View {
                                 .cornerRadius(4)
                         }
                     }
-                    Text(plan.tagline)
+                    Text(taglineText)
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                 }
 
                 Spacer()
 
-                Text(appState.supportManager.priceForPlan(plan) ?? plan.description)
+                Text(buttonText)
                     .font(.headline)
                     .fontWeight(.semibold)
                     .foregroundColor(palette.accent)

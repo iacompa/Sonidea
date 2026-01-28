@@ -52,6 +52,7 @@ final class AppState {
     let syncManager = iCloudSyncManager()
     let proofManager = ProofManager()
     let sharedAlbumManager = SharedAlbumManager()
+    let trialNudgeManager = TrialNudgeManager()
 
     private(set) var nextRecordingNumber: Int = 1
 

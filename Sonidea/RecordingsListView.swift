@@ -27,6 +27,10 @@ struct RecordingsListView: View {
     @State private var recordingToTag: RecordingItem?
     @State private var showSingleTagSheet = false
 
+    // Pro feature gating
+    @State private var proUpgradeContext: ProFeatureContext? = nil
+    @State private var showTipJar = false
+
     // Animation configuration
     private var menuAnimation: Animation {
         reduceMotion
@@ -100,6 +104,24 @@ struct RecordingsListView: View {
             }
         } message: {
             Text("Are you sure you want to delete \(selectedRecordingIDs.count) recording\(selectedRecordingIDs.count == 1 ? "" : "s")? They will be moved to Recently Deleted.")
+        }
+        .sheet(item: $proUpgradeContext) { context in
+            ProUpgradeSheet(
+                context: context,
+                onViewPlans: {
+                    proUpgradeContext = nil
+                    showTipJar = true
+                },
+                onDismiss: {
+                    proUpgradeContext = nil
+                }
+            )
+            .environment(\.themePalette, palette)
+        }
+        .sheet(isPresented: $showTipJar) {
+            TipJarView()
+                .environment(appState)
+                .environment(\.themePalette, palette)
         }
     }
 
@@ -206,6 +228,10 @@ struct RecordingsListView: View {
                 isEnabled: hasSelection,
                 isDestructive: false
             ) {
+                guard appState.supportManager.canUseProFeatures else {
+                    proUpgradeContext = .tags
+                    return
+                }
                 showBatchTagPicker = true
             }
 
@@ -285,6 +311,10 @@ struct RecordingsListView: View {
                     .tint(palette.accent)
 
                     Button {
+                        guard appState.supportManager.canUseProFeatures else {
+                            proUpgradeContext = .tags
+                            return
+                        }
                         recordingToTag = recording
                         showSingleTagSheet = true
                     } label: {
