@@ -3,7 +3,7 @@
 //  Sonidea
 //
 //  Manages subscriptions, trial status, and paywall logic.
-//  Provides 7-day free trial, then requires monthly/annual/lifetime subscription.
+//  14-day free trial available with annual plan subscription (via App Store intro offer).
 //
 
 import Foundation
@@ -106,13 +106,13 @@ final class SupportManager {
 
     var isTrialActive: Bool {
         guard let start = trialStartDate else { return false }
-        return Date().timeIntervalSince(start) < 7 * 24 * 60 * 60
+        return Date().timeIntervalSince(start) < 14 * 24 * 60 * 60
     }
 
     var trialDaysRemaining: Int {
         guard let start = trialStartDate else { return 0 }
         let elapsed = Date().timeIntervalSince(start)
-        let remaining = (7 * 24 * 60 * 60) - elapsed
+        let remaining = (14 * 24 * 60 * 60) - elapsed
         return max(0, Int(ceil(remaining / (24 * 60 * 60))))
     }
 
@@ -194,7 +194,7 @@ final class SupportManager {
     /// Returns the exact date when trial expires
     var trialExpirationDate: Date? {
         guard let start = trialStartDate else { return nil }
-        return start.addingTimeInterval(7 * 24 * 60 * 60)
+        return start.addingTimeInterval(14 * 24 * 60 * 60)
     }
 
     // MARK: - Intro Offer (Annual plan only)
@@ -210,10 +210,8 @@ final class SupportManager {
     // MARK: - Initialization
 
     init() {
-        // Start trial on first launch
-        if trialStartDate == nil {
-            trialStartDate = Date()
-        }
+        // Trial is now only available via annual plan intro offer (configured in App Store Connect)
+        // No automatic trial on first launch - users must subscribe to annual plan to get 14-day trial
 
         // Listen for transaction updates
         transactionListener = Task {

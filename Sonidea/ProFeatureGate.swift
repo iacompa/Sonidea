@@ -70,12 +70,11 @@ struct ProUpgradeSheet: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
+        VStack(spacing: 16) {
             Image(systemName: context.iconName)
                 .font(.system(size: 44))
                 .foregroundColor(palette.accent)
+                .padding(.top, 32)
 
             Text(context.title)
                 .font(.title3.weight(.bold))
@@ -85,15 +84,15 @@ struct ProUpgradeSheet: View {
                 .font(.subheadline)
                 .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 32)
 
             Text("Included with Sonidea Pro")
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
+                .padding(.top, 4)
 
-            Spacer()
+            Spacer(minLength: 16)
 
             Button {
                 onViewPlans()
@@ -119,7 +118,7 @@ struct ProUpgradeSheet: View {
         }
         .frame(maxWidth: .infinity)
         .background(palette.sheetBackground)
-        .presentationDetents([.height(380)])
+        .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
     }
 }

@@ -2,7 +2,7 @@
 //  TrialNudgeManager.swift
 //  Sonidea
 //
-//  Manages in-app nudge messaging during the 7-day trial period.
+//  Manages in-app nudge messaging during the 14-day trial period (annual plan intro offer).
 //
 
 import Foundation
@@ -61,7 +61,7 @@ enum TrialNudge: String, CaseIterable, Identifiable {
     func message(recordingCount: Int) -> String {
         switch self {
         case .day1Welcome:
-            return "Your 7-day trial gives you full access to all features. Tap to see what you can do."
+            return "Your 14-day trial gives you full access to all features. Tap to see what you can do."
         case .day3Features:
             return "Layer recordings with overdub or export your work in any format."
         case .day5Stats:
@@ -202,9 +202,10 @@ struct TrialNudgeSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(palette.textSecondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 24)
 
-            Spacer()
+            Spacer(minLength: 16)
 
             // Primary CTA
             Button {
@@ -243,7 +244,7 @@ struct TrialNudgeSheet: View {
         }
         .frame(maxWidth: .infinity)
         .background(palette.sheetBackground)
-        .presentationDetents([.height(280)])
+        .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
     }
 }
