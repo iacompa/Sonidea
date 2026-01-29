@@ -15,13 +15,11 @@ import UserNotifications
 
 enum SubscriptionPlan: String, CaseIterable {
     case monthly = "0144030"
-    case sixMonth = "01440180"
     case annual = "01440365"
 
     var displayName: String {
         switch self {
         case .monthly: return "Monthly"
-        case .sixMonth: return "6 Months"
         case .annual: return "Annual"
         }
     }
@@ -29,7 +27,6 @@ enum SubscriptionPlan: String, CaseIterable {
     var description: String {
         switch self {
         case .monthly: return "$3.99/month"
-        case .sixMonth: return "$19.99/6 months"
         case .annual: return "$29.99/year"
         }
     }
@@ -37,7 +34,6 @@ enum SubscriptionPlan: String, CaseIterable {
     var tagline: String {
         switch self {
         case .monthly: return "Less than a coffee ☕"
-        case .sixMonth: return "Great Value"
         case .annual: return "Best Value"
         }
     }

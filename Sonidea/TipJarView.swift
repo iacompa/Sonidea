@@ -124,8 +124,7 @@ struct TipJarView: View {
         if showAllPlans { return SubscriptionPlan.allCases }
         // Only show higher tiers
         switch current {
-        case .monthly: return [.sixMonth, .annual]
-        case .sixMonth: return [.annual]
+        case .monthly: return [.annual]
         case .annual: return []
         }
     }
