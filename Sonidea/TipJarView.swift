@@ -14,6 +14,8 @@ struct TipJarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
 
+    @State private var showPurchaseError = false
+
     private var manager: SupportManager {
         appState.supportManager
     }
@@ -52,7 +54,10 @@ struct TipJarView: View {
                         .foregroundColor(palette.accent)
                 }
             }
-            .alert("Purchase Error", isPresented: .constant(manager.purchaseError != nil)) {
+            .onChange(of: manager.purchaseError) { _, newValue in
+                showPurchaseError = newValue != nil
+            }
+            .alert("Purchase Error", isPresented: $showPurchaseError) {
                 Button("OK") {
                     appState.supportManager.purchaseError = nil
                 }
@@ -68,19 +73,8 @@ struct TipJarView: View {
         Group {
             switch manager.subscriptionStatus {
             case .trial:
-                HStack(spacing: 8) {
-                    Image(systemName: "clock.fill")
-                        .foregroundColor(.blue)
-                    Text("\(manager.trialDaysRemaining) days left in free trial")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(palette.textPrimary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(12)
+                // Trial is now handled via StoreKit intro offer (shows as subscribed)
+                EmptyView()
 
             case .subscribed(let plan):
                 VStack(spacing: 4) {
@@ -151,7 +145,7 @@ struct TipJarView: View {
                 }
 
                 if plan == .annual && manager.isAnnualTrialEligible {
-                    Text("Cancel anytime. Trial converts to yearly unless canceled at least 24 hours before the end.")
+                    Text("Cancel anytime during the 14-day trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
                         .font(.system(size: 10))
                         .foregroundColor(palette.textSecondary)
                         .padding(.horizontal, 4)
@@ -409,14 +403,14 @@ struct PlanCard: View {
     private var taglineText: String {
         if isAnnualWithTrial {
             let price = appState.supportManager.priceForPlan(plan) ?? plan.description
-            return "7-day free trial, then \(price)/year"
+            return "14 days free, then \(price)/year"
         }
         return plan.tagline
     }
 
     private var buttonText: String {
         if isAnnualWithTrial {
-            return "Start 7-day free trial"
+            return "Try 14 days free"
         }
         return appState.supportManager.priceForPlan(plan) ?? plan.description
     }

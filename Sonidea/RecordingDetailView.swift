@@ -405,7 +405,7 @@ struct RecordingDetailView: View {
             .onDisappear {
                 savePlaybackPosition()
                 playback.stop()
-                editHistory.clear()  // Clean up undo history
+                editHistory.clear(currentFileURL: currentRecording.fileURL)  // Clean up undo history
             }
             .onChange(of: isEditingWaveform) { _, editing in
                 // Pause playback when switching modes (don't stop - keeps engine ready for edit mode playback)
@@ -1541,7 +1541,11 @@ struct RecordingDetailView: View {
 
             // Record Over Track button
             Button {
-                handleRecordOverTrack()
+                if appState.supportManager.canUseProFeatures {
+                    handleRecordOverTrack()
+                } else {
+                    proUpgradeContext = .recordOverTrack
+                }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "square.stack.3d.up.fill")
@@ -1561,8 +1565,8 @@ struct RecordingDetailView: View {
                         .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
                 )
             }
-            .disabled(!canAddOverdubLayer)
-            .opacity(canAddOverdubLayer ? 1.0 : 0.5)
+            .disabled(appState.supportManager.canUseProFeatures && !canAddOverdubLayer)
+            .opacity(appState.supportManager.canUseProFeatures && !canAddOverdubLayer ? 0.5 : 1.0)
         }
     }
 
@@ -2662,8 +2666,8 @@ struct RecordingDetailView: View {
             }
         }
 
-        // Clear edit history after saving
-        editHistory.clear()
+        // Clear edit history after saving (preserve the active audio file)
+        editHistory.clear(currentFileURL: updated.fileURL)
 
         appState.updateRecording(updated)
     }

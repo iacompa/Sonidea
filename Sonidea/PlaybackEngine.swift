@@ -186,6 +186,7 @@ final class PlaybackEngine {
     }
 
     func stop() {
+        playbackGeneration += 1
         playerNode?.stop()
         audioEngine?.stop()
         audioEngine = nil
@@ -200,7 +201,7 @@ final class PlaybackEngine {
         stopTimer()
 
         // Deactivate audio session when playback is fully stopped
-        AudioSessionManager.shared.deactivate()
+        AudioSessionManager.shared.deactivatePlayback()
     }
 
     func togglePlayPause() {

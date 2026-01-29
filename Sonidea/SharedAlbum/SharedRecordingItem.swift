@@ -134,10 +134,10 @@ struct SharedRecordingItem: Identifiable, Codable, Equatable {
         latitude: Double,
         longitude: Double,
         mode: LocationSharingMode
-    ) -> (latitude: Double, longitude: Double) {
+    ) -> (latitude: Double, longitude: Double)? {
         switch mode {
         case .none:
-            return (0, 0)
+            return nil
         case .precise:
             return (latitude, longitude)
         case .approximate:
@@ -160,9 +160,10 @@ struct SharedRecordingItem: Identifiable, Codable, Equatable {
         var sharedLon: Double?
 
         if locationMode != .none, let lat = recording.latitude, let lon = recording.longitude {
-            let approx = approximateLocation(latitude: lat, longitude: lon, mode: locationMode)
-            sharedLat = approx.latitude
-            sharedLon = approx.longitude
+            if let approx = approximateLocation(latitude: lat, longitude: lon, mode: locationMode) {
+                sharedLat = approx.latitude
+                sharedLon = approx.longitude
+            }
         }
 
         return SharedRecordingItem(

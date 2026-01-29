@@ -40,6 +40,7 @@ final class PlaybackManager: NSObject {
 
     func play() {
         guard let player = audioPlayer else { return }
+        try? AudioSessionManager.shared.configureForPlayback()
         player.play()
         isPlaying = true
         startTimer()
@@ -58,7 +59,7 @@ final class PlaybackManager: NSObject {
         currentTime = 0
         duration = 0
         stopTimer()
-        AudioSessionManager.shared.deactivate()
+        AudioSessionManager.shared.deactivatePlayback()
     }
 
     func togglePlayPause() {
@@ -98,7 +99,7 @@ extension PlaybackManager: @preconcurrency AVAudioPlayerDelegate {
             self.isPlaying = false
             self.currentTime = self.duration
             self.stopTimer()
-            AudioSessionManager.shared.deactivate()
+            AudioSessionManager.shared.deactivatePlayback()
         }
     }
 }

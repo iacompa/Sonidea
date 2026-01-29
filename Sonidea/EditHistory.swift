@@ -99,16 +99,20 @@ final class EditHistory {
     }
 
     /// Clear all history (call when exiting edit mode or saving)
-    func clear() {
+    /// - Parameter currentFileURL: The currently-active audio file URL to preserve (skip cleanup)
+    func clear(currentFileURL: URL? = nil) {
         // Clean up any temporary files in the stacks
         for snapshot in undoStack {
-            cleanupFileIfOrphaned(snapshot.audioFileURL)
+            if snapshot.audioFileURL != currentFileURL {
+                cleanupFileIfOrphaned(snapshot.audioFileURL)
+            }
         }
-        for snapshot in redoStack {
-            cleanupFileIfOrphaned(snapshot.audioFileURL)
-        }
-
         undoStack.removeAll()
+        for snapshot in redoStack {
+            if snapshot.audioFileURL != currentFileURL {
+                cleanupFileIfOrphaned(snapshot.audioFileURL)
+            }
+        }
         redoStack.removeAll()
     }
 

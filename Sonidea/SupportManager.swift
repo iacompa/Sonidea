@@ -14,9 +14,9 @@ import UserNotifications
 // MARK: - Subscription Plan
 
 enum SubscriptionPlan: String, CaseIterable {
-    case monthly = "com.iacompa.sonidea.sub.monthly"
-    case sixMonth = "com.iacompa.sonidea.sub.sixmonth"
-    case annual = "com.iacompa.sonidea.sub.annual"
+    case monthly = "0144030"
+    case sixMonth = "01440180"
+    case annual = "01440365"
 
     var displayName: String {
         switch self {
@@ -97,26 +97,10 @@ final class SupportManager {
     var debugProOverride: Bool? = nil
     #endif
 
-    // MARK: - Trial
-
-    var trialStartDate: Date? {
-        get { UserDefaults.standard.object(forKey: Keys.trialStartDate) as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.trialStartDate) }
-    }
-
-    var isTrialActive: Bool {
-        guard let start = trialStartDate else { return false }
-        return Date().timeIntervalSince(start) < 14 * 24 * 60 * 60
-    }
-
-    var trialDaysRemaining: Int {
-        guard let start = trialStartDate else { return 0 }
-        let elapsed = Date().timeIntervalSince(start)
-        let remaining = (14 * 24 * 60 * 60) - elapsed
-        return max(0, Int(ceil(remaining / (24 * 60 * 60))))
-    }
-
     // MARK: - Subscription State
+    // Note: Trials are handled by StoreKit via intro offers on the annual plan.
+    // When user is in a trial, they appear as subscribed in StoreKit transactions.
+    // StoreKit's isEligibleForIntroOffer prevents multiple trials automatically.
 
     var isSubscribed: Bool {
         get { UserDefaults.standard.bool(forKey: Keys.isSubscribed) }
@@ -134,21 +118,19 @@ final class SupportManager {
     }
 
     var isFullAccessUnlocked: Bool {
-        isTrialActive || isSubscribed
+        isSubscribed
     }
 
     var canUseProFeatures: Bool {
         #if DEBUG
         if let override = debugProOverride { return override }
         #endif
-        return isTrialActive || isSubscribed
+        return isSubscribed
     }
 
     var subscriptionStatus: SubscriptionStatus {
         if isSubscribed, let plan = currentPlan {
             return .subscribed(plan)
-        } else if isTrialActive {
-            return .trial
         } else {
             return .expired
         }
@@ -164,7 +146,6 @@ final class SupportManager {
     // MARK: - Keys
 
     private enum Keys {
-        static let trialStartDate = "subscription.trialStartDate"
         static let isSubscribed = "subscription.isSubscribed"
         static let currentPlan = "subscription.currentPlan"
         static let sharedAlbumWarningScheduled = "subscription.sharedAlbumWarningScheduled"
@@ -185,19 +166,9 @@ final class SupportManager {
         set { UserDefaults.standard.set(newValue, forKey: Keys.sharedAlbumRemovalScheduled) }
     }
 
-    /// Returns true if user is on trial and has 2 or fewer days remaining
-    var isTrialAboutToExpire: Bool {
-        guard isTrialActive, !isSubscribed else { return false }
-        return trialDaysRemaining <= 2
-    }
-
-    /// Returns the exact date when trial expires
-    var trialExpirationDate: Date? {
-        guard let start = trialStartDate else { return nil }
-        return start.addingTimeInterval(14 * 24 * 60 * 60)
-    }
-
     // MARK: - Intro Offer (Annual plan only)
+    // Trial is only available via the annual plan's intro offer (configured in App Store Connect).
+    // StoreKit automatically prevents multiple trials via isEligibleForIntroOffer.
 
     var isAnnualTrialEligible: Bool = false
     var annualIntroOfferDuration: String?
@@ -227,9 +198,6 @@ final class SupportManager {
             await loadProducts()
             await checkCurrentEntitlements()
         }
-    }
-
-    nonisolated deinit {
     }
 
     // MARK: - StoreKit
@@ -291,8 +259,8 @@ final class SupportManager {
             isSubscribed = false
             currentPlanRawValue = nil
 
-            // Notify if Pro access was lost (was subscribed, now not, and trial also expired)
-            if wasSubscribed && !isTrialActive {
+            // Notify if Pro access was lost
+            if wasSubscribed {
                 onProAccessLost?()
             }
         }
@@ -304,13 +272,20 @@ final class SupportManager {
             if currentPlanRawValue == transaction.productID {
                 isSubscribed = false
                 currentPlanRawValue = nil
-
-                // Notify if Pro access was lost (subscription revoked and trial expired)
-                if !isTrialActive {
-                    onProAccessLost?()
-                }
+                onProAccessLost?()
             }
         } else {
+            // Check if subscription has expired
+            if let expirationDate = transaction.expirationDate, expirationDate < Date() {
+                // Subscription has expired
+                let wasSubscribed = isSubscribed
+                isSubscribed = false
+                currentPlanRawValue = nil
+                if wasSubscribed {
+                    onProAccessLost?()
+                }
+                return
+            }
             isSubscribed = true
             currentPlanRawValue = transaction.productID
         }
@@ -378,68 +353,14 @@ final class SupportManager {
     func onExportSuccess(totalRecordings: Int) {}
     func onTranscriptionSuccess(totalRecordings: Int) {}
 
-    // MARK: - Shared Album Trial Expiration Handling
+    // MARK: - Shared Album Subscription Warning (legacy stubs)
+    // Note: Trial warnings are no longer needed since trials are handled by StoreKit.
+    // These methods are kept as stubs for compatibility.
 
-    /// Schedule notifications for shared album trial expiration (called when user has shared albums)
     func scheduleSharedAlbumTrialWarnings() {
-        guard !isSubscribed, let expirationDate = trialExpirationDate else { return }
-
-        // Don't re-schedule if already done
-        guard !sharedAlbumWarningScheduled else { return }
-
-        let center = UNUserNotificationCenter.current()
-
-        // Request notification permission
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-            guard granted else { return }
-
-            Task { @MainActor in
-                // Schedule warning 2 days before expiration
-                let warningDate = expirationDate.addingTimeInterval(-2 * 24 * 60 * 60)
-                if warningDate > Date() {
-                    let warningContent = UNMutableNotificationContent()
-                    warningContent.title = "Shared Albums Access Ending Soon"
-                    warningContent.body = "Your free trial ends in 2 days. Subscribe to keep access to your shared albums."
-                    warningContent.sound = .default
-
-                    let warningTrigger = UNTimeIntervalNotificationTrigger(
-                        timeInterval: warningDate.timeIntervalSinceNow,
-                        repeats: false
-                    )
-                    let warningRequest = UNNotificationRequest(
-                        identifier: "sharedAlbum.trialWarning",
-                        content: warningContent,
-                        trigger: warningTrigger
-                    )
-                    try? await center.add(warningRequest)
-                }
-
-                // Schedule warning 1 day before expiration
-                let finalWarningDate = expirationDate.addingTimeInterval(-1 * 24 * 60 * 60)
-                if finalWarningDate > Date() {
-                    let finalContent = UNMutableNotificationContent()
-                    finalContent.title = "Last Day for Shared Albums"
-                    finalContent.body = "Your free trial ends tomorrow. You'll be removed from shared albums unless you subscribe."
-                    finalContent.sound = .default
-
-                    let finalTrigger = UNTimeIntervalNotificationTrigger(
-                        timeInterval: finalWarningDate.timeIntervalSinceNow,
-                        repeats: false
-                    )
-                    let finalRequest = UNNotificationRequest(
-                        identifier: "sharedAlbum.trialFinalWarning",
-                        content: finalContent,
-                        trigger: finalTrigger
-                    )
-                    try? await center.add(finalRequest)
-                }
-
-                self.sharedAlbumWarningScheduled = true
-            }
-        }
+        // No-op: trials are now handled by StoreKit intro offers
     }
 
-    /// Cancel shared album warning notifications (called when user subscribes)
     func cancelSharedAlbumTrialWarnings() {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [
@@ -450,7 +371,6 @@ final class SupportManager {
         sharedAlbumRemovalScheduled = false
     }
 
-    /// Reset warning flags (called when user re-subscribes after lapse)
     func resetSharedAlbumWarningFlags() {
         sharedAlbumWarningScheduled = false
         sharedAlbumRemovalScheduled = false

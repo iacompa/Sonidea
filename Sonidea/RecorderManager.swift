@@ -64,6 +64,12 @@ final class RecorderManager: NSObject {
     private var currentFileURL: URL?
     private var wasRecordingBeforeInterruption = false
 
+    /// Guard against double-start during async Bluetooth path
+    private var isPreparing = false
+
+    /// Resolved sample rate for engine recording (set when engine output format is created)
+    private var resolvedEngineSampleRate: Double?
+
     // Crash recovery: key for UserDefaults
     private let inProgressRecordingKey = "inProgressRecordingPath"
 
@@ -260,7 +266,9 @@ final class RecorderManager: NSObject {
     // MARK: - Recording Control
 
     func startRecording() {
-        guard recordingState == .idle else { return }
+        guard recordingState == .idle, !isPreparing else { return }
+
+        isPreparing = true
 
         let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
 
@@ -274,6 +282,7 @@ final class RecorderManager: NSObject {
                     )
                 } catch {
                     print("Failed to set up audio session: \(error)")
+                    self.isPreparing = false
                     return
                 }
                 self.continueStartRecording()
@@ -287,6 +296,7 @@ final class RecorderManager: NSObject {
                 ) as Void
             } catch {
                 print("Failed to set up audio session: \(error)")
+                isPreparing = false
                 return
             }
             continueStartRecording()
@@ -294,6 +304,7 @@ final class RecorderManager: NSObject {
     }
 
     private func continueStartRecording() {
+        isPreparing = false
         // Request location at start of recording
         requestLocationIfNeeded()
 
@@ -449,6 +460,7 @@ final class RecorderManager: NSObject {
     /// Get output format for engine recording
     private func engineOutputFormat(for preset: RecordingQualityPreset, inputFormat: AVAudioFormat) -> AVAudioFormat {
         let sampleRate = min(Double(inputFormat.sampleRate), preset.sampleRate)
+        resolvedEngineSampleRate = sampleRate
         return AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
@@ -458,8 +470,9 @@ final class RecorderManager: NSObject {
     }
 
     /// Get file settings for engine recording
+    /// Uses resolvedEngineSampleRate (set by engineOutputFormat) to ensure consistency
     private func engineFileSettings(for preset: RecordingQualityPreset) -> [String: Any] {
-        let effectiveSampleRate = AudioSessionManager.shared.actualSampleRate
+        let effectiveSampleRate = resolvedEngineSampleRate ?? AudioSessionManager.shared.actualSampleRate
 
         switch preset {
         case .standard:
@@ -626,7 +639,7 @@ final class RecorderManager: NSObject {
         clearInProgressRecording()
 
         // Deactivate audio session when recording is done
-        AudioSessionManager.shared.deactivate()
+        AudioSessionManager.shared.deactivateRecording()
 
         // Log final file info for debugging
         AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - final")
@@ -749,8 +762,7 @@ final class RecorderManager: NSObject {
     private func restartEngineAfterRouteChange() {
         guard let engine = audioEngine,
               let gainMixer = gainMixerNode,
-              let limiter = limiterNode,
-              let file = audioFile else {
+              let limiter = limiterNode else {
             print("❌ [RecorderManager] Cannot restart engine - missing components")
             return
         }
@@ -773,15 +785,43 @@ final class RecorderManager: NSObject {
                 return
             }
 
+            // Check if sample rate changed - if so, we need a new file
+            let newOutputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
+            let previousSampleRate = audioFile?.processingFormat.sampleRate ?? 0
+
+            var activeFile: AVAudioFile
+            if newOutputFormat.sampleRate != previousSampleRate, let fileURL = currentFileURL {
+                // Sample rate changed: close old file and create a new segment file
+                // to avoid writing mismatched-format buffers to the old file
+                audioFile = nil
+                let segmentURL = fileURL.deletingPathExtension()
+                    .appendingPathExtension("seg\(Int(Date().timeIntervalSince1970))")
+                    .appendingPathExtension(fileURL.pathExtension)
+                print("🔄 [RecorderManager] Sample rate changed (\(previousSampleRate) -> \(newOutputFormat.sampleRate)), creating new segment: \(segmentURL.lastPathComponent)")
+                let newFile = try AVAudioFile(
+                    forWriting: segmentURL,
+                    settings: engineFileSettings(for: qualityPreset),
+                    commonFormat: newOutputFormat.commonFormat,
+                    interleaved: newOutputFormat.isInterleaved
+                )
+                audioFile = newFile
+                activeFile = newFile
+            } else if let file = audioFile {
+                // Same sample rate - reuse existing file
+                activeFile = file
+            } else {
+                print("❌ [RecorderManager] No audio file available after route change")
+                return
+            }
+
             // Reconnect nodes with new format
             engine.disconnectNodeInput(gainMixer)
             engine.connect(inputNode, to: gainMixer, format: inputFormat)
 
             // Reinstall tap on limiter
-            let outputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
-            limiter.installTap(onBus: 0, bufferSize: 4096, format: outputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: newOutputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
                 do {
-                    try file.write(from: buffer)
+                    try activeFile.write(from: buffer)
                 } catch {
                     print("❌ [RecorderManager] Error writing audio buffer: \(error)")
                 }
@@ -859,12 +899,13 @@ final class RecorderManager: NSObject {
         clearInProgressRecording()
 
         // Deactivate audio session when discarding
-        AudioSessionManager.shared.deactivate()
+        AudioSessionManager.shared.deactivateRecording()
     }
 
     /// Reset all recording state
     private func resetState() {
         recordingState = .idle
+        isPreparing = false
         currentDuration = 0
         accumulatedDuration = 0
         segmentStartTime = nil
@@ -880,6 +921,7 @@ final class RecorderManager: NSObject {
         limiterNode = nil
         audioFile = nil
         isUsingEngine = false
+        resolvedEngineSampleRate = nil
 
         currentFileURL = nil
         liveMeterSamples = []

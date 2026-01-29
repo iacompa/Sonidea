@@ -31,6 +31,8 @@ enum SharedAlbumError: Error, LocalizedError {
     case offline
     case shareNoLongerExists
     case downloadNotAllowed
+    case commentTooLong
+    case fileTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -64,6 +66,10 @@ enum SharedAlbumError: Error, LocalizedError {
             return "This shared album is no longer available. The owner may have stopped sharing."
         case .downloadNotAllowed:
             return "The creator has not enabled downloads for this recording."
+        case .commentTooLong:
+            return "Comment is too long (max 500 characters)."
+        case .fileTooLarge:
+            return "Recording file is too large to download (max 200MB)."
         }
     }
 }
@@ -318,7 +324,7 @@ final class SharedAlbumManager {
 
         // Validate audio-only
         let fileExtension = recording.fileURL.pathExtension.lowercased()
-        let audioExtensions = ["m4a", "mp3", "wav", "aiff", "aac", "caf"]
+        let audioExtensions = ["m4a", "mp3", "wav", "aiff", "aac", "caf", "flac", "alac"]
         guard audioExtensions.contains(fileExtension) else {
             throw SharedAlbumError.audioOnlyViolation
         }
@@ -331,7 +337,8 @@ final class SharedAlbumManager {
         let recordID = CKRecord.ID(recordName: recording.id.uuidString, zoneID: zoneID)
 
         let record = CKRecord(recordType: "SharedRecording", recordID: recordID)
-        record["title"] = recording.title
+        let sanitizedTitle = recording.title.trimmingCharacters(in: .controlCharacters)
+        record["title"] = sanitizedTitle
         record["duration"] = recording.duration
         record["createdAt"] = recording.createdAt
         record["notes"] = recording.notes
@@ -343,10 +350,11 @@ final class SharedAlbumManager {
         // Location sharing (opt-in)
         record["locationSharingMode"] = locationMode.rawValue
         if locationMode != .none, let lat = recording.latitude, let lon = recording.longitude {
-            let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: locationMode)
-            record["sharedLatitude"] = approx.latitude
-            record["sharedLongitude"] = approx.longitude
-            record["sharedPlaceName"] = recording.locationLabel
+            if let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: locationMode) {
+                record["sharedLatitude"] = approx.latitude
+                record["sharedLongitude"] = approx.longitude
+                record["sharedPlaceName"] = recording.locationLabel
+            }
         }
 
         // Download permission (default: off — creator must opt-in)
@@ -636,6 +644,11 @@ final class SharedAlbumManager {
 
             // Remove the participant's recordings from the shared album
             try? await removeUserRecordings(userId: participantId, album: album)
+
+            // Clean up orphaned role record
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let roleRecordID = CKRecord.ID(recordName: "role-\(participantId)", zoneID: zoneID)
+            try? await db.deleteRecord(withID: roleRecordID)
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
@@ -983,6 +996,7 @@ final class SharedAlbumManager {
     /// Add a comment to a shared album recording
     func addComment(recordingId: UUID, recordingTitle: String, album: Album, text: String) async throws -> SharedAlbumComment {
         guard album.isShared else { throw SharedAlbumError.permissionDenied }
+        guard text.count <= 500 else { throw SharedAlbumError.commentTooLong }
 
         let (db, zoneID) = try await databaseAndZone(for: album)
         let userId = await getCurrentUserId() ?? "unknown"
@@ -1186,6 +1200,12 @@ final class SharedAlbumManager {
     ) async throws {
         guard album.isShared else { return }
 
+        // Only the recording creator can change location sharing
+        let currentUserId = await getCurrentUserId()
+        guard recording.creatorId == currentUserId else {
+            throw SharedAlbumError.permissionDenied
+        }
+
         // Check if user can share location
         if mode != .none {
             guard album.sharedSettings?.allowMembersToShareLocation ?? true else {
@@ -1205,8 +1225,8 @@ final class SharedAlbumManager {
 
             record["locationSharingMode"] = mode.rawValue
 
-            if mode != .none, let lat = latitude, let lon = longitude {
-                let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: mode)
+            if mode != .none, let lat = latitude, let lon = longitude,
+               let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: mode) {
                 record["sharedLatitude"] = approx.latitude
                 record["sharedLongitude"] = approx.longitude
                 record["sharedPlaceName"] = placeName
@@ -1216,7 +1236,9 @@ final class SharedAlbumManager {
                 record["sharedPlaceName"] = nil
             }
 
-            try await db.save(record)
+            try await withRateLimitRetry {
+                try await self.saveWithRetry(record, to: db)
+            }
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
@@ -1249,6 +1271,12 @@ final class SharedAlbumManager {
     ) async throws {
         guard album.isShared else { return }
 
+        // Only the recording creator or album admin can mark as sensitive
+        let currentUserId = await getCurrentUserId()
+        guard recording.creatorId == currentUserId || album.currentUserRole == .admin else {
+            throw SharedAlbumError.permissionDenied
+        }
+
         logger.info("Marking recording as sensitive: \(isSensitive)")
         isProcessing = true
         defer { isProcessing = false }
@@ -1262,7 +1290,9 @@ final class SharedAlbumManager {
             record["sensitiveApproved"] = false
             record["sensitiveApprovedBy"] = nil
 
-            try await db.save(record)
+            try await withRateLimitRetry {
+                try await self.saveWithRetry(record, to: db)
+            }
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
@@ -1409,7 +1439,9 @@ final class SharedAlbumManager {
             }
 
             record["allowDownload"] = allow
-            try await db.save(record)
+            try await withRateLimitRetry {
+                try await self.saveWithRetry(record, to: db)
+            }
 
             // Log activity
             if let currentUserId = await getCurrentUserId() {
@@ -1437,23 +1469,40 @@ final class SharedAlbumManager {
     /// Download audio for a shared recording from CloudKit
     /// Returns a local file URL where the audio has been cached
     func fetchRecordingAudio(recordingId: UUID, album: Album, sharedInfo: SharedRecordingItem? = nil) async throws -> URL {
+        let currentUserId = await getCurrentUserId() ?? ""
+
         // Check download permission: if not the creator and downloads are disabled, block
         if let info = sharedInfo {
-            let currentUserId = await getCurrentUserId() ?? ""
             if info.creatorId != currentUserId && !info.allowDownload {
                 throw SharedAlbumError.downloadNotAllowed
             }
         } else if album.isShared {
-            // Deny download when sharedInfo is nil in a shared album context,
-            // as we cannot verify download permissions without it
-            logger.warning("fetchRecordingAudio called for shared album without sharedInfo — denying download")
-            throw SharedAlbumError.downloadNotAllowed
+            // sharedInfo is nil — attempt to fetch the recording info from CloudKit before denying
+            logger.info("fetchRecordingAudio called for shared album without sharedInfo — fetching from CloudKit")
+            let (db, zoneID) = try await databaseAndZone(for: album)
+            let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
+            let record = try await db.record(for: recordID)
+            let recordCreatorId = record["creatorId"] as? String ?? ""
+            let allowDownload = record["allowDownload"] as? Bool ?? false
+            if recordCreatorId != currentUserId && !allowDownload {
+                throw SharedAlbumError.downloadNotAllowed
+            }
         }
 
         // Check local cache first
         let cacheDir = sharedAlbumCacheDirectory(albumId: album.id)
         let cachedFile = cacheDir.appendingPathComponent("\(recordingId.uuidString).m4a")
         if FileManager.default.fileExists(atPath: cachedFile.path) {
+            // Membership validation for cached audio: if album is shared and user is not owner,
+            // verify the album still has valid shared status before serving cached file
+            if album.isShared && !album.isOwner {
+                let sharedInfoMap = await fetchSharedRecordingInfo(for: album)
+                if sharedInfoMap[recordingId] == nil {
+                    // No valid shared info — user may no longer have access
+                    try? FileManager.default.removeItem(at: cachedFile)
+                    throw SharedAlbumError.permissionDenied
+                }
+            }
             return cachedFile
         }
 
@@ -1465,6 +1514,14 @@ final class SharedAlbumManager {
         guard let asset = record["audioFile"] as? CKAsset,
               let assetURL = asset.fileURL else {
             throw SharedAlbumError.recordingNotFound
+        }
+
+        // Check file size before copying (max 200MB)
+        let maxDownloadSize: Int64 = 200 * 1024 * 1024
+        if let assetAttributes = try? FileManager.default.attributesOfItem(atPath: assetURL.path),
+           let assetSize = assetAttributes[.size] as? Int64,
+           assetSize > maxDownloadSize {
+            throw SharedAlbumError.fileTooLarge
         }
 
         // Copy asset to local cache
@@ -1514,6 +1571,7 @@ final class SharedAlbumManager {
 
     /// Refresh the cached user ID (call on app launch or when needed)
     func refreshCachedUserId() async {
+        cachedCurrentUserId = nil
         _ = await getCurrentUserId()
     }
 
@@ -1565,7 +1623,17 @@ final class SharedAlbumManager {
         await subscribeToDatabase(sharedDatabase, subscriptionID: "shared-shared-albums")
     }
 
+    private let subscriptionCreatedKeyPrefix = "sharedAlbum_subscriptionCreated_"
+
     private func subscribeToDatabase(_ database: CKDatabase, subscriptionID: String) async {
+        let subscriptionCreatedKey = "\(subscriptionCreatedKeyPrefix)\(subscriptionID)"
+
+        // Skip if already successfully created
+        if UserDefaults.standard.bool(forKey: subscriptionCreatedKey) {
+            logger.debug("Subscription already marked as created: \(subscriptionID)")
+            return
+        }
+
         let subscription = CKDatabaseSubscription(subscriptionID: subscriptionID)
 
         let notificationInfo = CKSubscription.NotificationInfo()
@@ -1574,12 +1642,16 @@ final class SharedAlbumManager {
 
         do {
             try await database.save(subscription)
+            // Only mark as created when the save actually succeeds
+            UserDefaults.standard.set(true, forKey: subscriptionCreatedKey)
             logger.info("Subscribed to database: \(subscriptionID)")
         } catch {
             // Subscription may already exist — that's fine
             if let ckError = error as? CKError, ckError.code == .serverRejectedRequest {
                 logger.debug("Subscription already exists: \(subscriptionID)")
+                UserDefaults.standard.set(true, forKey: subscriptionCreatedKey)
             } else {
+                // Do NOT set subscriptionCreatedKey to true for other errors
                 logger.error("Failed to subscribe to \(subscriptionID): \(error.localizedDescription)")
             }
         }
@@ -1648,7 +1720,15 @@ final class SharedAlbumManager {
     private func retryPendingOperations() async {
         guard !pendingOperations.isEmpty else { return }
 
-        let opsToRetry = pendingOperations
+        // Filter out operations older than 7 days (TTL)
+        let ttlSeconds: TimeInterval = 7 * 24 * 3600
+        let validOps = pendingOperations.filter { $0.createdAt.timeIntervalSinceNow > -ttlSeconds }
+        let expiredCount = pendingOperations.count - validOps.count
+        if expiredCount > 0 {
+            logger.info("Dropping \(expiredCount) expired pending operations (older than 7 days)")
+        }
+
+        let opsToRetry = validOps
         pendingOperations.removeAll()
         savePendingOperations()
 
@@ -1796,6 +1876,47 @@ final class SharedAlbumManager {
             } catch {
                 logger.error("Failed to purge trash for album \(album.name): \(error.localizedDescription)")
             }
+        }
+    }
+
+    // MARK: - Conflict Resolution & Rate Limiting Helpers
+
+    /// Save a CKRecord with basic conflict resolution retry.
+    /// On `serverRecordChanged`, fetches the latest server record, re-applies local changes, and retries.
+    private func saveWithRetry(_ record: CKRecord, to db: CKDatabase, maxRetries: Int = 2) async throws {
+        var currentRecord = record
+        for attempt in 0...maxRetries {
+            do {
+                try await db.save(currentRecord)
+                return
+            } catch let error as CKError where error.code == .serverRecordChanged {
+                guard attempt < maxRetries else { throw error }
+                logger.info("Server record changed (attempt \(attempt + 1)/\(maxRetries + 1)), fetching latest and retrying")
+
+                // Fetch the latest server record
+                guard let serverRecord = error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord else {
+                    throw error
+                }
+
+                // Re-apply local changes onto the server record
+                for key in record.allKeys() {
+                    serverRecord[key] = record[key]
+                }
+                currentRecord = serverRecord
+            }
+        }
+    }
+
+    /// Execute an async operation with rate limit retry.
+    /// On `requestRateLimited`, waits the suggested duration and retries once.
+    private func withRateLimitRetry<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch let error as CKError where error.code == .requestRateLimited {
+            let retryAfter = error.userInfo[CKErrorRetryAfterKey] as? Double ?? 1.0
+            logger.info("Rate limited — retrying after \(retryAfter) seconds")
+            try await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
+            return try await operation()
         }
     }
 }

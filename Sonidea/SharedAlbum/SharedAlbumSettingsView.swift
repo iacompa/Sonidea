@@ -16,12 +16,15 @@ struct SharedAlbumSettingsView: View {
     let album: Album
     @Binding var settings: SharedAlbumSettings
 
+    @State private var localSettings: SharedAlbumSettings = .default
     @State private var isSaving = false
     @State private var showSaveConfirmation = false
     @State private var showShareSheet = false
     @State private var showStopSharingAlert = false
+    @State private var showLeaveAlbumAlert = false
     @State private var showCopiedToast = false
     @State private var showParticipantsSheet = false
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -119,6 +122,26 @@ struct SharedAlbumSettingsView: View {
                             }
                         }
                     }
+
+                    // Leave album (non-owner only)
+                    if !album.isOwner {
+                        Button(role: .destructive) {
+                            showLeaveAlbumAlert = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    .foregroundColor(.red)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Leave Album")
+                                        .foregroundColor(.red)
+                                    Text("Your recordings will be removed from this album")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                        }
+                    }
                 } header: {
                     Label("Sharing", systemImage: "person.2")
                 } footer: {
@@ -128,7 +151,7 @@ struct SharedAlbumSettingsView: View {
 
                 // MARK: - Deletion Permissions
                 Section {
-                    Toggle(isOn: $settings.allowMembersToDelete) {
+                    Toggle(isOn: $localSettings.allowMembersToDelete) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Allow Members to Delete")
                                 .foregroundColor(palette.textPrimary)
@@ -143,18 +166,18 @@ struct SharedAlbumSettingsView: View {
 
                 // MARK: - Trash Settings
                 Section {
-                    Picker("Restore Permission", selection: $settings.trashRestorePermission) {
+                    Picker("Restore Permission", selection: $localSettings.trashRestorePermission) {
                         ForEach(TrashRestorePermission.allCases, id: \.self) { permission in
                             Text(permission.displayName)
                                 .tag(permission)
                         }
                     }
 
-                    Stepper(value: $settings.trashRetentionDays, in: 7...30) {
+                    Stepper(value: $localSettings.trashRetentionDays, in: 7...30) {
                         HStack {
                             Text("Retention Period")
                             Spacer()
-                            Text("\(settings.trashRetentionDays) days")
+                            Text("\(localSettings.trashRetentionDays) days")
                                 .foregroundColor(palette.textSecondary)
                         }
                     }
@@ -167,7 +190,7 @@ struct SharedAlbumSettingsView: View {
 
                 // MARK: - Location Settings
                 Section {
-                    Picker("Default Mode", selection: $settings.defaultLocationSharingMode) {
+                    Picker("Default Mode", selection: $localSettings.defaultLocationSharingMode) {
                         ForEach(LocationSharingMode.allCases, id: \.self) { mode in
                             VStack(alignment: .leading) {
                                 Text(mode.displayName)
@@ -181,7 +204,7 @@ struct SharedAlbumSettingsView: View {
                         }
                     }
 
-                    Toggle(isOn: $settings.allowMembersToShareLocation) {
+                    Toggle(isOn: $localSettings.allowMembersToShareLocation) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Allow Location Sharing")
                                 .foregroundColor(palette.textPrimary)
@@ -238,6 +261,14 @@ struct SharedAlbumSettingsView: View {
             } message: {
                 Text("All participants will lose access to this album. Recordings will remain on your device.")
             }
+            .alert("Leave Album?", isPresented: $showLeaveAlbumAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Leave Album", role: .destructive) {
+                    leaveAlbum()
+                }
+            } message: {
+                Text("Your recordings will be removed from this album. You can be re-invited by the owner.")
+            }
             .sheet(isPresented: $showShareSheet) {
                 if let shareURL = album.shareURL {
                     ShareSheet(items: [shareURL])
@@ -245,6 +276,17 @@ struct SharedAlbumSettingsView: View {
             }
             .sheet(isPresented: $showParticipantsSheet) {
                 SharedAlbumParticipantsView(album: album)
+            }
+            .alert("Error", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
+            .onAppear {
+                localSettings = settings
             }
         }
     }
@@ -262,6 +304,27 @@ struct SharedAlbumSettingsView: View {
             } catch {
                 await MainActor.run {
                     isSaving = false
+                    errorMessage = error.localizedDescription
+                    appState.sharedAlbumManager.error = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func leaveAlbum() {
+        isSaving = true
+        Task {
+            do {
+                try await appState.sharedAlbumManager.leaveSharedAlbum(album)
+                await MainActor.run {
+                    appState.removeSharedAlbum(album)
+                    isSaving = false
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    errorMessage = error.localizedDescription
                     appState.sharedAlbumManager.error = error.localizedDescription
                 }
             }
@@ -274,12 +337,15 @@ struct SharedAlbumSettingsView: View {
             do {
                 try await appState.sharedAlbumManager.updateAlbumSettings(
                     album: album,
-                    settings: settings
+                    settings: localSettings
                 )
+
+                // Write local copy back to the binding on success
+                settings = localSettings
 
                 // Update local album state
                 var updatedAlbum = album
-                updatedAlbum.sharedSettings = settings
+                updatedAlbum.sharedSettings = localSettings
                 appState.updateSharedAlbum(updatedAlbum)
 
                 await MainActor.run {
@@ -289,7 +355,7 @@ struct SharedAlbumSettingsView: View {
             } catch {
                 await MainActor.run {
                     isSaving = false
-                    appState.sharedAlbumManager.error = error.localizedDescription
+                    errorMessage = error.localizedDescription
                 }
             }
         }

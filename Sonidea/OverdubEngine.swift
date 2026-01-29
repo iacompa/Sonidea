@@ -62,6 +62,7 @@ final class OverdubEngine {
     private var timer: Timer?
     private var recordingStartTime: Date?
     private var playbackStartHostTime: UInt64 = 0
+    private var playbackTimeOffset: TimeInterval = 0
     private(set) var failedLayerIndices: [Int] = []
 
     /// Thread-safe write failure counter (accessed from audio tap thread)
@@ -69,6 +70,12 @@ final class OverdubEngine {
 
     /// Set by engine when a critical error occurs during recording (e.g. disk full)
     private(set) var recordingError: String?
+
+    /// Stored input sample rate for recording settings
+    private var inputSampleRate: Double = 48000
+
+    /// Observer for audio session interruption notifications
+    private var interruptionObserver: NSObjectProtocol?
 
     // Base recording info
     private var baseDuration: TimeInterval = 0
@@ -101,6 +108,14 @@ final class OverdubEngine {
         let baseFile = try AVAudioFile(forReading: baseFileURL)
         self.baseAudioFile = baseFile
         self.baseDuration = baseDuration
+        let baseSampleRate = baseFile.processingFormat.sampleRate
+
+        // Validate base file duration
+        let actualDuration = Double(baseFile.length) / baseFile.processingFormat.sampleRate
+        if abs(actualDuration - baseDuration) > 1.0 {
+            print("⚠️ [OverdubEngine] Base file duration mismatch: expected \(baseDuration)s, actual \(actualDuration)s. Using actual.")
+            self.baseDuration = actualDuration
+        }
 
         // Create base player node
         let basePlayer = AVAudioPlayerNode()
@@ -120,6 +135,17 @@ final class OverdubEngine {
         for (index, layerURL) in layerFileURLs.enumerated() {
             do {
                 let layerFile = try AVAudioFile(forReading: layerURL)
+
+                guard layerFile.processingFormat.sampleRate > 0 else {
+                    print("⚠️ [OverdubEngine] Layer \(index) has invalid sample rate, skipping")
+                    failedLayerIndices.append(index + 1)
+                    continue
+                }
+
+                if layerFile.processingFormat.sampleRate != baseSampleRate {
+                    print("⚠️ [OverdubEngine] Layer \(index) sample rate (\(layerFile.processingFormat.sampleRate)) differs from base (\(baseSampleRate)). AVAudioEngine will convert automatically.")
+                }
+
                 layerAudioFiles.append(layerFile)
 
                 let layerPlayer = AVAudioPlayerNode()
@@ -130,6 +156,14 @@ final class OverdubEngine {
                 print("⚠️ [OverdubEngine] Failed to load layer \(index): \(error)")
                 failedLayerIndices.append(index + 1)
             }
+        }
+
+        // Auto-reduce mixer gain to prevent clipping with multiple sources
+        let sourceCount = 1 + layerAudioFiles.count // base + layers
+        if sourceCount > 1 {
+            let headroomGain = 1.0 / sqrt(Float(sourceCount))
+            engine.mainMixerNode.outputVolume = headroomGain
+            print("🎚️ [OverdubEngine] Auto headroom: \(sourceCount) sources, mixer gain = \(headroomGain)")
         }
 
         self.audioEngine = engine
@@ -148,6 +182,13 @@ final class OverdubEngine {
             print("⚠️ [OverdubEngine] Cannot play: engine not prepared")
             return
         }
+
+        // Stop player nodes before rescheduling to prevent doubled audio on pause/resume
+        basePlayer.stop()
+        for player in layerPlayerNodes { player.stop() }
+
+        // Store seek offset so updateTime() can add it to the player-relative time
+        playbackTimeOffset = currentPlaybackTime
 
         do {
             if !engine.isRunning {
@@ -176,20 +217,31 @@ final class OverdubEngine {
                 let layerFile = layerAudioFiles[index]
                 let offset = index < layerOffsets.count ? layerOffsets[index] : 0
 
-                // Calculate layer start frame accounting for offset
-                let layerStartTime = max(0, currentPlaybackTime - offset)
-                let layerStartFrame = AVAudioFramePosition(layerStartTime * layerFile.processingFormat.sampleRate)
-
-                if layerStartFrame < layerFile.length {
-                    let framesToPlay = AVAudioFrameCount(layerFile.length - layerStartFrame)
-                    layerPlayer.scheduleSegment(
-                        layerFile,
-                        startingFrame: layerStartFrame,
-                        frameCount: framesToPlay,
-                        at: nil
-                    )
+                if currentPlaybackTime < offset {
+                    // Playback position is before this layer starts — schedule with a delay
+                    let delaySec = offset - currentPlaybackTime
+                    let delayHostTime = AVAudioTime.hostTime(forSeconds: delaySec)
+                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + delayHostTime)
+                    layerPlayer.scheduleFile(layerFile, at: startTime)
                     if monitorLayers {
                         layerPlayer.play()
+                    }
+                } else {
+                    // Playback position is at or past this layer's offset — skip into the layer
+                    let layerStartTime = currentPlaybackTime - offset
+                    let layerStartFrame = AVAudioFramePosition(layerStartTime * layerFile.processingFormat.sampleRate)
+
+                    if layerStartFrame < layerFile.length {
+                        let framesToPlay = AVAudioFrameCount(layerFile.length - layerStartFrame)
+                        layerPlayer.scheduleSegment(
+                            layerFile,
+                            startingFrame: layerStartFrame,
+                            frameCount: framesToPlay,
+                            at: nil
+                        )
+                        if monitorLayers {
+                            layerPlayer.play()
+                        }
                     }
                 }
             }
@@ -230,12 +282,14 @@ final class OverdubEngine {
         }
         stopTimer()
         currentPlaybackTime = 0
+        playbackTimeOffset = 0
         recordingDuration = 0
         state = .idle
     }
 
     /// Seek to a specific time
     func seek(to time: TimeInterval) {
+        guard state != .recording else { return }
         let wasPlaying = state == .playing
 
         // Stop current playback
@@ -259,6 +313,34 @@ final class OverdubEngine {
     func startRecording(outputURL: URL, quality: RecordingQualityPreset) async throws {
         guard let engine = audioEngine else {
             throw OverdubEngineError.engineNotPrepared
+        }
+
+        // Check available disk space (require at least 50MB)
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: documentsURL.path),
+           let freeSpace = attrs[.systemFreeSize] as? Int64,
+           freeSpace < 50_000_000 {
+            throw OverdubEngineError.recordingFailed("Not enough storage space. Please free up at least 50MB to record.")
+        }
+
+        // Check microphone permission
+        let permissionStatus = AVAudioSession.sharedInstance().recordPermission
+        switch permissionStatus {
+        case .denied:
+            throw OverdubEngineError.recordingFailed("Microphone access denied. Please enable microphone permission in Settings > Privacy > Microphone.")
+        case .undetermined:
+            let granted = await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+            if !granted {
+                throw OverdubEngineError.recordingFailed("Microphone permission is required to record audio.")
+            }
+        case .granted:
+            break
+        @unknown default:
+            break
         }
 
         // Check headphones
@@ -371,6 +453,7 @@ final class OverdubEngine {
         // Get input node and validate its format AFTER engine reset
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        inputSampleRate = inputFormat.sampleRate
 
         #if DEBUG
         print("   Input format after reset: sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)")
@@ -389,12 +472,7 @@ final class OverdubEngine {
 
         let file: AVAudioFile
         do {
-            file = try AVAudioFile(
-                forWriting: finalURL,
-                settings: fileSettings,
-                commonFormat: inputFormat.commonFormat,
-                interleaved: inputFormat.isInterleaved
-            )
+            file = try AVAudioFile(forWriting: finalURL, settings: fileSettings)
         } catch {
             #if DEBUG
             print("❌ [OverdubEngine] Failed to create audio file: \(error)")
@@ -412,7 +490,7 @@ final class OverdubEngine {
         writeFailureCounter.reset()
         recordingError = nil
         let failureCounter = writeFailureCounter  // capture for closure (non-isolated)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
             do {
                 try file.write(from: buffer)
                 failureCounter.markSuccess()
@@ -436,6 +514,8 @@ final class OverdubEngine {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
+            basePlayerNode = nil
+            layerPlayerNodes = []
             #if DEBUG
             print("❌ [OverdubEngine] Failed to start engine: \(error)")
             #endif
@@ -451,6 +531,17 @@ final class OverdubEngine {
         state = .recording
         startTimer()
 
+        // Observe audio session interruptions
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleInterruption(notification)
+            }
+        }
+
         print("🎙️ [OverdubEngine] Started recording to: \(finalURL.lastPathComponent)")
     }
 
@@ -462,6 +553,12 @@ final class OverdubEngine {
     }
 
     private func stopRecordingInternal() {
+        // Remove interruption observer to prevent accumulation across recordings
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            interruptionObserver = nil
+        }
+
         // Remove tap
         audioEngine?.inputNode.removeTap(onBus: 0)
 
@@ -482,6 +579,25 @@ final class OverdubEngine {
         }
     }
 
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            print("⚠️ [OverdubEngine] Audio interruption began")
+            if state == .recording {
+                stopRecordingInternal()
+                recordingError = "Recording was interrupted (phone call or other audio). Your partial recording was saved."
+            }
+        case .ended:
+            print("ℹ️ [OverdubEngine] Audio interruption ended")
+        @unknown default:
+            break
+        }
+    }
+
     // MARK: - Private Helpers
 
     private func playBase() {
@@ -495,6 +611,11 @@ final class OverdubEngine {
 
     private func playLayers() {
         guard monitorLayers else { return }
+
+        // Stop all layer players before rescheduling to prevent memory leak
+        for player in layerPlayerNodes {
+            player.stop()
+        }
 
         for (index, layerPlayer) in layerPlayerNodes.enumerated() {
             guard index < layerAudioFiles.count else { continue }
@@ -534,7 +655,7 @@ final class OverdubEngine {
     }
 
     private func recordingSettings(for preset: RecordingQualityPreset) -> [String: Any] {
-        let sampleRate = AudioSessionManager.shared.actualSampleRate
+        let sampleRate = inputSampleRate
 
         switch preset {
         case .standard:
@@ -598,7 +719,7 @@ final class OverdubEngine {
                   let nodeTime = basePlayer.lastRenderTime,
                   let playerTime = basePlayer.playerTime(forNodeTime: nodeTime) {
             let sampleRate = baseAudioFile?.processingFormat.sampleRate ?? 48000
-            currentPlaybackTime = Double(playerTime.sampleTime) / sampleRate
+            currentPlaybackTime = playbackTimeOffset + Double(playerTime.sampleTime) / sampleRate
         }
     }
 
@@ -626,6 +747,10 @@ final class OverdubEngine {
 
     func cleanup() {
         stop()
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            interruptionObserver = nil
+        }
         audioEngine = nil
         basePlayerNode = nil
         layerPlayerNodes = []
@@ -643,7 +768,7 @@ final class OverdubEngine {
 final class WriteFailureCounter: @unchecked Sendable {
     private var _count = 0
     private let lock = NSLock()
-    let maxFailures = 10
+    let maxFailures = 3
 
     func reset() {
         lock.lock()

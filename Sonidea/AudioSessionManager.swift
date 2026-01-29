@@ -249,17 +249,36 @@ final class AudioSessionManager {
     }
 
     func configureForPlayback() throws {
+        if isRecordingActive {
+            // Don't change category while recording - .playAndRecord already supports playback
+            isPlaybackActive = true
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         isPlaybackActive = true
     }
 
-    func deactivate() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
-        isRecordingActive = false
+    func deactivatePlayback() {
         isPlaybackActive = false
+        if !isRecordingActive {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    func deactivateRecording() {
+        isRecordingActive = false
+        if !isPlaybackActive {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    func deactivate() {
+        deactivatePlayback()
+        deactivateRecording()
     }
 
     // MARK: - Input Icons

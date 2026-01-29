@@ -53,13 +53,18 @@ final class AudioEditor {
         startTime: TimeInterval,
         endTime: TimeInterval
     ) -> AudioEditResult {
+        guard startTime >= 0, endTime > startTime else {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: AudioEditorError.invalidRange)
+        }
+
         do {
             let sourceFile = try AVAudioFile(forReading: sourceURL)
             let format = sourceFile.processingFormat
             let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
 
-            let startFrame = AVAudioFramePosition(startTime * sampleRate)
-            let endFrame = AVAudioFramePosition(endTime * sampleRate)
+            let startFrame = max(0, min(AVAudioFramePosition(startTime * sampleRate), totalFrames))
+            let endFrame = max(startFrame, min(AVAudioFramePosition(endTime * sampleRate), totalFrames))
             let frameCount = AVAudioFrameCount(endFrame - startFrame)
 
             guard frameCount > 0 else {
@@ -136,14 +141,18 @@ final class AudioEditor {
         startTime: TimeInterval,
         endTime: TimeInterval
     ) -> AudioEditResult {
+        guard startTime >= 0, endTime > startTime else {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: AudioEditorError.invalidRange)
+        }
+
         do {
             let sourceFile = try AVAudioFile(forReading: sourceURL)
             let format = sourceFile.processingFormat
             let sampleRate = format.sampleRate
             let totalFrames = sourceFile.length
 
-            let cutStartFrame = AVAudioFramePosition(startTime * sampleRate)
-            let cutEndFrame = AVAudioFramePosition(endTime * sampleRate)
+            let cutStartFrame = max(0, min(AVAudioFramePosition(startTime * sampleRate), totalFrames))
+            let cutEndFrame = max(cutStartFrame, min(AVAudioFramePosition(endTime * sampleRate), totalFrames))
 
             // Calculate what to keep
             let beforeFrameCount = AVAudioFrameCount(cutStartFrame)

@@ -20,6 +20,7 @@ struct CreateSharedAlbumSheet: View {
     @State private var showSafetyGate = false
     @State private var isCreating = false
     @State private var errorMessage: String?
+    @State private var iCloudAvailable = true
 
     var body: some View {
         NavigationStack {
@@ -39,7 +40,7 @@ struct CreateSharedAlbumSheet: View {
                     Circle()
                         .fill(
                             LinearGradient(
-                                colors: [.blue.opacity(0.3), .purple.opacity(0.3)],
+                                colors: [palette.accent.opacity(0.3), palette.accent.opacity(0.15)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -50,7 +51,7 @@ struct CreateSharedAlbumSheet: View {
                         .font(.system(size: 32))
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [.blue, .purple],
+                                colors: [palette.accent, palette.accent.opacity(0.7)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -92,13 +93,28 @@ struct CreateSharedAlbumSheet: View {
                         .padding(.horizontal)
                 }
 
+                // iCloud availability warning
+                if !iCloudAvailable {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.icloud")
+                            .foregroundColor(.orange)
+                        Text("Sign in to iCloud to create shared albums")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.horizontal)
+                }
+
                 Spacer()
 
                 // Continue button
                 Button {
                     errorMessage = nil
-                    if albumName.trimmingCharacters(in: .whitespaces).isEmpty {
+                    let trimmed = albumName.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty {
                         errorMessage = "Please enter an album name"
+                    } else if trimmed.count > 50 {
+                        errorMessage = "Album name must be 50 characters or less"
                     } else {
                         showSafetyGate = true
                     }
@@ -113,7 +129,7 @@ struct CreateSharedAlbumSheet: View {
                     .padding(.vertical, 16)
                     .background(
                         LinearGradient(
-                            colors: [.blue, .purple],
+                            colors: [palette.accent, palette.accent.opacity(0.7)],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
@@ -122,9 +138,17 @@ struct CreateSharedAlbumSheet: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
-                .disabled(albumName.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
+                .disabled(albumName.trimmingCharacters(in: .whitespaces).isEmpty || isCreating || !iCloudAvailable)
             }
             .background(palette.background)
+            .onChange(of: albumName) {
+                if albumName.count > 50 {
+                    albumName = String(albumName.prefix(50))
+                }
+            }
+            .task {
+                iCloudAvailable = FileManager.default.ubiquityIdentityToken != nil
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -137,11 +161,13 @@ struct CreateSharedAlbumSheet: View {
             .sheet(isPresented: $showSafetyGate) {
                 SharedAlbumSafetyGateSheet(
                     albumName: albumName,
+                    isCreating: $isCreating,
                     onConfirm: {
                         createSharedAlbum()
                     }
                 )
             }
+            .interactiveDismissDisabled(isCreating)
     }
 
     private func createSharedAlbum() {
@@ -150,6 +176,7 @@ struct CreateSharedAlbumSheet: View {
             do {
                 let album = try await appState.sharedAlbumManager.createSharedAlbum(name: albumName.trimmingCharacters(in: .whitespaces))
                 appState.addSharedAlbum(album)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -166,13 +193,15 @@ struct SharedAlbumSafetyGateSheet: View {
     @Environment(\.themePalette) private var palette
 
     let albumName: String
+    @Binding var isCreating: Bool
     let onConfirm: () -> Void
 
     @State private var understandsAddDelete = false
     @State private var trustsParticipants = false
+    @State private var safetyGateError: String?
 
     private var canContinue: Bool {
-        understandsAddDelete && trustsParticipants
+        understandsAddDelete && trustsParticipants && !isCreating
     }
 
     var body: some View {
@@ -182,7 +211,7 @@ struct SharedAlbumSafetyGateSheet: View {
                     // Warning icon
                     ZStack {
                         Circle()
-                            .fill(Color.orange.opacity(0.2))
+                            .fill(palette.accent.opacity(0.15))
                             .frame(width: 72, height: 72)
 
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -238,21 +267,38 @@ struct SharedAlbumSafetyGateSheet: View {
                     }
                     .padding(.horizontal, 24)
 
+                    // Error message shown directly in the safety gate
+                    if let error = safetyGateError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 24)
+                    }
+
                     Spacer(minLength: 40)
 
                     // Buttons
                     VStack(spacing: 12) {
                         Button {
-                            dismiss()
+                            safetyGateError = nil
                             onConfirm()
+                            dismiss()
                         } label: {
-                            Text("Create \"\(albumName)\"")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(canContinue ? Color.blue : Color.gray)
-                                .cornerRadius(12)
+                            HStack(spacing: 8) {
+                                if isCreating {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Text("Create \"\(albumName)\"")
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(canContinue ? palette.accent : palette.textTertiary)
+                            .cornerRadius(12)
                         }
                         .disabled(!canContinue)
 
@@ -260,6 +306,7 @@ struct SharedAlbumSafetyGateSheet: View {
                             dismiss()
                         }
                         .foregroundColor(palette.textSecondary)
+                        .disabled(isCreating)
                     }
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
@@ -267,7 +314,7 @@ struct SharedAlbumSafetyGateSheet: View {
             }
             .background(palette.background)
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled()  // Force user to make a choice
+            .interactiveDismissDisabled(isCreating)  // Prevent dismiss while creating
         }
     }
 }
@@ -310,7 +357,7 @@ struct AcknowledgmentRow: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: isChecked ? "checkmark.square.fill" : "square")
                     .font(.system(size: 22))
-                    .foregroundColor(isChecked ? .blue : palette.textSecondary)
+                    .foregroundColor(isChecked ? palette.accent : palette.textSecondary)
 
                 Text(text)
                     .font(.subheadline)
@@ -341,12 +388,12 @@ struct AddToSharedAlbumConsentSheet: View {
                 // Icon
                 ZStack {
                     Circle()
-                        .fill(Color.blue.opacity(0.15))
+                        .fill(palette.accent.opacity(0.15))
                         .frame(width: 72, height: 72)
 
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 28))
-                        .foregroundColor(.blue)
+                        .foregroundColor(palette.accent)
                 }
                 .padding(.top, 20)
 
@@ -363,10 +410,12 @@ struct AddToSharedAlbumConsentSheet: View {
 
                     HStack(spacing: 6) {
                         Image(systemName: "person.2.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.accent)
                         Text("\(album.name)")
                             .fontWeight(.semibold)
                             .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Text("(\(album.participantCount) people)")
                             .foregroundColor(palette.textSecondary)
                     }
@@ -422,15 +471,15 @@ struct AddToSharedAlbumConsentSheet: View {
                             // Save preference for this album
                             // This would be handled by AppState
                         }
-                        dismiss()
                         onConfirm()
+                        dismiss()
                     } label: {
                         Text("Share")
                             .font(.headline)
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(Color.blue)
+                            .background(palette.accent)
                             .cornerRadius(12)
                     }
 
@@ -486,10 +535,12 @@ struct DeleteFromSharedAlbumSheet: View {
 
                     HStack(spacing: 6) {
                         Image(systemName: "person.2.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.accent)
                         Text(album.name)
                             .fontWeight(.semibold)
                             .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     .font(.subheadline)
                 }
@@ -537,8 +588,8 @@ struct DeleteFromSharedAlbumSheet: View {
                 // Buttons
                 VStack(spacing: 12) {
                     Button {
-                        dismiss()
                         onConfirm()
+                        dismiss()
                     } label: {
                         Text("Delete for Everyone")
                             .font(.headline)
@@ -601,7 +652,7 @@ struct SharedAlbumBanner: View {
         HStack(spacing: 12) {
             Image(systemName: "person.2.fill")
                 .font(.system(size: 16))
-                .foregroundColor(.blue)
+                .foregroundColor(palette.accent)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Shared Album")
@@ -619,10 +670,10 @@ struct SharedAlbumBanner: View {
             if album.isOwner {
                 Text("Owner")
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(palette.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
+                    .background(palette.accent.opacity(0.1))
                     .cornerRadius(4)
             }
         }
@@ -630,8 +681,8 @@ struct SharedAlbumBanner: View {
         .background(
             LinearGradient(
                 colors: [
-                    Color.blue.opacity(0.1),
-                    Color.purple.opacity(0.05)
+                    palette.accent.opacity(0.1),
+                    palette.accent.opacity(0.05)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -641,7 +692,7 @@ struct SharedAlbumBanner: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     LinearGradient(
-                        colors: [.blue.opacity(0.3), .purple.opacity(0.3)],
+                        colors: [palette.accent.opacity(0.3), palette.accent.opacity(0.15)],
                         startPoint: .leading,
                         endPoint: .trailing
                     ),
@@ -670,12 +721,12 @@ struct LeaveSharedAlbumSheet: View {
                 // Icon
                 ZStack {
                     Circle()
-                        .fill(Color.orange.opacity(0.15))
+                        .fill(palette.accent.opacity(0.15))
                         .frame(width: 72, height: 72)
 
                     Image(systemName: "rectangle.portrait.and.arrow.right")
                         .font(.system(size: 28))
-                        .foregroundColor(.orange)
+                        .foregroundColor(palette.accent)
                 }
                 .padding(.top, 20)
 
@@ -689,6 +740,8 @@ struct LeaveSharedAlbumSheet: View {
                     Text("You will no longer have access to recordings in \"\(album.name)\".")
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                 }
@@ -696,7 +749,7 @@ struct LeaveSharedAlbumSheet: View {
                 // Info
                 VStack(alignment: .leading, spacing: 12) {
                     SharedAlbumInfoRow(icon: "xmark.circle", text: "You'll lose access to all recordings", color: .red)
-                    SharedAlbumInfoRow(icon: "arrow.counterclockwise", text: "You can be re-invited by the owner", color: .blue)
+                    SharedAlbumInfoRow(icon: "arrow.counterclockwise", text: "You can be re-invited by the owner", color: palette.accent)
                     SharedAlbumInfoRow(icon: "person.2", text: "Other participants won't be affected", color: .green)
                 }
                 .padding(.horizontal, 24)
@@ -741,6 +794,7 @@ struct LeaveSharedAlbumSheet: View {
             }
             .background(palette.background)
             .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isLeaving)
         }
     }
 
@@ -795,7 +849,7 @@ struct SharedAlbumRow: View {
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [.blue.opacity(0.3), .clear],
+                            colors: [palette.accent.opacity(0.3), .clear],
                             center: .center,
                             startRadius: 0,
                             endRadius: 24
@@ -808,7 +862,7 @@ struct SharedAlbumRow: View {
                     .font(.system(size: 20))
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [.blue, .purple],
+                            colors: [palette.accent, palette.accent.opacity(0.7)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -974,13 +1028,13 @@ struct SharedAlbumDetailView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showSettings) {
+            .sheet(isPresented: $showSettings, onDismiss: { loadData() }) {
                 SharedAlbumSettingsView(album: album, settings: $albumSettings)
             }
-            .sheet(isPresented: $showParticipants) {
+            .sheet(isPresented: $showParticipants, onDismiss: { loadData() }) {
                 SharedAlbumParticipantsView(album: album)
             }
-            .sheet(isPresented: $showTrash) {
+            .sheet(isPresented: $showTrash, onDismiss: { loadData() }) {
                 SharedAlbumTrashView(album: album)
             }
             .sheet(isPresented: $showActivityFull) {
@@ -1040,7 +1094,7 @@ struct SharedAlbumDetailView: View {
 
             Image(systemName: "lock.fill")
                 .font(.system(size: 48))
-                .foregroundColor(.orange)
+                .foregroundColor(palette.accent)
 
             Text("Pro Feature Required")
                 .font(.title2)
@@ -1061,7 +1115,7 @@ struct SharedAlbumDetailView: View {
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
-                    .background(Color.blue)
+                    .background(palette.accent)
                     .cornerRadius(12)
             }
             .padding(.horizontal, 24)
@@ -1123,12 +1177,20 @@ struct SharedAlbumDetailView: View {
                 ProgressView("Loading recordings...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if recordings.isEmpty {
-                SharedAlbumEmptyState(
-                    isCurrentUserAdmin: album.currentUserRole == .admin,
-                    onAddRecording: {
-                        showAddRecordingInfo = true
-                    }
-                )
+                VStack(spacing: 12) {
+                    SharedAlbumEmptyState(
+                        isCurrentUserAdmin: album.currentUserRole == .admin,
+                        onAddRecording: {
+                            showAddRecordingInfo = true
+                        }
+                    )
+
+                    Text("Share the invite link to add collaborators")
+                        .font(.caption)
+                        .foregroundColor(palette.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
@@ -1273,7 +1335,7 @@ struct SharedAlbumDetailView: View {
                         ForEach(recordingsWithLocation, id: \.recording.id) { item in
                             HStack(spacing: 12) {
                                 Image(systemName: item.sharedInfo.locationSharingMode == .approximate ? "location.circle" : "location.fill")
-                                    .foregroundColor(.purple)
+                                    .foregroundColor(palette.accent)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.recording.title)
@@ -1392,6 +1454,7 @@ struct SharedRecordingDetailView: View {
     @State private var allowDownload: Bool = false
     @State private var isTogglingDownload = false
     @State private var isRevertingDownload = false
+    @State private var showDisableDownloadAlert = false
     @State private var currentUserId: String?
 
     private var isCreator: Bool {
@@ -1485,6 +1548,23 @@ struct SharedRecordingDetailView: View {
             } message: {
                 Text("Control whether others in this shared album can download your recording.\n\n• Stream only: Others can listen but not save a copy\n• Allow download: Others can save a local copy and export")
             }
+            .alert("Disable Downloads?", isPresented: $showDisableDownloadAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Disable", role: .destructive) {
+                    allowDownload = false
+                    toggleDownload(false)
+                }
+            } message: {
+                Text("Other participants will no longer be able to download this recording.")
+            }
+            .alert("Comment Error", isPresented: Binding(
+                get: { commentError != nil },
+                set: { if !$0 { commentError = nil } }
+            )) {
+                Button("OK") { commentError = nil }
+            } message: {
+                Text(commentError ?? "")
+            }
         }
     }
 
@@ -1516,7 +1596,7 @@ struct SharedRecordingDetailView: View {
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.purple)
+                                .background(palette.accent)
                                 .cornerRadius(4)
                         }
                         Spacer()
@@ -1531,7 +1611,8 @@ struct SharedRecordingDetailView: View {
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(palette.textPrimary)
-                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 
@@ -1611,7 +1692,7 @@ struct SharedRecordingDetailView: View {
                 HStack(spacing: 12) {
                     Image(systemName: allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
                         .font(.title3)
-                        .foregroundColor(allowDownload ? .blue : .gray)
+                        .foregroundColor(allowDownload ? palette.accent : palette.textTertiary)
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
@@ -1640,13 +1721,18 @@ struct SharedRecordingDetailView: View {
                             .scaleEffect(0.8)
                     } else {
                         Button {
-                            let newValue = !allowDownload
-                            allowDownload = newValue
-                            toggleDownload(newValue)
+                            if allowDownload {
+                                // Toggling OFF — show confirmation first
+                                showDisableDownloadAlert = true
+                            } else {
+                                // Toggling ON — apply immediately
+                                allowDownload = true
+                                toggleDownload(true)
+                            }
                         } label: {
                             Image(systemName: allowDownload ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 28))
-                                .foregroundColor(allowDownload ? .blue : .gray)
+                                .foregroundColor(allowDownload ? palette.accent : palette.textTertiary)
                         }
                     }
                 }
@@ -1655,7 +1741,7 @@ struct SharedRecordingDetailView: View {
                 HStack(spacing: 12) {
                     Image(systemName: info.allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
                         .font(.title3)
-                        .foregroundColor(info.allowDownload ? .blue : .gray)
+                        .foregroundColor(info.allowDownload ? palette.accent : palette.textTertiary)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(info.allowDownload ? "Download available" : "Stream only")
@@ -1854,15 +1940,15 @@ struct SharedRecordingDetailView: View {
 
             FlowLayout(spacing: 8) {
                 if info.wasImported {
-                    BadgeChip(icon: "square.and.arrow.down", text: "Imported", color: .blue)
+                    BadgeChip(icon: "square.and.arrow.down", text: "Imported", color: palette.accent)
                 }
 
                 if info.recordedWithHeadphones {
-                    BadgeChip(icon: "headphones", text: "Headphones", color: .purple)
+                    BadgeChip(icon: "headphones", text: "Headphones", color: palette.accent)
                 }
 
                 if info.isSensitive {
-                    BadgeChip(icon: "eye.slash.fill", text: "Sensitive", color: .orange)
+                    BadgeChip(icon: "eye.slash.fill", text: "Sensitive", color: palette.accent)
                 }
 
                 if info.isVerified {
@@ -1956,31 +2042,37 @@ struct SharedRecordingDetailView: View {
             }
 
             // Input
-            HStack(spacing: 8) {
-                TextField("Add a comment...", text: $newCommentText)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(isSubmittingComment)
-                    .onChange(of: newCommentText) {
-                        if newCommentText.count > 50 {
-                            newCommentText = String(newCommentText.prefix(50))
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    TextField("Add a comment...", text: $newCommentText)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(isSubmittingComment)
+                        .onChange(of: newCommentText) {
+                            if newCommentText.count > 500 {
+                                newCommentText = String(newCommentText.prefix(500))
+                            }
+                        }
+
+                    Button {
+                        submitComment()
+                    } label: {
+                        if isSubmittingComment {
+                            ProgressView()
+                                .frame(width: 20, height: 20)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                                .foregroundColor(
+                                    newCommentText.trimmingCharacters(in: .whitespaces).isEmpty
+                                        ? palette.textTertiary : palette.accent
+                                )
                         }
                     }
-
-                Button {
-                    submitComment()
-                } label: {
-                    if isSubmittingComment {
-                        ProgressView()
-                            .frame(width: 20, height: 20)
-                    } else {
-                        Image(systemName: "paperplane.fill")
-                            .foregroundColor(
-                                newCommentText.trimmingCharacters(in: .whitespaces).isEmpty
-                                    ? palette.textTertiary : palette.accent
-                            )
-                    }
+                    .disabled(newCommentText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmittingComment)
                 }
-                .disabled(newCommentText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmittingComment)
+
+                Text("\(newCommentText.count)/500")
+                    .font(.caption2)
+                    .foregroundColor(newCommentText.count > 450 ? .orange : palette.textTertiary)
             }
 
             // List
@@ -2036,15 +2128,19 @@ struct SharedRecordingDetailView: View {
                 authorName = comment.authorDisplayName
                 newCommentText = ""
             } catch {
-                // CloudKit unavailable (e.g. simulator) — save locally for display
-                let localComment = SharedAlbumComment(
-                    recordingId: recording.id,
-                    authorId: "local",
-                    authorDisplayName: "You",
-                    text: trimmed
-                )
-                comments.append(localComment)
-                newCommentText = ""
+                if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" || appState.isSharedAlbumsDebugMode {
+                    // CloudKit unavailable (e.g. simulator) — save locally for display
+                    let localComment = SharedAlbumComment(
+                        recordingId: recording.id,
+                        authorId: "local",
+                        authorDisplayName: "You",
+                        text: trimmed
+                    )
+                    comments.append(localComment)
+                    newCommentText = ""
+                } else {
+                    commentError = "Could not post comment. Please try again."
+                }
             }
 
             // Always add local activity event for immediate visibility in activity tab
@@ -2199,10 +2295,12 @@ struct CommentRow: View {
         }
         .padding(.vertical, 8)
         .contextMenu {
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
+            if isOwnComment {
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
     }

@@ -9,6 +9,7 @@ import Foundation
 import Observation
 import SwiftUI
 import CoreLocation
+import os
 
 // MARK: - UI Metrics (for Settings to access container geometry)
 
@@ -22,6 +23,8 @@ struct UIMetrics: Equatable {
 @MainActor
 @Observable
 final class AppState {
+    private static let logger = Logger(subsystem: "com.iacompa.sonidea", category: "AppState")
+
     var recordings: [RecordingItem] = []
     var tags: [Tag] = []
     var albums: [Album] = []
@@ -90,6 +93,7 @@ final class AppState {
         loadProjects()
         loadOverdubGroups()
         loadRecordings()
+        validateOverdubGroupIntegrity()
         seedDefaultTagsIfNeeded()
         ensureDraftsAlbum()
         migrateFavTagToFavorite()
@@ -112,6 +116,28 @@ final class AppState {
 
         // Connect shared album manager
         sharedAlbumManager.appState = self
+
+        // Validate shared albums on launch — remove stale shares and enforce access
+        Task { [weak self] in
+            guard let self else { return }
+            // First, enforce subscription-based access (removes all shared albums for free users)
+            await self.enforceSharedAlbumAccess()
+
+            // Then, validate that each remaining shared album's share still exists
+            var staleAlbums: [Album] = []
+            for album in self.albums where album.isShared {
+                let exists = await self.sharedAlbumManager.validateShareExists(for: album)
+                if !exists || self.sharedAlbumManager.shareStale {
+                    Self.logger.info("Removing stale shared album: \(album.name)")
+                    staleAlbums.append(album)
+                    self.sharedAlbumManager.shareStale = false
+                }
+            }
+            for album in staleAlbums {
+                self.removeSharedAlbum(album)
+                self.clearSharedRecordingInfoCache()
+            }
+        }
 
         // Handle Pro access loss - reset Pro-gated settings
         supportManager.onProAccessLost = { [weak self] in
@@ -309,19 +335,18 @@ final class AppState {
     /// Add a recording from raw data, returns success/failure result
     @discardableResult
     func addRecording(from rawData: RawRecordingData) -> AddRecordingResult {
-        print("🎙️ [AppState] Attempting to add recording from: \(rawData.fileURL.lastPathComponent)")
-        print("   Duration: \(rawData.duration)s, Created: \(rawData.createdAt)")
+        Self.logger.debug("Attempting to add recording from: \(rawData.fileURL.lastPathComponent, privacy: .public), duration: \(rawData.duration)s")
 
         // Verify the file exists and is valid before adding
         let fileStatus = AudioDebug.verifyAudioFile(url: rawData.fileURL)
         guard fileStatus.isValid else {
             let errorMsg = fileStatus.errorMessage ?? "Unknown verification error"
-            print("❌ [AppState] Cannot add recording - file verification failed: \(errorMsg)")
+            Self.logger.error("Cannot add recording - file verification failed: \(errorMsg, privacy: .public)")
             AudioDebug.logFileInfo(url: rawData.fileURL, context: "AppState.addRecording - failed verification")
             return .failure(errorMsg)
         }
 
-        print("✅ [AppState] File verified, adding recording: \(rawData.fileURL.lastPathComponent)")
+        Self.logger.info("File verified, adding recording: \(rawData.fileURL.lastPathComponent, privacy: .public)")
 
         let title = "Recording \(nextRecordingNumber)"
         nextRecordingNumber += 1
@@ -341,7 +366,7 @@ final class AppState {
         recordings.insert(recording, at: 0)
         saveRecordings()
 
-        print("✅ [AppState] Recording added successfully: \(title)")
+        Self.logger.info("Recording added successfully: \(title, privacy: .public)")
 
         // Trigger iCloud sync for new recording
         triggerSyncForNewRecording(recording)
@@ -371,7 +396,7 @@ final class AppState {
             )
             updateTranscript(transcript, for: recording.id)
         } catch {
-            print("Auto-transcribe failed: \(error)")
+            Self.logger.error("Auto-transcribe failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -473,12 +498,50 @@ final class AppState {
         recordings[index].modifiedAt = Date()
         saveRecordings()
 
+        // If restoring a layer recording, verify its base still exists
+        if recording.overdubRole == .layer,
+           let baseId = recording.overdubSourceBaseId,
+           !recordings.contains(where: { $0.id == baseId && !$0.isTrashed }) {
+            // Base recording is gone - clear overdub metadata
+            if let restoredIndex = recordings.firstIndex(where: { $0.id == recording.id }) {
+                recordings[restoredIndex].overdubGroupId = nil
+                recordings[restoredIndex].overdubRole = .none
+                recordings[restoredIndex].overdubIndex = nil
+                recordings[restoredIndex].overdubSourceBaseId = nil
+                saveRecordings()
+            }
+        }
+
         // Trigger iCloud sync
         triggerSyncForRecording(recordings[index])
     }
 
     func permanentlyDelete(_ recording: RecordingItem) {
         let recordingId = recording.id
+
+        // Clean up overdub group if this recording belongs to one
+        if let groupId = recording.overdubGroupId,
+           let group = overdubGroup(for: groupId) {
+            // If deleting the base recording, delete all layers too
+            if recording.overdubRole == .base {
+                for layerId in group.layerRecordingIds {
+                    if let layerRec = recordings.first(where: { $0.id == layerId }) {
+                        try? FileManager.default.removeItem(at: layerRec.fileURL)
+                    }
+                    recordings.removeAll { $0.id == layerId }
+                }
+                // Remove the overdub group
+                overdubGroups.removeAll { $0.id == groupId }
+            } else if recording.overdubRole == .layer {
+                // Just remove this layer from the group
+                if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
+                    overdubGroups[groupIndex].layerRecordingIds.removeAll { $0 == recording.id }
+                }
+            }
+            saveOverdubGroups()
+        }
+
+        // Original deletion logic
         try? FileManager.default.removeItem(at: recording.fileURL)
         recordings.removeAll { $0.id == recordingId }
         saveRecordings()
@@ -489,16 +552,54 @@ final class AppState {
 
     func emptyTrash() {
         let trashed = trashedRecordings
+
+        // Clean up overdub groups for trashed recordings
+        let trashedIds = Set(recordings.filter { $0.isTrashed }.map { $0.id })
+        for recording in recordings where recording.isTrashed {
+            if let groupId = recording.overdubGroupId,
+               recording.overdubRole == .base {
+                // Remove the entire group and its layers
+                if let group = overdubGroup(for: groupId) {
+                    for layerId in group.layerRecordingIds where !trashedIds.contains(layerId) {
+                        if let layerRec = recordings.first(where: { $0.id == layerId }) {
+                            try? FileManager.default.removeItem(at: layerRec.fileURL)
+                        }
+                        recordings.removeAll { $0.id == layerId }
+                    }
+                }
+                overdubGroups.removeAll { $0.id == groupId }
+            }
+        }
+
         for recording in trashed {
             try? FileManager.default.removeItem(at: recording.fileURL)
             triggerSyncForDeletion(recording.id)
         }
         recordings.removeAll { $0.isTrashed }
         saveRecordings()
+        saveOverdubGroups()
     }
 
     private func purgeOldTrashedRecordings() {
         let toDelete = recordings.filter { $0.shouldPurge }
+
+        // Clean up overdub groups for purged recordings
+        let purgeIds = Set(toDelete.map { $0.id })
+        for recording in toDelete {
+            if let groupId = recording.overdubGroupId,
+               recording.overdubRole == .base {
+                if let group = overdubGroup(for: groupId) {
+                    for layerId in group.layerRecordingIds where !purgeIds.contains(layerId) {
+                        if let layerRec = recordings.first(where: { $0.id == layerId }) {
+                            try? FileManager.default.removeItem(at: layerRec.fileURL)
+                        }
+                        recordings.removeAll { $0.id == layerId }
+                    }
+                }
+                overdubGroups.removeAll { $0.id == groupId }
+            }
+        }
+
         for recording in toDelete {
             try? FileManager.default.removeItem(at: recording.fileURL)
             triggerSyncForDeletion(recording.id)
@@ -506,6 +607,7 @@ final class AppState {
         recordings.removeAll { $0.shouldPurge }
         if !toDelete.isEmpty {
             saveRecordings()
+            saveOverdubGroups()
         }
     }
 
@@ -514,6 +616,9 @@ final class AppState {
         moveToTrash(recording)
     }
 
+    /// - Important: `offsets` must refer to indices within `activeRecordings` (non-trashed recordings only).
+    ///   Callers using indices from a different source (e.g. `recordings`) will get incorrect results.
+    @available(*, deprecated, message: "Use deleteRecording(_:) instead for safety — index-based deletion is fragile when activeRecordings differs from the caller's list.")
     func deleteRecordings(at offsets: IndexSet) {
         // Now moves to trash instead of permanent delete
         for index in offsets {
@@ -592,8 +697,11 @@ final class AppState {
         tags.removeAll { $0.id == tagId }
         // Remove tag from all recordings
         for i in recordings.indices {
+            let hadTag = recordings[i].tagIDs.contains(tagId)
             recordings[i].tagIDs.removeAll { $0 == tagId }
-            recordings[i].modifiedAt = Date()
+            if hadTag {
+                recordings[i].modifiedAt = Date()
+            }
         }
         saveTags()
         saveRecordings()
@@ -819,7 +927,7 @@ final class AppState {
                     }
                 } catch {
                     // Log error but continue - we'll remove from local state anyway
-                    print("Failed to leave shared album \(album.name): \(error.localizedDescription)")
+                    Self.logger.error("Failed to leave shared album \(album.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
 
                 // Remove from local state
@@ -879,7 +987,7 @@ final class AppState {
             do {
                 try await sharedAlbumManager.addRecordingToSharedAlbum(recording: updated, album: album)
             } catch {
-                print("Failed to sync recording to shared album: \(error)")
+                Self.logger.error("Failed to sync recording to shared album: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -1004,9 +1112,10 @@ final class AppState {
         var updatedInfo = sharedInfo
         updatedInfo.locationSharingMode = mode
         if mode != .none, let lat = recording.latitude, let lon = recording.longitude {
-            let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: mode)
-            updatedInfo.sharedLatitude = approx.latitude
-            updatedInfo.sharedLongitude = approx.longitude
+            if let approx = SharedRecordingItem.approximateLocation(latitude: lat, longitude: lon, mode: mode) {
+                updatedInfo.sharedLatitude = approx.latitude
+                updatedInfo.sharedLongitude = approx.longitude
+            }
             updatedInfo.sharedPlaceName = recording.locationLabel
         } else {
             updatedInfo.sharedLatitude = nil
@@ -1093,7 +1202,9 @@ final class AppState {
         // Fetch participants
         let participants = await sharedAlbumManager.fetchParticipants(for: album)
         if !participants.isEmpty {
-            var updatedAlbum = album
+            // Get the latest version after settings were updated
+            let latestAlbum = self.albums.first(where: { $0.id == album.id }) ?? album
+            var updatedAlbum = latestAlbum
             updatedAlbum.participants = participants
             updatedAlbum.participantCount = participants.count
             updateSharedAlbum(updatedAlbum)
@@ -1103,7 +1214,7 @@ final class AppState {
         do {
             try await sharedAlbumManager.purgeExpiredTrashItems(for: album)
         } catch {
-            print("Failed to purge expired trash items: \(error)")
+            Self.logger.error("Failed to purge expired trash items: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1842,13 +1953,15 @@ final class AppState {
         // Reset settings and theme to defaults
         appSettings = .default
         selectedTheme = .system
+        appearanceMode = .system
 
         // Clear ALL UserDefaults for a clean slate
         let allKeys = [
             recordingsKey, tagsKey, albumsKey, projectsKey,
             overdubGroupsKey, nextNumberKey, selectedThemeKey,
             appSettingsKey, draftsMigrationKey, tagMigrationKey,
-            recordButtonPosXKey, recordButtonPosYKey
+            recordButtonPosXKey, recordButtonPosYKey,
+            appearanceModeKey, recordButtonHasStoredKey
         ]
         for key in allKeys {
             UserDefaults.standard.removeObject(forKey: key)
@@ -1948,6 +2061,34 @@ final class AppState {
         saveRecordings()
     }
 
+    /// Remove the last layer from an overdub group
+    func removeLayerFromOverdubGroup(groupId: UUID) {
+        guard var group = overdubGroup(for: groupId),
+              let lastLayerId = group.layerRecordingIds.last else { return }
+
+        // Delete the layer's audio file
+        if let layerRec = recordings.first(where: { $0.id == lastLayerId }) {
+            try? FileManager.default.removeItem(at: layerRec.fileURL)
+        }
+
+        // Remove layer recording from storage
+        recordings.removeAll { $0.id == lastLayerId }
+
+        // Remove from group
+        group.layerRecordingIds.removeLast()
+
+        // Update group in storage
+        if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
+            overdubGroups[groupIndex] = group
+        }
+
+        // If no layers left, optionally keep the group or remove it
+        // Keep the group so user can add new layers
+
+        saveOverdubGroups()
+        saveRecordings()
+    }
+
     /// Check if a recording can have overdub layers added
     func canAddOverdubLayer(to recording: RecordingItem) -> Bool {
         // Overdub is a premium feature
@@ -1973,6 +2114,42 @@ final class AppState {
         if let index = recordings.firstIndex(where: { $0.id == recordingId }) {
             recordings[index].overdubOffsetSeconds = offsetSeconds
             saveRecordings()
+        }
+    }
+
+    /// Remove overdub groups whose base recording no longer exists
+    private func validateOverdubGroupIntegrity() {
+        let recordingIds = Set(recordings.map { $0.id })
+        let invalidGroups = overdubGroups.filter { !recordingIds.contains($0.baseRecordingId) }
+
+        if !invalidGroups.isEmpty {
+            // Clean up layer recordings for invalid groups
+            for group in invalidGroups {
+                for layerId in group.layerRecordingIds {
+                    if let layerRec = recordings.first(where: { $0.id == layerId }) {
+                        try? FileManager.default.removeItem(at: layerRec.fileURL)
+                    }
+                    recordings.removeAll { $0.id == layerId }
+                }
+            }
+
+            overdubGroups.removeAll { !recordingIds.contains($0.baseRecordingId) }
+            saveOverdubGroups()
+            saveRecordings()
+            Self.logger.info("Cleaned up \(invalidGroups.count) orphaned overdub groups")
+        }
+
+        // Also clean up layer references that point to missing recordings
+        var needsSave = false
+        for i in overdubGroups.indices {
+            let originalCount = overdubGroups[i].layerRecordingIds.count
+            overdubGroups[i].layerRecordingIds.removeAll { !recordingIds.contains($0) }
+            if overdubGroups[i].layerRecordingIds.count != originalCount {
+                needsSave = true
+            }
+        }
+        if needsSave {
+            saveOverdubGroups()
         }
     }
 }
@@ -2004,6 +2181,7 @@ extension AppState {
     }
 }
 
+#if DEBUG
 // MARK: - Debug Mode for Shared Albums Testing
 
 extension AppState {
@@ -2300,9 +2478,10 @@ extension AppState {
     }
 }
 
-// Safe array subscript extension
+// Safe array subscript extension (used by debug mock data)
 private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
 }
+#endif

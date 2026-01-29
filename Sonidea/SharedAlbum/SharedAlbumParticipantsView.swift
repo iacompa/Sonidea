@@ -24,6 +24,7 @@ struct SharedAlbumParticipantsView: View {
     @State private var errorMessage: String?
     @State private var sharingController: UICloudSharingController?
     @State private var showSharingSheet = false
+    @State private var currentUserId: String?
 
     var body: some View {
         NavigationStack {
@@ -56,6 +57,7 @@ struct SharedAlbumParticipantsView: View {
                             Image(systemName: "person.badge.plus")
                         }
                         .foregroundColor(palette.accent)
+                        .accessibilityLabel("Add participant")
                     }
                 }
             }
@@ -122,7 +124,7 @@ struct SharedAlbumParticipantsView: View {
             ForEach(participants) { participant in
                 ParticipantRow(
                     participant: participant,
-                    isCurrentUser: participant.role == .admin && album.isOwner,
+                    isCurrentUser: participant.id == currentUserId,
                     canManage: album.canManageParticipants && participant.role != .admin,
                     onRoleTapped: {
                         selectedParticipant = participant
@@ -141,8 +143,10 @@ struct SharedAlbumParticipantsView: View {
     private func loadParticipants() {
         isLoading = true
         Task {
+            let userId = await appState.sharedAlbumManager.getCurrentUserId()
             let fetched = await appState.sharedAlbumManager.fetchParticipants(for: album)
             await MainActor.run {
+                currentUserId = userId
                 if fetched.isEmpty, let cached = album.participants, !cached.isEmpty {
                     // Use cached participants when CloudKit fetch returns empty
                     participants = cached
@@ -211,12 +215,14 @@ struct SharedAlbumParticipantsView: View {
 
     private func showShareSheet() {
         appState.sharedAlbumManager.prepareSharingController(for: album) { controller in
-            guard let controller = controller else {
-                errorMessage = "Could not prepare sharing. Please try again."
-                return
+            DispatchQueue.main.async {
+                guard let controller = controller else {
+                    errorMessage = "Could not prepare sharing. Please try again."
+                    return
+                }
+                sharingController = controller
+                showSharingSheet = true
             }
-            sharingController = controller
-            showSharingSheet = true
         }
     }
 }
@@ -247,6 +253,7 @@ struct ParticipantRow: View {
                         .font(.body)
                         .fontWeight(.medium)
                         .foregroundColor(palette.textPrimary)
+                        .lineLimit(1)
 
                     if isCurrentUser {
                         Text("(You)")
@@ -289,6 +296,7 @@ struct ParticipantRow: View {
                         .font(.title3)
                         .foregroundColor(palette.textSecondary)
                 }
+                .accessibilityLabel("Participant options")
             }
         }
         .padding(.vertical, 4)
@@ -298,6 +306,8 @@ struct ParticipantRow: View {
 // MARK: - Participant Avatar
 
 struct ParticipantAvatar: View {
+    @Environment(\.themePalette) private var palette
+
     let initials: String
     let isAdmin: Bool
 
@@ -306,7 +316,7 @@ struct ParticipantAvatar: View {
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: isAdmin ? [.blue, .purple] : [.gray, .gray.opacity(0.7)],
+                        colors: isAdmin ? [palette.accent, palette.accent.opacity(0.7)] : [palette.textSecondary, palette.textSecondary.opacity(0.7)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -330,13 +340,15 @@ struct ParticipantAvatar: View {
 // MARK: - Role Badge
 
 struct RoleBadge: View {
+    @Environment(\.themePalette) private var palette
+
     let role: ParticipantRole
 
     var backgroundColor: Color {
         switch role {
-        case .admin: return .blue
+        case .admin: return palette.accent
         case .member: return .green
-        case .viewer: return .gray
+        case .viewer: return palette.textTertiary
         }
     }
 
@@ -349,6 +361,7 @@ struct RoleBadge: View {
             .padding(.vertical, 3)
             .background(backgroundColor)
             .cornerRadius(4)
+            .accessibilityLabel("\(role.displayName) role")
     }
 }
 
@@ -401,7 +414,7 @@ struct RoleSelectionSheet: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
                                             .stroke(
-                                                role == participant.role ? Color.blue : Color.clear,
+                                                role == participant.role ? palette.accent : Color.clear,
                                                 lineWidth: 2
                                             )
                                     )

@@ -122,7 +122,20 @@ final class AudioExporter {
     func exportToWAV(recording: RecordingItem) async throws -> URL {
         // Check cache first (using UUID for internal caching)
         let cachedURL = wavCacheDirectory.appendingPathComponent("\(recording.id.uuidString).wav")
-        if !FileManager.default.fileExists(atPath: cachedURL.path) {
+
+        // Invalidate cache if source file is newer than cached WAV
+        var needsConversion = !FileManager.default.fileExists(atPath: cachedURL.path)
+        if !needsConversion {
+            let sourceAttrs = try? FileManager.default.attributesOfItem(atPath: recording.fileURL.path)
+            let cacheAttrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path)
+            let sourceModDate = sourceAttrs?[.modificationDate] as? Date
+            let cacheModDate = cacheAttrs?[.modificationDate] as? Date
+            if let srcDate = sourceModDate, let cacheDate = cacheModDate, srcDate > cacheDate {
+                needsConversion = true
+            }
+        }
+
+        if needsConversion {
             // Convert to WAV and cache
             _ = try await convertToWAV(sourceURL: recording.fileURL, outputURL: cachedURL)
         }
@@ -280,16 +293,6 @@ final class AudioExporter {
                     // Remove existing output file
                     try? FileManager.default.removeItem(at: outputURL)
 
-                    let asset = AVURLAsset(url: sourceURL)
-
-                    guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
-                        // Fallback: manual conversion
-                        try self.manualConvertToWAV(sourceURL: sourceURL, outputURL: outputURL)
-                        continuation.resume(returning: outputURL)
-                        return
-                    }
-
-                    // AVAssetExportSession doesn't support WAV directly, use manual conversion
                     try self.manualConvertToWAV(sourceURL: sourceURL, outputURL: outputURL)
                     continuation.resume(returning: outputURL)
                 } catch {
@@ -344,7 +347,13 @@ final class AudioExporter {
             }
 
             var error: NSError?
+            var hasProvidedData = false
             let status = converter.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
+                if hasProvidedData {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                hasProvidedData = true
                 outStatus.pointee = .haveData
                 return buffer
             }
@@ -363,16 +372,21 @@ final class AudioExporter {
     private func createZIP(from sourceDirectory: URL, to destinationURL: URL) throws {
         let coordinator = NSFileCoordinator()
         var coordinatorError: NSError?
+        var copyError: Error?
 
         coordinator.coordinate(readingItemAt: sourceDirectory, options: .forUploading, error: &coordinatorError) { zipURL in
             do {
                 try FileManager.default.copyItem(at: zipURL, to: destinationURL)
             } catch {
-                // Ignore copy errors, the file might already exist
+                copyError = error
             }
         }
 
         if let error = coordinatorError {
+            throw error
+        }
+
+        if let error = copyError {
             throw error
         }
 

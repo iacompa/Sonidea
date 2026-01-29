@@ -34,6 +34,7 @@ struct OverdubSessionView: View {
     @State private var showHeadphonesAlert = false
     @State private var showMaxLayersAlert = false
     @State private var showDiscardConfirmation = false
+    @State private var showRecordingCloseConfirmation = false
     @State private var showSaveConfirmation = false
     @State private var errorMessage: String?
     @State private var showErrorAlert = false
@@ -105,6 +106,7 @@ struct OverdubSessionView: View {
             .confirmationDialog("Discard Recording?", isPresented: $showDiscardConfirmation) {
                 Button("Discard", role: .destructive) {
                     discardRecording()
+                    engine.cleanup()
                     dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
@@ -117,6 +119,22 @@ struct OverdubSessionView: View {
                 }
             } message: {
                 Text(errorMessage ?? "An unknown error occurred.")
+            }
+            .alert("Stop Recording?", isPresented: $showRecordingCloseConfirmation) {
+                Button("Stop & Close", role: .destructive) {
+                    stopRecording()
+                    // Discard the partial recording
+                    if let url = recordedLayerURL {
+                        try? FileManager.default.removeItem(at: url)
+                    }
+                    recordedLayerURL = nil
+                    recordedLayerDuration = 0
+                    engine.cleanup()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Recording in progress. Stopping will discard the current layer.")
             }
             .onAppear {
                 setupSession()
@@ -155,7 +173,8 @@ struct OverdubSessionView: View {
                 HStack(spacing: 6) {
                     Image(systemName: AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "headphones" : "headphones.slash")
                         .font(.system(size: 14))
-                        .foregroundColor(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? .green : .red)
+                        .foregroundColor(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? .green : palette.recordButton)
+                        .accessibilityLabel(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "Headphones connected" : "Headphones not connected")
 
                     Text(AudioSessionManager.shared.isHeadphoneMonitoringActive() ? "Connected" : "No Headphones")
                         .font(.caption)
@@ -233,6 +252,7 @@ struct OverdubSessionView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isRecording)
+                .accessibilityLabel(engine.state == .playing ? "Pause base track" : "Play base track")
             }
             .padding()
             .background(
@@ -368,12 +388,13 @@ struct OverdubSessionView: View {
                     .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(isPrepared && !isStartingRecording ? Color.red : Color.red.opacity(0.4))
+                            .fill(isPrepared && !isStartingRecording ? palette.recordButton : palette.recordButton.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
                 .disabled(!isPrepared || isStartingRecording)
                 .opacity(isPrepared ? 1.0 : 0.6)
+                .accessibilityLabel("Record new layer")
 
                 if !isPrepared {
                     HStack(spacing: 6) {
@@ -420,7 +441,7 @@ struct OverdubSessionView: View {
             // Recording indicator
             HStack(spacing: 10) {
                 Circle()
-                    .fill(Color.red)
+                    .fill(palette.liveRecordingAccent)
                     .frame(width: 12, height: 12)
 
                 Text("Recording Layer \(existingLayers.count + 1)")
@@ -431,22 +452,22 @@ struct OverdubSessionView: View {
 
                 Text(formatDuration(engine.recordingDuration))
                     .font(.system(size: 24, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color.red)
+                    .foregroundColor(palette.liveRecordingAccent)
             }
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.red.opacity(0.1))
+                    .fill(palette.recordButton.opacity(0.1))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                            .stroke(palette.recordButton.opacity(0.3), lineWidth: 1)
                     )
             )
 
             // Level meter
             ProgressView(value: Double(engine.meterLevel))
                 .progressViewStyle(.linear)
-                .tint(engine.meterLevel > 0.9 ? .red : .green)
+                .tint(engine.meterLevel > 0.9 ? palette.recordButton : .green)
 
             // Stop button
             Button {
@@ -467,6 +488,7 @@ struct OverdubSessionView: View {
                 )
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Stop recording")
         }
     }
 
@@ -551,6 +573,7 @@ struct OverdubSessionView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Discard recorded layer")
 
                 Button {
                     saveRecording()
@@ -566,6 +589,7 @@ struct OverdubSessionView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Save recorded layer")
             }
         }
     }
@@ -629,6 +653,13 @@ struct OverdubSessionView: View {
     // MARK: - Actions
 
     private func setupSession() {
+        // Guard against concurrent recording
+        if appState.recorder.isRecording {
+            errorMessage = "Cannot start overdub while a recording is in progress. Please stop the current recording first."
+            showErrorAlert = true
+            return
+        }
+
         print("🎙️ [OverdubSessionView] setupSession() called")
         print("🎙️ [OverdubSessionView] Base recording: \(baseRecording.title)")
         print("🎙️ [OverdubSessionView] Base URL: \(baseRecording.fileURL)")
@@ -694,6 +725,8 @@ struct OverdubSessionView: View {
     }
 
     private func startRecording() {
+        guard !isStartingRecording && !isRecording else { return }
+
         // Check max layers
         guard existingLayers.count < OverdubGroup.maxLayers else {
             showMaxLayersAlert = true
@@ -834,7 +867,8 @@ struct OverdubSessionView: View {
 
     private func handleClose() {
         if isRecording {
-            stopRecording()
+            showRecordingCloseConfirmation = true
+            return
         }
 
         if recordedLayerURL != nil {
@@ -880,7 +914,7 @@ struct OverdubSessionView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let ext = appState.appSettings.recordingQuality.fileExtension
-        let filename = "overdub_layer_\(formatter.string(from: Date())).\(ext)"
+        let filename = "overdub_layer_\(formatter.string(from: Date()))_\(UUID().uuidString.prefix(6)).\(ext)"
         return documentsPath.appendingPathComponent(filename)
     }
 

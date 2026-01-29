@@ -32,6 +32,7 @@ struct SharedRecordingRow: View {
                             .fontWeight(.medium)
                             .foregroundColor(palette.textPrimary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
 
                         // Badges
                         badgesRow
@@ -72,6 +73,7 @@ struct SharedRecordingRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundColor(palette.textTertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.vertical, 8)
             .contentShape(Rectangle())
@@ -105,6 +107,7 @@ struct SharedRecordingRow: View {
                     .offset(x: 14, y: 14)
             }
         }
+        .accessibilityLabel("Recording: \(recording.title)")
     }
 
     @ViewBuilder
@@ -122,16 +125,24 @@ if sharedInfo?.isVerified == true {
                 RecordingBadge(badge: .verified)
             }
 
+            if sharedInfo?.isSensitive == true {
+                RecordingBadge(badge: .sensitive)
+            }
+
             if sharedInfo?.hasSharedLocation == true {
                 RecordingBadge(badge: .location)
             }
         }
     }
 
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     private var relativeDate: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: recording.createdAt, relativeTo: Date())
+        Self.relativeDateFormatter.localizedString(for: recording.createdAt, relativeTo: Date())
     }
 }
 

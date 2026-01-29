@@ -30,6 +30,31 @@ struct SharedAlbumActivityView: View {
                 // Category filter
                 categoryFilter
 
+                // Active filter indicator
+                if selectedCategory != .all {
+                    HStack(spacing: 6) {
+                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(palette.accent)
+                        Text("Filtered: \(selectedCategory.displayName) (\(filteredEvents.count))")
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                        Spacer()
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedCategory = .all
+                            }
+                        } label: {
+                            Text("Clear")
+                                .font(.caption)
+                                .foregroundColor(palette.accent)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .background(palette.accent.opacity(0.08))
+                }
+
                 // Events list
                 if isLoading {
                     Spacer()
@@ -119,6 +144,7 @@ struct SharedAlbumActivityView: View {
                             ActivityEventRow(event: event)
                                 .padding(.horizontal)
                                 .padding(.vertical, 8)
+                                .frame(minHeight: 44)
 
                             if event.id != dayEvents.last?.id {
                                 Divider()
@@ -147,10 +173,15 @@ struct SharedAlbumActivityView: View {
         .background(palette.background)
     }
 
+    private static let groupDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
     private var groupedEvents: [(String, [SharedAlbumActivityEvent])] {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
+        let formatter = Self.groupDateFormatter
 
         let today = formatter.string(from: Date())
         let yesterday = formatter.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date())
@@ -258,13 +289,15 @@ struct ActivityEventRow: View {
                     .font(.system(size: 14))
                     .foregroundColor(event.eventType.iconColor)
             }
+            .accessibilityLabel(accessibilityLabelForEventType(event.eventType))
 
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 Text(event.displayMessage)
                     .font(.subheadline)
                     .foregroundColor(palette.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
 
                 Text(event.relativeTime)
                     .font(.caption)
@@ -272,6 +305,36 @@ struct ActivityEventRow: View {
             }
 
             Spacer()
+        }
+        .frame(minHeight: 44)
+    }
+
+    private func accessibilityLabelForEventType(_ eventType: ActivityEventType) -> String {
+        switch eventType {
+        case .recordingAdded: return "Recording added"
+        case .recordingDeleted: return "Recording deleted"
+        case .recordingRestored: return "Recording restored"
+        case .recordingRenamed: return "Recording renamed"
+        case .recordingMarkedSensitive: return "Recording marked sensitive"
+        case .recordingUnmarkedSensitive: return "Recording unmarked sensitive"
+        case .sensitiveRecordingApproved: return "Sensitive recording approved"
+        case .sensitiveRecordingRejected: return "Sensitive recording rejected"
+        case .locationEnabled: return "Location enabled"
+        case .locationDisabled: return "Location disabled"
+        case .locationModeChanged: return "Location mode changed"
+        case .participantJoined: return "Participant joined"
+        case .participantLeft: return "Participant left"
+        case .participantRemoved: return "Participant removed"
+        case .participantRoleChanged: return "Participant role changed"
+        case .settingAllowDeletesChanged: return "Settings changed"
+        case .settingTrashRestoreChanged: return "Settings changed"
+        case .settingLocationDefaultChanged: return "Settings changed"
+        case .settingRetentionDaysChanged: return "Settings changed"
+        case .albumRenamed: return "Album renamed"
+        case .recordingDownloadEnabled: return "Download enabled"
+        case .recordingDownloadDisabled: return "Download disabled"
+        case .commentAdded: return "Comment added"
+        case .commentDeleted: return "Comment deleted"
         }
     }
 }
@@ -312,11 +375,13 @@ struct SharedAlbumActivityPreview: View {
                                 .font(.caption)
                                 .foregroundColor(event.eventType.iconColor)
                                 .frame(width: 20)
+                                .accessibilityHidden(true)
 
                             Text(event.displayMessage)
                                 .font(.caption)
                                 .foregroundColor(palette.textSecondary)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
 
                             Spacer()
 
