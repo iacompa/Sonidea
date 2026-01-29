@@ -172,6 +172,41 @@ final class OverdubEngine {
         print("🎙️ [OverdubEngine] Prepared with base: \(baseFileURL.lastPathComponent), \(layerFileURLs.count) layers")
     }
 
+    /// Prepare the engine for preview playback including an unsaved layer
+    func prepareForPreview(
+        baseFileURL: URL,
+        baseDuration: TimeInterval,
+        existingLayerURLs: [URL],
+        existingLayerOffsets: [TimeInterval],
+        previewLayerURL: URL,
+        previewLayerOffset: TimeInterval,
+        quality: RecordingQualityPreset,
+        settings: AppSettings
+    ) throws {
+        var allURLs = existingLayerURLs
+        allURLs.append(previewLayerURL)
+        var allOffsets = existingLayerOffsets
+        allOffsets.append(previewLayerOffset)
+        try prepare(
+            baseFileURL: baseFileURL,
+            baseDuration: baseDuration,
+            layerFileURLs: allURLs,
+            layerOffsets: allOffsets,
+            quality: quality,
+            settings: settings
+        )
+    }
+
+    /// Update the preview layer offset (last layer) and restart playback if active
+    func updatePreviewOffset(_ offset: TimeInterval) {
+        guard !layerOffsets.isEmpty else { return }
+        layerOffsets[layerOffsets.count - 1] = offset
+        if state == .playing {
+            currentPlaybackTime = 0
+            play()
+        }
+    }
+
     // MARK: - Playback Control
 
     /// Start playing the base track (and layers) for reference

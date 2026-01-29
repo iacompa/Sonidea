@@ -209,7 +209,7 @@ struct ThemePalette: Equatable {
         separator: Color(.separator),
         stroke: Color(.systemGray4),
         accent: Color.accentColor,
-        recordButton: Color.red,
+        recordButton: Color.fromHex("#ED363B"),
         useMaterials: true,
         listRowBackground: Color.clear,
         cardBackground: Color(.systemBackground),
@@ -251,7 +251,7 @@ struct ThemePalette: Equatable {
         separator: Color(.separator),
         stroke: Color(.systemGray4),
         accent: Color.accentColor,
-        recordButton: Color.red,
+        recordButton: Color.fromHex("#ED363B"),
         useMaterials: true,
         listRowBackground: Color.clear,
         cardBackground: Color(.systemBackground),
@@ -293,7 +293,7 @@ struct ThemePalette: Equatable {
         separator: Color.fromHex("#444687"),
         stroke: Color.fromHex("#444687"),
         accent: Color.fromHex("#9B8CFF"),  // Light purple accent
-        recordButton: Color.fromHex("#FF6B6B"),  // Coral red
+        recordButton: Color.fromHex("#ED363B"),  // Sonidea red
         useMaterials: false,
         listRowBackground: Color.clear,  // Clear so background shows through uniformly
         cardBackground: Color.fromHex("#2E265A"),
@@ -335,7 +335,7 @@ struct ThemePalette: Equatable {
         separator: Color.fromHex("#D8D0C2"),
         stroke: Color.fromHex("#D8D0C2"),
         accent: Color.fromHex("#C4956A"),  // Warm amber/brown accent
-        recordButton: Color.fromHex("#D4644A"),  // Warm terracotta red
+        recordButton: Color.fromHex("#ED363B"),  // Sonidea red
         useMaterials: false,
         listRowBackground: Color.clear,  // Clear so background shows through uniformly
         cardBackground: Color.fromHex("#FFFFFF"),
@@ -384,7 +384,7 @@ struct ThemePalette: Equatable {
 
         // Accent (Logic-like periwinkle)
         accent: Color.fromHex("#7B8AF4"),               // periwinkle / selection highlight
-        recordButton: Color.fromHex("#FF3B30"),         // standard iOS record red
+        recordButton: Color.fromHex("#ED363B"),         // Sonidea red
 
         useMaterials: false,
 
@@ -447,7 +447,7 @@ struct ThemePalette: Equatable {
 
         // FL orange accent
         accent: Color.fromHex("#F29A2E"),               // FL orange highlight
-        recordButton: Color.fromHex("#FF3B30"),         // standard iOS record red
+        recordButton: Color.fromHex("#ED363B"),         // Sonidea red
 
         useMaterials: false,
 
@@ -510,7 +510,7 @@ struct ThemePalette: Equatable {
 
         // Teal/mint accent (Pro Tools LED vibe)
         accent: Color.fromHex("#29D3C3"),               // teal/mint highlight
-        recordButton: Color.fromHex("#FF3B30"),         // standard iOS record red
+        recordButton: Color.fromHex("#ED363B"),         // Sonidea red
 
         useMaterials: false,
 

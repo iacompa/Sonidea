@@ -28,7 +28,7 @@ struct OverdubSessionView: View {
 
     @State private var isRecording = false
     @State private var isPrepared = false
-    @State private var recordedLayerURL: URL?*78740/
+    @State private var recordedLayerURL: URL?
     
     @State private var recordedLayerDuration: TimeInterval = 0
 
@@ -43,6 +43,7 @@ struct OverdubSessionView: View {
     @State private var isStartingRecording = false  // Brief wait during Bluetooth route setup
     @State private var offsetSliderValue: Double = 0 // For sync adjustment
     @State private var showOffsetSlider = false
+    @State private var isPreviewing = false
 
     var body: some View {
         NavigationStack {
@@ -160,6 +161,11 @@ struct OverdubSessionView: View {
                         recordedLayerURL = nil
                         recordedLayerDuration = 0
                     }
+                }
+                // Reset preview state when playback ends naturally
+                if oldValue == .playing && newValue == .idle && isPreviewing {
+                    isPreviewing = false
+                    prepareEngine()
                 }
             }
         }
@@ -537,9 +543,14 @@ struct OverdubSessionView: View {
                 .buttonStyle(.plain)
 
                 if showOffsetSlider {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 8) {
                         Slider(value: $offsetSliderValue, in: -0.5...0.5, step: 0.01)
                             .tint(palette.accent)
+                            .onChange(of: offsetSliderValue) {
+                                if isPreviewing {
+                                    engine.updatePreviewOffset(offsetSliderValue)
+                                }
+                            }
 
                         HStack {
                             Text("-500ms")
@@ -549,6 +560,34 @@ struct OverdubSessionView: View {
                                 .font(.caption2)
                         }
                         .foregroundColor(palette.textTertiary)
+
+                        // Preview playback button
+                        Button {
+                            if isPreviewing {
+                                stopPreview()
+                            } else {
+                                startPreview()
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: isPreviewing ? "stop.fill" : "play.fill")
+                                Text(isPreviewing ? "Stop Preview" : "Preview Mix")
+                            }
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(isPreviewing ? palette.textPrimary : .white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isPreviewing ? palette.surface : palette.accent)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(isPreviewing ? palette.stroke : Color.clear, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -786,7 +825,36 @@ struct OverdubSessionView: View {
         }
     }
 
+    private func startPreview() {
+        guard let layerURL = recordedLayerURL else { return }
+        do {
+            try engine.prepareForPreview(
+                baseFileURL: baseRecording.fileURL,
+                baseDuration: baseRecording.duration,
+                existingLayerURLs: existingLayers.map { $0.fileURL },
+                existingLayerOffsets: existingLayers.map { $0.overdubOffsetSeconds },
+                previewLayerURL: layerURL,
+                previewLayerOffset: offsetSliderValue,
+                quality: appState.appSettings.recordingQuality,
+                settings: appState.appSettings
+            )
+            engine.play()
+            isPreviewing = true
+        } catch {
+            errorMessage = "Failed to preview: \(error.localizedDescription)"
+            showErrorAlert = true
+        }
+    }
+
+    private func stopPreview() {
+        engine.stop()
+        isPreviewing = false
+        prepareEngine()
+    }
+
     private func saveRecording() {
+        if isPreviewing { stopPreview() }
+
         guard let layerURL = recordedLayerURL,
               FileManager.default.fileExists(atPath: layerURL.path) else {
             errorMessage = "Recording file not found. The recording may have been interrupted."
@@ -857,6 +925,8 @@ struct OverdubSessionView: View {
     }
 
     private func discardRecording() {
+        if isPreviewing { stopPreview() }
+
         if let url = recordedLayerURL {
             try? FileManager.default.removeItem(at: url)
         }
