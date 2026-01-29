@@ -207,14 +207,21 @@ struct SharedAlbumActivityView: View {
     private func loadActivity() {
         isLoading = true
         Task {
-            // Use mock data in debug mode
-            if appState.isSharedAlbumsDebugMode {
+            #if DEBUG
+            let useDebugMode = appState.isSharedAlbumsDebugMode
+            #else
+            let useDebugMode = false
+            #endif
+
+            if useDebugMode {
+                #if DEBUG
                 await MainActor.run {
                     let mockEvents = appState.debugMockActivityFeed()
                     let localEvents = appState.localActivityEvents.filter { $0.albumId == album.id }
                     events = (mockEvents + localEvents).sorted { $0.timestamp > $1.timestamp }
                     isLoading = false
                 }
+                #endif
             } else {
                 let fetched = await appState.sharedAlbumManager.fetchActivityFeed(for: album, limit: 100)
                 await MainActor.run {

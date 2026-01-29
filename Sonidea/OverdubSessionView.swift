@@ -28,7 +28,8 @@ struct OverdubSessionView: View {
 
     @State private var isRecording = false
     @State private var isPrepared = false
-    @State private var recordedLayerURL: URL?
+    @State private var recordedLayerURL: URL?*78740/
+    
     @State private var recordedLayerDuration: TimeInterval = 0
 
     @State private var showHeadphonesAlert = false

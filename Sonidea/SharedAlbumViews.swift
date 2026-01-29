@@ -1374,7 +1374,12 @@ struct SharedAlbumDetailView: View {
             }
 
             // Validate share still exists (non-owner)
-            if !album.isOwner && !appState.isSharedAlbumsDebugMode {
+            #if DEBUG
+            let skipValidation = appState.isSharedAlbumsDebugMode
+            #else
+            let skipValidation = false
+            #endif
+            if !album.isOwner && !skipValidation {
                 let valid = await appState.sharedAlbumManager.validateShareExists(for: album)
                 if !valid {
                     await MainActor.run {
@@ -1390,8 +1395,14 @@ struct SharedAlbumDetailView: View {
             // Load recordings
             let albumRecordings = appState.recordings(in: album)
 
-            // In debug mode, use cached shared recording info
-            if appState.isSharedAlbumsDebugMode {
+            #if DEBUG
+            let useDebugMode = appState.isSharedAlbumsDebugMode
+            #else
+            let useDebugMode = false
+            #endif
+
+            if useDebugMode {
+                #if DEBUG
                 await MainActor.run {
                     currentUserId = userId ?? "user_001"  // Debug fallback
                     recordings = albumRecordings
@@ -1405,6 +1416,7 @@ struct SharedAlbumDetailView: View {
                     trashItems = appState.debugMockTrashItems()
                     albumSettings = album.sharedSettings ?? .default
                 }
+                #endif
             } else {
                 // Load shared recording info (creator attribution, location, etc.)
                 let sharedInfos = await appState.sharedAlbumManager.fetchSharedRecordingInfo(for: album)
@@ -1467,7 +1479,11 @@ struct SharedRecordingDetailView: View {
     }
 
     private var isDemoRecording: Bool {
-        appState.isSharedAlbumsDebugMode && !FileManager.default.fileExists(atPath: recording.fileURL.path)
+        #if DEBUG
+        return appState.isSharedAlbumsDebugMode && !FileManager.default.fileExists(atPath: recording.fileURL.path)
+        #else
+        return false
+        #endif
     }
 
     var body: some View {
@@ -2128,7 +2144,12 @@ struct SharedRecordingDetailView: View {
                 authorName = comment.authorDisplayName
                 newCommentText = ""
             } catch {
-                if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" || appState.isSharedAlbumsDebugMode {
+                #if DEBUG
+                let isDebugMode = appState.isSharedAlbumsDebugMode
+                #else
+                let isDebugMode = false
+                #endif
+                if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" || isDebugMode {
                     // CloudKit unavailable (e.g. simulator) — save locally for display
                     let localComment = SharedAlbumComment(
                         recordingId: recording.id,
