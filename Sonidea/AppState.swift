@@ -1644,11 +1644,28 @@ final class AppState {
         let trimmedName = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { return false }
 
+        let oldName = albums[index].name
         albums[index].name = trimmedName
         saveAlbums()
 
         // Trigger iCloud sync for album update
         triggerSyncForAlbumUpdate(albums[index])
+
+        // Sync rename to CloudKit for shared albums
+        if album.isShared {
+            Task {
+                do {
+                    try await sharedAlbumManager.renameSharedAlbum(album, oldName: oldName, newName: trimmedName)
+                } catch {
+                    // Queue for retry on failure — local rename already succeeded
+                    sharedAlbumManager.queuePendingOperation(
+                        type: "renameAlbum",
+                        albumId: album.id,
+                        payload: ["oldName": oldName, "newName": trimmedName]
+                    )
+                }
+            }
+        }
 
         return true
     }

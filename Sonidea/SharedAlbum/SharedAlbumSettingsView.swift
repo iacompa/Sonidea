@@ -24,11 +24,43 @@ struct SharedAlbumSettingsView: View {
     @State private var showLeaveAlbumAlert = false
     @State private var showCopiedToast = false
     @State private var showParticipantsSheet = false
+    @State private var showRenameAlert = false
+    @State private var renameText = ""
     @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
             Form {
+                // MARK: - Album Name
+                if album.canRename {
+                    Section {
+                        Button {
+                            renameText = album.name
+                            showRenameAlert = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "pencil")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Rename Album")
+                                        .foregroundColor(palette.textPrimary)
+                                    Text(album.name)
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                        }
+                    } header: {
+                        Label("Album Name", systemImage: "textformat")
+                    }
+                }
+
                 // MARK: - Sharing Management
                 Section {
                     // Share link
@@ -276,6 +308,19 @@ struct SharedAlbumSettingsView: View {
             }
             .sheet(isPresented: $showParticipantsSheet) {
                 SharedAlbumParticipantsView(album: album)
+            }
+            .alert("Rename Album", isPresented: $showRenameAlert) {
+                TextField("Album name", text: $renameText)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty, trimmed != album.name else { return }
+                    if appState.renameAlbum(album, to: trimmed) {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    }
+                }
+            } message: {
+                Text("Enter a new name for this shared album.")
             }
             .alert("Error", isPresented: Binding(
                 get: { errorMessage != nil },

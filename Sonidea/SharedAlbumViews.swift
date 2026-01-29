@@ -960,12 +960,19 @@ struct SharedAlbumDetailView: View {
     @State private var showLeaveAlbum = false
     @State private var showAddRecordingInfo = false
     @State private var showProRequired = false
+    @State private var showRenameAlert = false
+    @State private var renameText = ""
 
     private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.compactMap { recording in
             guard let info = sharedRecordingInfos[recording.id], info.hasSharedLocation else { return nil }
             return (recording, info)
         }
+    }
+
+    /// Reactive lookup so the navigation title updates after rename
+    private var currentAlbum: Album {
+        appState.albums.first(where: { $0.id == album.id }) ?? album
     }
 
     var body: some View {
@@ -979,7 +986,7 @@ struct SharedAlbumDetailView: View {
                 }
             }
             .background(palette.background)
-            .navigationTitle(album.name)
+            .navigationTitle(currentAlbum.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -992,6 +999,15 @@ struct SharedAlbumDetailView: View {
                 if appState.supportManager.canUseProFeatures {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Menu {
+                            if album.canRename {
+                                Button {
+                                    renameText = currentAlbum.name
+                                    showRenameAlert = true
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                            }
+
                             Button {
                                 showParticipants = true
                             } label: {
@@ -1057,6 +1073,19 @@ struct SharedAlbumDetailView: View {
                 Button("OK") {}
             } message: {
                 Text("To add a recording, go to your recordings list and move a recording into this shared album.")
+            }
+            .alert("Rename Album", isPresented: $showRenameAlert) {
+                TextField("Album name", text: $renameText)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty, trimmed != currentAlbum.name else { return }
+                    if appState.renameAlbum(currentAlbum, to: trimmed) {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    }
+                }
+            } message: {
+                Text("Enter a new name for this shared album.")
             }
             .sheet(item: $selectedRecording) { recording in
                 SharedRecordingDetailView(

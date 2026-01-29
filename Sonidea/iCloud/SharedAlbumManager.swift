@@ -1362,6 +1362,53 @@ final class SharedAlbumManager {
         }
     }
 
+    // MARK: - Album Rename
+
+    /// Rename a shared album in CloudKit and update the CKShare title
+    func renameSharedAlbum(_ album: Album, oldName: String, newName: String) async throws {
+        guard album.isShared && album.isOwner else {
+            throw SharedAlbumError.notOwner
+        }
+
+        logger.info("Renaming shared album from \"\(oldName)\" to \"\(newName)\"")
+        isProcessing = true
+        defer { isProcessing = false }
+
+        let (db, zoneID) = try await databaseAndZone(for: album)
+        let recordID = CKRecord.ID(recordName: album.id.uuidString, zoneID: zoneID)
+
+        do {
+            // Update the SharedAlbum record's name field
+            let record = try await db.record(for: recordID)
+            record["name"] = newName
+            try await db.save(record)
+
+            // Update CKShare title so share metadata reflects the new name
+            if let share = try await getShare(for: album) {
+                share[CKShare.SystemFieldKey.title] = newName
+                try await privateDatabase.save(share)
+            }
+
+            // Log activity
+            let currentUserId = await getCurrentUserId() ?? "unknown"
+            let currentDisplayName = await getCurrentUserDisplayName()
+            let event = SharedAlbumActivityEvent(
+                albumId: album.id,
+                actorId: currentUserId,
+                actorDisplayName: currentDisplayName,
+                eventType: .albumRenamed,
+                oldValue: oldName,
+                newValue: newName
+            )
+            try? await logActivity(event: event, for: album)
+
+            logger.info("Renamed shared album successfully")
+        } catch {
+            logger.error("Failed to rename shared album: \(error.localizedDescription)")
+            throw SharedAlbumError.networkError(error)
+        }
+    }
+
     // MARK: - User Recording Cleanup (Leave/Remove)
 
     /// Remove all SharedRecording CKRecords created by a specific user from a shared album.
@@ -1752,6 +1799,11 @@ final class SharedAlbumManager {
                     if let settingsData = op.payload["settings"]?.data(using: .utf8),
                        let settings = try? JSONDecoder().decode(SharedAlbumSettings.self, from: settingsData) {
                         try await updateAlbumSettings(album: album, settings: settings)
+                    }
+                case "renameAlbum":
+                    if let oldName = op.payload["oldName"],
+                       let newName = op.payload["newName"] {
+                        try await renameSharedAlbum(album, oldName: oldName, newName: newName)
                     }
                 default:
                     logger.warning("Unknown pending operation type: \(op.operationType)")

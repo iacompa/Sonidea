@@ -2482,11 +2482,18 @@ struct AlbumDetailSheet: View {
     @State private var selectedRecording: RecordingItem?
     @State private var showLeaveSheet = false
     @State private var showManageSheet = false
+    @State private var showRenameAlert = false
+    @State private var renameText = ""
 
     private var albumRecordings: [RecordingItem] {
         let recordings = appState.recordings(in: album)
         if selectedTagIDs.isEmpty { return recordings }
         return recordings.filter { !selectedTagIDs.isDisjoint(with: Set($0.tagIDs)) }
+    }
+
+    /// Reactive lookup so the navigation title updates after rename
+    private var currentAlbum: Album {
+        appState.albums.first(where: { $0.id == album.id }) ?? album
     }
 
     var body: some View {
@@ -2549,33 +2556,57 @@ struct AlbumDetailSheet: View {
                     .padding(.top)
                 }
             }
-            .navigationTitle(album.name)
+            .navigationTitle(currentAlbum.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if album.isShared {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Menu {
-                            if album.isOwner {
-                                Button {
-                                    showManageSheet = true
-                                } label: {
-                                    Label("Manage Sharing", systemImage: "person.badge.plus")
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HStack(spacing: 12) {
+                        if album.isShared {
+                            Menu {
+                                if album.isOwner {
+                                    Button {
+                                        showManageSheet = true
+                                    } label: {
+                                        Label("Manage Sharing", systemImage: "person.badge.plus")
+                                    }
+                                } else {
+                                    Button(role: .destructive) {
+                                        showLeaveSheet = true
+                                    } label: {
+                                        Label("Leave Album", systemImage: "person.badge.minus")
+                                    }
                                 }
-                            } else {
-                                Button(role: .destructive) {
-                                    showLeaveSheet = true
-                                } label: {
-                                    Label("Leave Album", systemImage: "person.badge.minus")
-                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
                             }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
+                        }
+
+                        if album.canRename {
+                            Button {
+                                renameText = currentAlbum.name
+                                showRenameAlert = true
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
                         }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .alert("Rename Album", isPresented: $showRenameAlert) {
+                TextField("Album name", text: $renameText)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty, trimmed != currentAlbum.name else { return }
+                    if appState.renameAlbum(currentAlbum, to: trimmed) {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    }
+                }
+            } message: {
+                Text("Enter a new name for this album.")
             }
             .sheet(item: $selectedRecording) { recording in
                 RecordingDetailView(recording: recording)
