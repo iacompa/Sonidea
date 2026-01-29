@@ -464,17 +464,9 @@ struct ContentView: View {
     // MARK: - Move Hint Logic
 
     private func checkTrialNudge() {
-        let sm = appState.supportManager
-        guard case .trial = sm.subscriptionStatus else { return }
-        let nm = appState.trialNudgeManager
-        guard nm.canShowNudge(isRecording: appState.recorder.isRecording, isPlayingBack: false) else { return }
-        guard let nudge = nm.nextNudgeToShow(trialStartDate: sm.trialStartDate) else { return }
-        nm.markShown(nudge)
-        // Slight delay to avoid showing during transitions
-        Task {
-            try? await Task.sleep(for: .milliseconds(500))
-            currentNudge = nudge
-        }
+        // Trial nudges are disabled - trials are now only via StoreKit intro offer
+        // When user is in a trial (annual plan intro offer), they appear as subscribed
+        // No local trial tracking means no nudge system needed
     }
 
     private func handleTrialNudgeCTA(_ action: TrialNudgeCTA) {
@@ -1650,13 +1642,13 @@ struct SearchSheetView: View {
     // MARK: - Calendar Search Content
 
     private var calendarSearchContent: some View {
-        SearchCalendarView(selectedRecording: $selectedRecording)
+        SearchCalendarView(searchQuery: searchQuery, selectedRecording: $selectedRecording)
     }
 
     // MARK: - Timeline Search Content
 
     private var timelineSearchContent: some View {
-        SearchTimelineView(selectedRecording: $selectedRecording)
+        SearchTimelineView(searchQuery: searchQuery, selectedRecording: $selectedRecording)
     }
 
     // MARK: - Recordings Results
@@ -1789,6 +1781,7 @@ struct SearchSheetView: View {
 struct SearchCalendarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
+    let searchQuery: String
     @Binding var selectedRecording: RecordingItem?
 
     @State private var currentMonth: Date = Date()
@@ -1798,7 +1791,17 @@ struct SearchCalendarView: View {
     private let daysOfWeek = ["S", "M", "T", "W", "T", "F", "S"]
 
     private var recordingsByDay: [Date: [RecordingItem]] {
-        Dictionary(grouping: appState.activeRecordings) { recording in
+        let filtered: [RecordingItem]
+        if searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+            filtered = appState.activeRecordings
+        } else {
+            let query = searchQuery.lowercased()
+            filtered = appState.activeRecordings.filter { recording in
+                recording.title.lowercased().contains(query) ||
+                recording.transcript.lowercased().contains(query)
+            }
+        }
+        return Dictionary(grouping: filtered) { recording in
             calendar.startOfDay(for: recording.createdAt)
         }
     }
@@ -2117,11 +2120,19 @@ struct SearchCalendarRecordingRow: View {
 struct SearchTimelineView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.themePalette) private var palette
+    let searchQuery: String
     @Binding var selectedRecording: RecordingItem?
 
     private var timelineGroups: [TimelineGroup] {
-        // Filter out trashed recordings
-        let activeRecordings = appState.recordings.filter { !$0.isTrashed }
+        // Filter out trashed recordings, then apply search query
+        var activeRecordings = appState.recordings.filter { !$0.isTrashed }
+        if !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+            let query = searchQuery.lowercased()
+            activeRecordings = activeRecordings.filter { recording in
+                recording.title.lowercased().contains(query) ||
+                recording.transcript.lowercased().contains(query)
+            }
+        }
         let items = TimelineBuilder.buildTimeline(
             recordings: activeRecordings,
             projects: appState.projects

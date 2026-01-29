@@ -92,6 +92,11 @@ final class PlaybackEngine {
 
             audioSampleRate = file.processingFormat.sampleRate
             audioLengthFrames = file.length
+            guard audioSampleRate > 0 else {
+                // Handle corrupted file with invalid sample rate
+                loadError = .cannotOpenFile(url, NSError(domain: "PlaybackEngine", code: -3, userInfo: [NSLocalizedDescriptionKey: "Audio file has invalid sample rate (0)"]))
+                return
+            }
             duration = Double(audioLengthFrames) / audioSampleRate
             currentTime = 0
             seekFrame = 0

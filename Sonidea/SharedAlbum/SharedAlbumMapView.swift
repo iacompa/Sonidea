@@ -184,6 +184,8 @@ struct SharedAlbumMapView: View {
 // MARK: - Shared Recording Pin
 
 struct SharedRecordingPin: View {
+    @Environment(\.themePalette) private var palette
+
     let initials: String
     let isApproximate: Bool
     let isVerified: Bool
@@ -196,7 +198,7 @@ struct SharedRecordingPin: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: isSelected ? [.blue, .purple] : [.blue.opacity(0.8), .blue],
+                            colors: isSelected ? [palette.accent, .purple] : [palette.accent.opacity(0.8), palette.accent],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -227,7 +229,7 @@ struct SharedRecordingPin: View {
 
             // Pin point
             MapPinTriangle()
-                .fill(isSelected ? Color.purple : Color.blue)
+                .fill(isSelected ? Color.purple : palette.accent)
                 .frame(width: 12, height: 8)
                 .offset(y: -2)
         }
@@ -260,7 +262,7 @@ struct RecordingMapCard: View {
         VStack(spacing: 0) {
             // Handle
             RoundedRectangle(cornerRadius: 2)
-                .fill(Color.gray.opacity(0.3))
+                .fill(palette.textTertiary.opacity(0.3))
                 .frame(width: 36, height: 4)
                 .padding(.top, 8)
 

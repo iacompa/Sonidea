@@ -103,6 +103,13 @@ final class AppState {
         // Connect sync manager
         syncManager.appState = self
 
+        // Auto-enable iCloud sync on launch if previously enabled
+        if appSettings.iCloudSyncEnabled {
+            Task {
+                await syncManager.enableSync()
+            }
+        }
+
         // Connect shared album manager
         sharedAlbumManager.appState = self
 
@@ -614,6 +621,7 @@ final class AppState {
                     newTagIDs.append(destinationTagID)
                 }
                 recordings[i].tagIDs = newTagIDs
+                recordings[i].modifiedAt = Date()
             }
         }
 
@@ -621,11 +629,16 @@ final class AppState {
         for tagID in sourceTagIDs where tagID != destinationTagID {
             if let tag = tag(for: tagID), !tag.isProtected {
                 tags.removeAll { $0.id == tagID }
+                // Trigger iCloud sync for tag deletion
+                triggerSyncForTagDeletion(tagID)
             }
         }
 
         saveTags()
         saveRecordings()
+
+        // Trigger iCloud sync for updated recordings
+        triggerSyncForMetadata()
     }
 
     func moveTag(from source: IndexSet, to destination: Int) {
@@ -819,15 +832,9 @@ final class AppState {
     }
 
     /// Schedule trial expiration notifications if user has shared albums
+    /// Note: Trials are now handled by StoreKit intro offers, not local trial tracking.
     func scheduleSharedAlbumTrialWarningsIfNeeded() {
-        // Only schedule if user is on trial and has shared albums
-        guard supportManager.isTrialActive,
-              !supportManager.isSubscribed,
-              !sharedAlbums.isEmpty else {
-            return
-        }
-
-        supportManager.scheduleSharedAlbumTrialWarnings()
+        // No-op: trials are now handled by StoreKit intro offers
     }
 
     /// Update shared album properties (participant count, etc.)
@@ -1311,18 +1318,26 @@ final class AppState {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) {
                 recordings[i].albumID = album?.id ?? Album.draftsID
+                recordings[i].modifiedAt = Date()
             }
         }
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
     }
 
     func moveRecordingsToTrash(recordingIDs: Set<UUID>) {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) {
                 recordings[i].trashedAt = Date()
+                recordings[i].modifiedAt = Date()
             }
         }
         saveRecordings()
+
+        // Trigger iCloud sync
+        triggerSyncForMetadata()
     }
 
     // MARK: - Import
@@ -1358,6 +1373,9 @@ final class AppState {
 
         recordings.insert(recording, at: 0)
         saveRecordings()
+
+        // Trigger iCloud sync for imported recording
+        triggerSyncForNewRecording(recording)
 
         // Trigger async waveform sampling
         Task {

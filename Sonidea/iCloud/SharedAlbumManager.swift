@@ -1053,6 +1053,18 @@ final class SharedAlbumManager {
 
         let (db, zoneID) = try await databaseAndZone(for: album)
         let recordID = CKRecord.ID(recordName: "comment-\(commentId.uuidString)", zoneID: zoneID)
+
+        // Verify the current user is the comment author before deleting
+        guard let currentUserId = await getCurrentUserId() else {
+            throw SharedAlbumError.notSignedIn
+        }
+        let record = try await db.record(for: recordID)
+        let commentAuthorId = record["authorId"] as? String
+        guard commentAuthorId == currentUserId else {
+            logger.warning("User \(currentUserId) attempted to delete comment authored by \(commentAuthorId ?? "unknown")")
+            throw SharedAlbumError.permissionDenied
+        }
+
         try await db.deleteRecord(withID: recordID)
         logger.debug("Deleted comment \(commentId)")
     }
@@ -1381,9 +1393,20 @@ final class SharedAlbumManager {
         defer { isProcessing = false }
 
         do {
+            // Verify the current user is the recording creator
+            guard let currentUserId = await getCurrentUserId() else {
+                throw SharedAlbumError.notSignedIn
+            }
+
             let (db, zoneID) = try await databaseAndZone(for: album)
             let recordID = CKRecord.ID(recordName: recordingId.uuidString, zoneID: zoneID)
             let record = try await db.record(for: recordID)
+
+            let recordCreatorId = record["creatorId"] as? String
+            guard recordCreatorId == currentUserId else {
+                logger.warning("User \(currentUserId) attempted to toggle download permission on recording owned by \(recordCreatorId ?? "unknown")")
+                throw SharedAlbumError.permissionDenied
+            }
 
             record["allowDownload"] = allow
             try await db.save(record)
@@ -1420,6 +1443,11 @@ final class SharedAlbumManager {
             if info.creatorId != currentUserId && !info.allowDownload {
                 throw SharedAlbumError.downloadNotAllowed
             }
+        } else if album.isShared {
+            // Deny download when sharedInfo is nil in a shared album context,
+            // as we cannot verify download permissions without it
+            logger.warning("fetchRecordingAudio called for shared album without sharedInfo — denying download")
+            throw SharedAlbumError.downloadNotAllowed
         }
 
         // Check local cache first
