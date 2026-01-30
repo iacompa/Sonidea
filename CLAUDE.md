@@ -164,3 +164,17 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 - Added "Copy" button in transcription section to copy full transcript to clipboard
 - Watch recordings renamed from "Watch Rec X" to "⌚️ Recording X"
 - Updated `generateTitle()` in `WatchAppState` with backward compat for old "Watch Rec" prefix
+
+## Audit Fixes (latest session)
+- **Pro gating for Projects**: Added `.projects` case to `ProFeatureContext`; create/add-to-project actions in RecordingDetailView now require Pro
+- **Shared album permissions**: `addRecordingToSharedAlbum` checks `canAddRecordings`; `deleteRecordingFromSharedAlbum` checks `canDeleteAnyRecording`
+- **CloudKit sync safety**: New synced recordings only appended to state after audio file copy succeeds
+- **PlaybackEngine interruption handling**: Pauses on phone call/Siri, resumes when system allows
+- **Watch audio session cleanup**: `WatchPlaybackManager` deactivates audio session on stop/finish
+- **Watch recording error feedback**: Haptic failure feedback when recording fails to start
+- **PhoneConnectivityManager dedup fix**: UUID dedup check moved to main thread to prevent race conditions
+- **Waveform cache eviction**: LRU eviction at 20 entries to prevent unbounded memory growth
+- **EditableWaveformView latency**: Added 50ms latency compensation to match ProWaveformEditor
+- **RecordingGridView iPad**: Adaptive 3-column grid on iPad; sheets converted to iPadSheet
+- **RecordingsListView iPad**: Batch/move/tag sheets converted to iPadSheet
+- **ProofManager safety**: Replaced force unwrap on FileManager.urls with safe fallback

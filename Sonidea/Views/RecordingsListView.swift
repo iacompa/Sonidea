@@ -103,12 +103,12 @@ struct RecordingsListView: View {
         .iPadSheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
         }
-        .sheet(isPresented: $showBatchAlbumPicker) {
+        .iPadSheet(isPresented: $showBatchAlbumPicker) {
             BatchAlbumPickerSheet(selectedRecordingIDs: selectedRecordingIDs) {
                 clearSelection()
             }
         }
-        .sheet(isPresented: $showBatchTagPicker) {
+        .iPadSheet(isPresented: $showBatchTagPicker) {
             BatchTagPickerSheet(selectedRecordingIDs: selectedRecordingIDs) {
                 clearSelection()
             }
@@ -118,12 +118,12 @@ struct RecordingsListView: View {
                 ShareSheet(items: [url])
             }
         }
-        .sheet(isPresented: $showMoveToAlbumSheet) {
+        .iPadSheet(isPresented: $showMoveToAlbumSheet) {
             if let recording = recordingToMove {
                 MoveToAlbumSheet(recording: recording)
             }
         }
-        .sheet(isPresented: $showSingleTagSheet) {
+        .iPadSheet(isPresented: $showSingleTagSheet) {
             if let recording = recordingToTag {
                 SingleRecordingTagSheet(recording: recording)
             }

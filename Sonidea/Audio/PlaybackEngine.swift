@@ -42,7 +42,15 @@ final class PlaybackEngine {
     /// Generation counter to invalidate stale completion handlers after stop/reschedule
     private var playbackGeneration: Int = 0
 
-    init() {}
+    /// Whether playback was active when an audio interruption began
+    private var wasPlayingBeforeInterruption = false
+
+    /// Interruption observer
+    private var interruptionObserver: NSObjectProtocol?
+
+    init() {
+        setupInterruptionHandling()
+    }
 
     // MARK: - Public API
 
@@ -366,6 +374,48 @@ final class PlaybackEngine {
         // Clamp to duration
         if currentTime >= duration {
             currentTime = duration
+        }
+    }
+
+    // MARK: - Interruption Handling
+
+    private func setupInterruptionHandling() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleInterruption(notification)
+            }
+        }
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            if isPlaying {
+                wasPlayingBeforeInterruption = true
+                pause()
+            }
+        case .ended:
+            if wasPlayingBeforeInterruption {
+                wasPlayingBeforeInterruption = false
+                if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    if options.contains(.shouldResume) {
+                        play()
+                    }
+                }
+            }
+        @unknown default:
+            break
         }
     }
 

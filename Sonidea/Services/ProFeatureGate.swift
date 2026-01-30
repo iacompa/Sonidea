@@ -9,6 +9,7 @@ enum ProFeatureContext: String, Identifiable {
     case recordingQuality
     case recordOverTrack
     case watchSync
+    case projects
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum ProFeatureContext: String, Identifiable {
         case .recordingQuality: return "Unlock High Quality Recording"
         case .recordOverTrack: return "Multi-Track Recording"
         case .watchSync: return "Unlock Watch Sync"
+        case .projects: return "Unlock Projects & Versioning"
         }
     }
 
@@ -35,6 +37,7 @@ enum ProFeatureContext: String, Identifiable {
         case .recordingQuality: return "Record in high quality AAC, lossless ALAC, or uncompressed WAV formats."
         case .recordOverTrack: return "Layer recordings on top of existing tracks with the Record Over Track feature. Mix, adjust sync, and create rich audio with up to 3 layers."
         case .watchSync: return "Automatically sync recordings from your Apple Watch to your iPhone. Recordings appear in the ⌚️ Recordings album."
+        case .projects: return "Group recordings into projects with version tracking and best-take marking."
         }
     }
 
@@ -48,6 +51,7 @@ enum ProFeatureContext: String, Identifiable {
         case .recordingQuality: return "dial.high.fill"
         case .recordOverTrack: return "square.stack.3d.up.fill"
         case .watchSync: return "applewatch"
+        case .projects: return "folder.fill"
         }
     }
 }

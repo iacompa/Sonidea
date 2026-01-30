@@ -151,9 +151,11 @@ actor AudioWaveformExtractor {
 
     private let logger = Logger(subsystem: "com.iacompa.sonidea", category: "WaveformExtractor")
 
-    // Cache for extracted waveforms
+    // Cache for extracted waveforms (limited to prevent unbounded memory growth)
     private var waveformCache: [URL: WaveformData] = [:]
     private var silenceCache: [URL: [SilenceRange]] = [:]
+    private var cacheAccessOrder: [URL] = []
+    private let maxCacheEntries = 20
 
     // Configuration
     private let lodLevelCount = 6
@@ -219,18 +221,34 @@ actor AudioWaveformExtractor {
         }
     }
 
+    // MARK: - Cache Eviction
+
+    /// Evict oldest entries when cache exceeds the max size
+    private func evictCacheIfNeeded() {
+        while waveformCache.count >= maxCacheEntries, let oldest = cacheAccessOrder.first {
+            cacheAccessOrder.removeFirst()
+            waveformCache.removeValue(forKey: oldest)
+            silenceCache.removeValue(forKey: oldest)
+        }
+    }
+
     // MARK: - Public API
 
     /// Extract waveform data with LOD pyramid (chunked reading, disk + memory cache)
     func extractWaveform(from url: URL) async throws -> WaveformData {
         // 1. Check memory cache (instant)
         if let cached = waveformCache[url] {
+            cacheAccessOrder.removeAll { $0 == url }
+            cacheAccessOrder.append(url)
             return cached
         }
 
         // 2. Check disk cache (fast — avoids re-reading the audio file)
         if let diskCached = loadFromDiskCache(for: url) {
+            evictCacheIfNeeded()
             waveformCache[url] = diskCached
+            cacheAccessOrder.removeAll { $0 == url }
+            cacheAccessOrder.append(url)
             return diskCached
         }
 
@@ -304,7 +322,10 @@ actor AudioWaveformExtractor {
         )
 
         // 5. Cache in memory + persist to disk
+        evictCacheIfNeeded()
         waveformCache[url] = waveformData
+        cacheAccessOrder.removeAll { $0 == url }
+        cacheAccessOrder.append(url)
         saveToDiskCache(waveformData, for: url)
 
         logger.info("Waveform extracted: \(lodLevels[0].count) samples at LOD0, duration: \(String(format: "%.2f", duration))s")
@@ -610,6 +631,7 @@ actor AudioWaveformExtractor {
     func clearAllCaches() {
         waveformCache.removeAll()
         silenceCache.removeAll()
+        cacheAccessOrder.removeAll()
         try? FileManager.default.removeItem(at: diskCacheDirectory)
     }
 
@@ -620,7 +642,10 @@ actor AudioWaveformExtractor {
         guard loadFromDiskCache(for: url) == nil else {
             // Load disk cache into memory
             if let diskCached = loadFromDiskCache(for: url) {
+                evictCacheIfNeeded()
                 waveformCache[url] = diskCached
+                cacheAccessOrder.removeAll { $0 == url }
+                cacheAccessOrder.append(url)
             }
             return
         }

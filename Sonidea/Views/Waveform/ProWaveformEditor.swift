@@ -208,6 +208,10 @@ struct ProWaveformEditor: View {
     let isPlaying: Bool
     @Binding var isPrecisionMode: Bool
 
+    /// When true, dragging on the waveform body selects a region (sets IN/OUT)
+    /// instead of panning. Panning is still available via pinch-zoom repositioning.
+    let isEditing: Bool
+
     // Callbacks
     let onSeek: (TimeInterval) -> Void
     let onMarkerTap: (Marker) -> Void
@@ -228,6 +232,10 @@ struct ProWaveformEditor: View {
     @State private var rightHandleDragging = false
     @State private var leftHandleDragTime: TimeInterval = 0
     @State private var rightHandleDragTime: TimeInterval = 0
+
+    // Region selection state (drag-to-select in edit mode)
+    @State private var isRegionSelecting = false
+    @State private var regionSelectAnchorTime: TimeInterval = 0
 
     // Height (configurable)
     let waveformHeight: CGFloat
@@ -252,6 +260,7 @@ struct ProWaveformEditor: View {
         currentTime: TimeInterval,
         isPlaying: Bool,
         isPrecisionMode: Binding<Bool>,
+        isEditing: Bool = false,
         waveformHeight: CGFloat = 240,
         onSeek: @escaping (TimeInterval) -> Void,
         onMarkerTap: @escaping (Marker) -> Void,
@@ -268,6 +277,7 @@ struct ProWaveformEditor: View {
         self.currentTime = currentTime
         self.isPlaying = isPlaying
         self._isPrecisionMode = isPrecisionMode
+        self.isEditing = isEditing
         self.waveformHeight = waveformHeight
         self.onSeek = onSeek
         self.onMarkerTap = onMarkerTap
@@ -374,7 +384,10 @@ struct ProWaveformEditor: View {
                     )
                 }
                 .contentShape(Rectangle())
-                .gesture(panGesture(width: width))
+                .gesture(isEditing
+                    ? AnyGesture(regionSelectGesture(width: width).map { _ in })
+                    : AnyGesture(panGesture(width: width).map { _ in })
+                )
                 .gesture(tapGesture(width: width))
                 .gesture(doubleTapGesture(width: width))
                 .simultaneousGesture(zoomGesture)
@@ -548,6 +561,56 @@ struct ProWaveformEditor: View {
             }
             .onEnded { _ in
                 isPanning = false
+            }
+    }
+
+    /// In edit mode, dragging on the waveform body selects a region (sets IN/OUT points).
+    /// Drag from left to right or right to left — the selection always covers the dragged range.
+    /// Auto-scrolls when dragging near the edges of the visible area.
+    private func regionSelectGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 15)
+            .onChanged { value in
+                if !isRegionSelecting {
+                    isRegionSelecting = true
+                    // Anchor = where the drag started
+                    var anchor = timeline.xToTime(value.startLocation.x, width: width)
+                    anchor = max(0, min(anchor, duration))
+                    anchor = timeline.quantize(anchor)
+                    regionSelectAnchorTime = anchor
+                    impactGenerator.impactOccurred(intensity: 0.4)
+                }
+
+                let x = value.location.x
+
+                // Auto-scroll when dragging near edges (within 30pt)
+                let edgeZone: CGFloat = 30
+                let scrollSpeed = timeline.visibleDuration * 0.03  // 3% of visible per frame
+                if x < edgeZone && timeline.visibleStartTime > 0 {
+                    let factor = Double(1 - x / edgeZone)  // 0→1 as you approach edge
+                    timeline.pan(by: -scrollSpeed * factor)
+                } else if x > width - edgeZone && timeline.visibleEndTime < duration {
+                    let factor = Double(1 - (width - x) / edgeZone)
+                    timeline.pan(by: scrollSpeed * factor)
+                }
+
+                // Current drag position (recalculate after potential scroll)
+                var current = timeline.xToTime(x, width: width)
+                current = max(0, min(current, duration))
+                current = timeline.quantize(current)
+
+                // Set selection to cover from anchor to current (either direction)
+                selectionStart = min(regionSelectAnchorTime, current)
+                selectionEnd = max(regionSelectAnchorTime, current)
+            }
+            .onEnded { _ in
+                isRegionSelecting = false
+                // Ensure minimum selection width
+                if selectionEnd - selectionStart < 0.02 {
+                    // Too small — treat as a tap; reset to full range
+                    selectionStart = 0
+                    selectionEnd = duration
+                }
+                impactGenerator.impactOccurred(intensity: 0.3)
             }
     }
 

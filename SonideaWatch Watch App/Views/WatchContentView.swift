@@ -353,7 +353,9 @@ struct WatchContentView: View {
             appState.addRecording(item)
             WatchConnectivityService.shared.transferRecording(item)
         } else {
-            _ = recorder.startRecording()
+            if !recorder.startRecording() {
+                WKInterfaceDevice.current().play(.failure)
+            }
         }
     }
 

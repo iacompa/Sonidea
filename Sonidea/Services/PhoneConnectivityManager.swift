@@ -69,18 +69,19 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             return
         }
 
-        // Dedup check
-        var importedUUIDs = UserDefaults.standard.stringArray(forKey: importedUUIDsKey) ?? []
-        if importedUUIDs.contains(uuidString) {
-            print("PhoneConnectivity: Duplicate recording \(uuidString), skipping")
-            return
-        }
-
         let duration = metadata["duration"] as? TimeInterval ?? 0
         let title = metadata["title"] as? String ?? "Watch Recording"
 
         DispatchQueue.main.async { [weak self] in
             guard let self, let appState = self.appState else { return }
+
+            // Dedup check on main thread to prevent race conditions
+            // when multiple files arrive simultaneously
+            var importedUUIDs = UserDefaults.standard.stringArray(forKey: self.importedUUIDsKey) ?? []
+            if importedUUIDs.contains(uuidString) {
+                print("PhoneConnectivity: Duplicate recording \(uuidString), skipping")
+                return
+            }
 
             // Check Pro + watch sync setting
             guard appState.supportManager.canUseProFeatures,

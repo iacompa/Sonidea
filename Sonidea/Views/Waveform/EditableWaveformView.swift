@@ -382,7 +382,9 @@ struct EditableWaveformView: View {
     // MARK: - Playback Playhead Line (non-edit mode)
 
     private func playbackPlayheadLine(width: CGFloat, height: CGFloat) -> some View {
-        let x = timeToX(currentTime, width: width)
+        // Apply 50ms latency compensation to match ProWaveformEditor
+        let compensatedTime = max(0, currentTime - 0.05)
+        let x = timeToX(compensatedTime, width: width)
 
         return Rectangle()
             .fill(palette.playheadColor)

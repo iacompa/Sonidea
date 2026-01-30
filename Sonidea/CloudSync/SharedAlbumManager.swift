@@ -318,6 +318,11 @@ final class SharedAlbumManager {
     func addRecordingToSharedAlbum(recording: RecordingItem, album: Album, locationMode: LocationSharingMode = .none) async throws {
         guard album.isShared else { return }
 
+        // Check permission: only owner/admin/member can add recordings
+        guard album.canAddRecordings else {
+            throw SharedAlbumError.permissionDenied
+        }
+
         logger.info("Adding recording to shared album: \(recording.title) -> \(album.name)")
         isProcessing = true
         defer { isProcessing = false }
@@ -393,6 +398,11 @@ final class SharedAlbumManager {
     /// Delete a recording from a shared album
     func deleteRecordingFromSharedAlbum(recordingId: UUID, album: Album) async throws {
         guard album.isShared else { return }
+
+        // Check permission: only owner/admin can delete any recording
+        guard album.canDeleteAnyRecording else {
+            throw SharedAlbumError.permissionDenied
+        }
 
         logger.info("Deleting recording from shared album: \(recordingId)")
         isProcessing = true

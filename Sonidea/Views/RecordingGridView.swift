@@ -14,6 +14,7 @@ struct RecordingGridView: View {
     @Environment(AppState.self) var appState
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
@@ -31,11 +32,11 @@ struct RecordingGridView: View {
     @State private var showMoveToAlbumSheet = false
     @State private var showSingleTagSheet = false
 
-    // Grid configuration
-    private let columns = [
-        GridItem(.flexible(), spacing: CardGridStyle.cardSpacing),
-        GridItem(.flexible(), spacing: CardGridStyle.cardSpacing)
-    ]
+    // Grid configuration — adaptive for iPad
+    private var columns: [GridItem] {
+        let columnCount = sizeClass == .regular ? 3 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: CardGridStyle.cardSpacing), count: columnCount)
+    }
 
     private var hasSelection: Bool {
         !selectedRecordingIDs.isEmpty
@@ -63,15 +64,15 @@ struct RecordingGridView: View {
                 }
             }
         }
-        .sheet(item: $selectedRecording) { recording in
+        .iPadSheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
         }
-        .sheet(isPresented: $showBatchAlbumPicker) {
+        .iPadSheet(isPresented: $showBatchAlbumPicker) {
             BatchAlbumPickerSheet(selectedRecordingIDs: selectedRecordingIDs) {
                 clearSelection()
             }
         }
-        .sheet(isPresented: $showBatchTagPicker) {
+        .iPadSheet(isPresented: $showBatchTagPicker) {
             BatchTagPickerSheet(selectedRecordingIDs: selectedRecordingIDs) {
                 clearSelection()
             }
@@ -81,12 +82,12 @@ struct RecordingGridView: View {
                 ShareSheet(items: [url])
             }
         }
-        .sheet(isPresented: $showMoveToAlbumSheet) {
+        .iPadSheet(isPresented: $showMoveToAlbumSheet) {
             if let recording = recordingForMenu {
                 MoveToAlbumSheet(recording: recording)
             }
         }
-        .sheet(isPresented: $showSingleTagSheet) {
+        .iPadSheet(isPresented: $showSingleTagSheet) {
             if let recording = recordingForMenu {
                 SingleRecordingTagSheet(recording: recording)
             }

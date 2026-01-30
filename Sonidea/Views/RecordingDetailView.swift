@@ -850,6 +850,7 @@ struct RecordingDetailView: View {
                         currentTime: playback.currentTime,
                         isPlaying: playback.isPlaying,
                         isPrecisionMode: $isPrecisionMode,
+                        isEditing: true,
                         waveformHeight: expandedWaveformHeight,
                         onSeek: { time in
                             playback.seek(to: time)
@@ -1864,10 +1865,18 @@ struct RecordingDetailView: View {
                         },
                         onCreateProject: {
                             showProjectActionSheet = false
+                            guard appState.supportManager.canUseProFeatures else {
+                                proUpgradeContext = .projects
+                                return
+                            }
                             showCreateProject = true
                         },
                         onAddToExisting: {
                             showProjectActionSheet = false
+                            guard appState.supportManager.canUseProFeatures else {
+                                proUpgradeContext = .projects
+                                return
+                            }
                             showChooseProject = true
                         },
                         onCancel: {

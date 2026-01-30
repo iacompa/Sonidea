@@ -66,6 +66,7 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
         currentTime = 0
         duration = 0
         stopTimer()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     // MARK: - Skip
@@ -106,5 +107,6 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
         isPlaying = false
         currentTime = 0
         stopTimer()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

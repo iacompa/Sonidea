@@ -53,7 +53,8 @@ final class ProofManager {
 
     /// Pending queue file URL
     private var pendingQueueURL: URL {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
         return documentsPath.appendingPathComponent("pending_proofs.json")
     }
 

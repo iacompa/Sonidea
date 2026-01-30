@@ -641,16 +641,23 @@ final class CloudKitSyncEngine {
                         }
                     } else {
                         // New recording from another device
+                        var audioCopied = false
                         if let asset = record["audioFile"] as? CKAsset,
                            let assetURL = asset.fileURL {
                             do {
                                 try FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                                audioCopied = true
                             } catch {
                                 logger.error("Failed to copy new synced audio file: \(error.localizedDescription)")
                             }
                         }
-                        appState.recordings.append(recording)
-                        recordingsChanged = true
+                        // Only add the recording if the audio file was successfully copied
+                        if audioCopied {
+                            appState.recordings.append(recording)
+                            recordingsChanged = true
+                        } else {
+                            logger.warning("Skipping new synced recording \(recording.id) — audio file not available")
+                        }
                     }
                 }
 
