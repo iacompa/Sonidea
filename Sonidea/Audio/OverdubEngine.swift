@@ -68,6 +68,9 @@ final class OverdubEngine {
     /// Thread-safe write failure counter (accessed from audio tap thread)
     private let writeFailureCounter = WriteFailureCounter()
 
+    /// Serial queue for writing audio buffers to file — keeps I/O off the real-time render thread
+    private let fileWriteQueue = DispatchQueue(label: "com.iacompa.sonidea.overdub.filewrite", qos: .userInitiated)
+
     /// Set by engine when a critical error occurs during recording (e.g. disk full)
     private(set) var recordingError: String?
 
@@ -525,20 +528,34 @@ final class OverdubEngine {
         writeFailureCounter.reset()
         recordingError = nil
         let failureCounter = writeFailureCounter  // capture for closure (non-isolated)
+        let writeQueue = self.fileWriteQueue
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
-            do {
-                try file.write(from: buffer)
-                failureCounter.markSuccess()
-            } catch {
-                if failureCounter.increment() {
-                    Task { @MainActor in
-                        self?.recordingError = "Recording failed: could not write audio data. Your storage may be full."
-                        self?.stopRecordingInternal()
-                    }
-                    return
+            // Copy buffer for off-thread writing (tap may reuse the buffer)
+            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+            copy.frameLength = buffer.frameLength
+            if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+                let channelCount = Int(buffer.format.channelCount)
+                let frameCount = Int(buffer.frameLength)
+                for ch in 0..<channelCount {
+                    memcpy(dst[ch], src[ch], frameCount * MemoryLayout<Float>.size)
                 }
             }
 
+            writeQueue.async {
+                do {
+                    try file.write(from: copy)
+                    failureCounter.markSuccess()
+                } catch {
+                    if failureCounter.increment() {
+                        Task { @MainActor in
+                            self?.recordingError = "Recording failed: could not write audio data. Your storage may be full."
+                            self?.stopRecordingInternal()
+                        }
+                    }
+                }
+            }
+
+            // Update meter samples on main thread (uses original buffer — read-only)
             Task { @MainActor in
                 self?.updateMeterFromBuffer(buffer)
             }
@@ -594,8 +611,11 @@ final class OverdubEngine {
             interruptionObserver = nil
         }
 
-        // Remove tap
+        // Remove tap (stops new buffers from being enqueued)
         audioEngine?.inputNode.removeTap(onBus: 0)
+
+        // Drain the write queue to ensure all pending buffers are written to disk
+        fileWriteQueue.sync {}
 
         // Close recording file
         recordingFile = nil

@@ -1933,9 +1933,7 @@ struct SearchCalendarView: View {
     }
 
     private var monthYearString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: currentMonth)
+        CachedDateFormatter.monthYear.string(from: currentMonth)
     }
 
     private var daysOfWeekHeader: some View {
@@ -2075,14 +2073,12 @@ struct SearchCalendarView: View {
     }
 
     private func dayHeaderString(for date: Date) -> String {
-        let formatter = DateFormatter()
         if calendar.isDateInToday(date) {
             return "Today"
         } else if calendar.isDateInYesterday(date) {
             return "Yesterday"
         } else {
-            formatter.dateFormat = "EEEE, MMMM d"
-            return formatter.string(from: date)
+            return CachedDateFormatter.weekdayMonthDay.string(from: date)
         }
     }
 
@@ -2132,9 +2128,7 @@ struct SearchCalendarRecordingRow: View {
     let recording: RecordingItem
 
     private var formattedTime: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: recording.createdAt)
+        CachedDateFormatter.timeOnly.string(from: recording.createdAt)
     }
 
     private var formattedDuration: String {
@@ -2287,9 +2281,7 @@ struct SearchTimelineRowView: View {
     let tags: [Tag]
 
     private var formattedTime: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: item.timestamp)
+        CachedDateFormatter.timeOnly.string(from: item.timestamp)
     }
 
     private var formattedDuration: String {

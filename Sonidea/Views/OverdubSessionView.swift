@@ -982,10 +982,8 @@ struct OverdubSessionView: View {
 
     private func generateLayerFileURL() -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let ext = appState.appSettings.recordingQuality.fileExtension
-        let filename = "overdub_layer_\(formatter.string(from: Date()))_\(UUID().uuidString.prefix(6)).\(ext)"
+        let filename = "overdub_layer_\(CachedDateFormatter.fileTimestamp.string(from: Date()))_\(UUID().uuidString.prefix(6)).\(ext)"
         return documentsPath.appendingPathComponent(filename)
     }
 

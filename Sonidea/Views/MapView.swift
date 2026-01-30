@@ -786,10 +786,7 @@ struct SpotRecordingRow: View {
     }
 
     private var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: recording.createdAt)
+        CachedDateFormatter.mediumDateTime.string(from: recording.createdAt)
     }
 
     private var formattedDuration: String {

@@ -58,17 +58,11 @@ struct RecordingsListView: View {
             } else if calendar.isDateInYesterday(date) {
                 title = "Yesterday"
             } else if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) {
-                let f = DateFormatter()
-                f.dateFormat = "EEEE"
-                title = f.string(from: date)
+                title = CachedDateFormatter.weekdayName.string(from: date)
             } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
-                let f = DateFormatter()
-                f.dateFormat = "MMMM d"
-                title = f.string(from: date)
+                title = CachedDateFormatter.monthDay.string(from: date)
             } else {
-                let f = DateFormatter()
-                f.dateFormat = "MMMM d, yyyy"
-                title = f.string(from: date)
+                title = CachedDateFormatter.monthDayYear.string(from: date)
             }
             return (date, title, recs.sorted { $0.createdAt > $1.createdAt })
         }
@@ -518,9 +512,7 @@ struct RecordingRow: View {
     var showTime: Bool = false
 
     private var formattedTime: String {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f.string(from: recording.createdAt)
+        CachedDateFormatter.timeOnly.string(from: recording.createdAt)
     }
 
     private var recordingTags: [Tag] {

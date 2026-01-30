@@ -72,6 +72,18 @@ final class AppState {
     private let appSettingsKey = "appSettings"
     private let draftsMigrationKey = "didMigrateToDrafts"
 
+    // MARK: - Debounced Save Tasks
+
+    /// Coalesces rapid save calls — actual write happens after 0.3s of inactivity
+    private var pendingSaveRecordings: Task<Void, Never>?
+    private var pendingSaveAlbums: Task<Void, Never>?
+    private var pendingSaveTags: Task<Void, Never>?
+    private var pendingSaveProjects: Task<Void, Never>?
+    private var pendingSaveOverdubGroups: Task<Void, Never>?
+
+    /// Observer for flushing saves when app backgrounds
+    private var backgroundObserver: NSObjectProtocol?
+
     // MARK: - Record Button Position State
 
     private let recordButtonPosXKey = "recordButtonPosX"
@@ -104,6 +116,17 @@ final class AppState {
         recorder.qualityPreset = appSettings.recordingQuality
         recorder.appSettings = appSettings
         loadRecordButtonPosition()
+
+        // Flush pending debounced saves when app backgrounds
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.flushPendingSaves()
+            }
+        }
 
         // Connect sync manager
         syncManager.appState = self
@@ -836,6 +859,22 @@ final class AppState {
             albums.insert(Album.drafts, at: 0)
             saveAlbums()
         }
+
+        // Deduplicate: merge any extra "Drafts" albums into the canonical one
+        let duplicateDrafts = albums.filter { $0.id != Album.draftsID && $0.name == "Drafts" }
+        if !duplicateDrafts.isEmpty {
+            for dup in duplicateDrafts {
+                // Re-assign recordings from duplicate to the canonical Drafts
+                for i in recordings.indices {
+                    if recordings[i].albumID == dup.id {
+                        recordings[i].albumID = Album.draftsID
+                    }
+                }
+                albums.removeAll { $0.id == dup.id }
+            }
+            saveAlbums()
+            saveRecordings()
+        }
     }
 
     /// Ensure the Imports system album exists (called on first external import)
@@ -1546,9 +1585,22 @@ final class AppState {
         UserDefaults.standard.set(true, forKey: tagMigrationKey)
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (Debounced)
+    //
+    // Save calls are debounced: rapid mutations (e.g., batch operations) coalesce
+    // into a single JSON encode + UserDefaults write after 0.3s of inactivity.
+    // Pending saves are flushed immediately when the app backgrounds.
 
     private func saveRecordings() {
+        pendingSaveRecordings?.cancel()
+        pendingSaveRecordings = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistRecordings()
+        }
+    }
+
+    private func persistRecordings() {
         if let data = try? JSONEncoder().encode(recordings) {
             UserDefaults.standard.set(data, forKey: recordingsKey)
         }
@@ -1559,10 +1611,31 @@ final class AppState {
               let saved = try? JSONDecoder().decode([RecordingItem].self, from: data) else {
             return
         }
-        recordings = saved.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }
+        // Load all recordings immediately; prune missing files in the background
+        recordings = saved
+        Task { [weak self] in
+            let validURLs = await Task.detached {
+                Set(saved.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }.map(\.id))
+            }.value
+            guard let self else { return }
+            let beforeCount = self.recordings.count
+            self.recordings.removeAll { !validURLs.contains($0.id) }
+            if self.recordings.count < beforeCount {
+                self.persistRecordings()
+            }
+        }
     }
 
     private func saveTags() {
+        pendingSaveTags?.cancel()
+        pendingSaveTags = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistTags()
+        }
+    }
+
+    private func persistTags() {
         if let data = try? JSONEncoder().encode(tags) {
             UserDefaults.standard.set(data, forKey: tagsKey)
         }
@@ -1577,6 +1650,15 @@ final class AppState {
     }
 
     private func saveAlbums() {
+        pendingSaveAlbums?.cancel()
+        pendingSaveAlbums = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistAlbums()
+        }
+    }
+
+    private func persistAlbums() {
         if let data = try? JSONEncoder().encode(albums) {
             UserDefaults.standard.set(data, forKey: albumsKey)
         }
@@ -1588,6 +1670,35 @@ final class AppState {
             return
         }
         albums = saved
+    }
+
+    /// Immediately write all pending debounced saves (called when app backgrounds)
+    private func flushPendingSaves() {
+        if pendingSaveRecordings != nil {
+            pendingSaveRecordings?.cancel()
+            pendingSaveRecordings = nil
+            persistRecordings()
+        }
+        if pendingSaveAlbums != nil {
+            pendingSaveAlbums?.cancel()
+            pendingSaveAlbums = nil
+            persistAlbums()
+        }
+        if pendingSaveTags != nil {
+            pendingSaveTags?.cancel()
+            pendingSaveTags = nil
+            persistTags()
+        }
+        if pendingSaveProjects != nil {
+            pendingSaveProjects?.cancel()
+            pendingSaveProjects = nil
+            persistProjects()
+        }
+        if pendingSaveOverdubGroups != nil {
+            pendingSaveOverdubGroups?.cancel()
+            pendingSaveOverdubGroups = nil
+            persistOverdubGroups()
+        }
     }
 
     private func saveNextRecordingNumber() {
@@ -1938,6 +2049,15 @@ final class AppState {
     // MARK: - Project Persistence
 
     private func saveProjects() {
+        pendingSaveProjects?.cancel()
+        pendingSaveProjects = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistProjects()
+        }
+    }
+
+    private func persistProjects() {
         if let data = try? JSONEncoder().encode(projects) {
             UserDefaults.standard.set(data, forKey: projectsKey)
         }
@@ -1954,6 +2074,15 @@ final class AppState {
     // MARK: - Overdub Groups Persistence
 
     private func saveOverdubGroups() {
+        pendingSaveOverdubGroups?.cancel()
+        pendingSaveOverdubGroups = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistOverdubGroups()
+        }
+    }
+
+    private func persistOverdubGroups() {
         if let data = try? JSONEncoder().encode(overdubGroups) {
             UserDefaults.standard.set(data, forKey: overdubGroupsKey)
         }

@@ -68,19 +68,13 @@ struct TimelineGroup: Identifiable {
             return "Yesterday"
         } else if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) {
             // This week - show day name
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEEE"
-            return formatter.string(from: date)
+            return CachedDateFormatter.weekdayName.string(from: date)
         } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
             // This year - show month and day
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMMM d"
-            return formatter.string(from: date)
+            return CachedDateFormatter.monthDay.string(from: date)
         } else {
             // Different year - show full date
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMMM d, yyyy"
-            return formatter.string(from: date)
+            return CachedDateFormatter.monthDayYear.string(from: date)
         }
     }
 }

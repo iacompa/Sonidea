@@ -404,18 +404,12 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     }
 
     var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: createdAt)
+        CachedDateFormatter.mediumDateTime.string(from: createdAt)
     }
 
     var trashedDateFormatted: String? {
         guard let trashedAt = trashedAt else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: trashedAt)
+        return CachedDateFormatter.mediumDateTime.string(from: trashedAt)
     }
 
     var daysUntilPurge: Int? {

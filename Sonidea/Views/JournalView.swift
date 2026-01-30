@@ -161,9 +161,7 @@ struct TimelineRowView: View {
     let albumName: String?
 
     private var formattedTime: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: item.timestamp)
+        CachedDateFormatter.timeOnly.string(from: item.timestamp)
     }
 
     private var formattedDuration: String {

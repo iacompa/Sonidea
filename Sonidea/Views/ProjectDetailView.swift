@@ -360,9 +360,7 @@ struct ProjectDetailView: View {
     }
 
     private func formatShortDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return formatter.string(from: date)
+        CachedDateFormatter.shortMonthDay.string(from: date)
     }
 }
 

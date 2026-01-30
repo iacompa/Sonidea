@@ -380,9 +380,7 @@ final class AudioEditor {
         let ext = sourceURL.pathExtension
 
         // Generate unique name with timestamp
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        let timestamp = formatter.string(from: Date())
+        let timestamp = CachedDateFormatter.compactTimestamp.string(from: Date())
 
         let newName = "\(originalName)_edited_\(timestamp).\(ext)"
         return directory.appendingPathComponent(newName)

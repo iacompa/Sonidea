@@ -71,6 +71,9 @@ final class RecorderManager: NSObject {
     /// Resolved sample rate for engine recording (set when engine output format is created)
     private var resolvedEngineSampleRate: Double?
 
+    /// Serial queue for writing audio buffers to file — keeps I/O off the real-time render thread
+    private let fileWriteQueue = DispatchQueue(label: "com.iacompa.sonidea.recorder.filewrite", qos: .userInitiated)
+
     // Crash recovery: key for UserDefaults
     private let inProgressRecordingKey = "inProgressRecordingPath"
 
@@ -412,14 +415,29 @@ final class RecorderManager: NSObject {
             )
 
             // Install tap on limiter output to write to file (using native format, no conversion)
+            // File I/O is dispatched to a serial queue to avoid blocking the real-time render thread
+            let writeQueue = self.fileWriteQueue
             limiter.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
-                do {
-                    try file.write(from: buffer)
-                } catch {
-                    print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                // Copy buffer for off-thread writing (tap may reuse the buffer)
+                guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+                copy.frameLength = buffer.frameLength
+                if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+                    let channelCount = Int(buffer.format.channelCount)
+                    let frameCount = Int(buffer.frameLength)
+                    for ch in 0..<channelCount {
+                        memcpy(dst[ch], src[ch], frameCount * MemoryLayout<Float>.size)
+                    }
                 }
 
-                // Update meter samples on main thread
+                writeQueue.async {
+                    do {
+                        try file.write(from: copy)
+                    } catch {
+                        print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                    }
+                }
+
+                // Update meter samples on main thread (uses original buffer — read-only)
                 Task { @MainActor in
                     self?.updateMeterFromBuffer(buffer)
                 }
@@ -674,11 +692,14 @@ final class RecorderManager: NSObject {
 
     /// Stop the AVAudioEngine recording
     private func stopEngineRecording() {
-        // Remove tap from limiter
+        // Remove tap from limiter (stops new buffers from being enqueued)
         limiterNode?.removeTap(onBus: 0)
 
         // Stop the engine
         audioEngine?.stop()
+
+        // Drain the write queue to ensure all pending buffers are written to disk
+        fileWriteQueue.sync {}
 
         // Close the audio file (implicit on dealloc, but good to be explicit)
         audioFile = nil
@@ -1049,9 +1070,7 @@ final class RecorderManager: NSObject {
 
     private func generateFileURL(for preset: RecordingQualityPreset) -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let filename = "recording_\(formatter.string(from: Date())).\(preset.fileExtension)"
+        let filename = "recording_\(CachedDateFormatter.fileTimestamp.string(from: Date())).\(preset.fileExtension)"
         return documentsPath.appendingPathComponent(filename)
     }
 

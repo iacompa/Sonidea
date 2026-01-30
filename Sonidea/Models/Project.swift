@@ -59,17 +59,11 @@ struct Project: Identifiable, Codable, Equatable, Hashable {
     // MARK: - Formatted Properties
 
     var formattedCreatedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: createdAt)
+        CachedDateFormatter.mediumDateTime.string(from: createdAt)
     }
 
     var formattedUpdatedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: updatedAt)
+        CachedDateFormatter.mediumDateTime.string(from: updatedAt)
     }
 
     // MARK: - Hashable

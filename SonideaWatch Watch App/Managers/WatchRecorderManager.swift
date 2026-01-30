@@ -22,6 +22,14 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     private var meterTimer: Timer?
     private var recordingStartTime: Date?
 
+    /// Cached file timestamp formatter
+    private static let fileTimestamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
     // MARK: - Start Recording
 
     func startRecording() -> Bool {
@@ -35,9 +43,7 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         }
 
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let filename = "watch_\(dateFormatter.string(from: Date())).m4a"
+        let filename = "watch_\(Self.fileTimestamp.string(from: Date())).m4a"
         let url = documentsPath.appendingPathComponent(filename)
 
         let settings: [String: Any] = [
@@ -112,7 +118,7 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     // MARK: - Audio Metering
 
     private func startMeterTimer() {
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             guard let self, let recorder = self.audioRecorder, recorder.isRecording else { return }
             recorder.updateMeters()
             // averagePower returns dB: -160 (silence) to 0 (max)
@@ -136,5 +142,7 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         }
         isRecording = false
         stopTimer()
+        stopMeterTimer()
+        currentLevel = 0
     }
 }

@@ -56,10 +56,7 @@ struct SharedAlbumTrashItem: Identifiable, Codable, Equatable {
 
     /// Formatted deleted date
     var formattedDeletedAt: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: deletedAt)
+        CachedDateFormatter.mediumDateTime.string(from: deletedAt)
     }
 
     /// Relative time since deletion
