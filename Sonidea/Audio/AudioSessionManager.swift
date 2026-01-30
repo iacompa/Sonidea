@@ -328,6 +328,9 @@ final class AudioSessionManager {
     /// Check if headphone monitoring is active (required for overdub to prevent feedback)
     /// Returns true if outputs include headphones, headset, USB audio, or bluetooth audio
     func isHeadphoneMonitoringActive() -> Bool {
+        #if targetEnvironment(simulator)
+        return true // Allow overdub on simulator for testing/screenshots
+        #else
         let session = AVAudioSession.sharedInstance()
         let outputs = session.currentRoute.outputs
 
@@ -347,6 +350,7 @@ final class AudioSessionManager {
         }
 
         return false
+        #endif
     }
 
     /// Check if the current output route is Bluetooth (AirPods, BT headphones, etc.)

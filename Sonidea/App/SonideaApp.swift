@@ -27,6 +27,10 @@ struct SonideaApp: App {
                     // Wire shared album manager for remote notifications
                     AppDelegate.sharedAlbumManager = appState.sharedAlbumManager
 
+                    // Wire WatchConnectivity for watch recording transfers and theme sync
+                    PhoneConnectivityManager.shared.appState = appState
+                    PhoneConnectivityManager.shared.activate()
+
                     // Set up shared album real-time sync subscriptions
                     Task {
                         await appState.sharedAlbumManager.setupDatabaseSubscriptions()

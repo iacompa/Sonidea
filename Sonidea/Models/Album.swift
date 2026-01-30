@@ -256,6 +256,15 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
         isSystem: true
     )
 
+    static let watchRecordingsID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+
+    static let watchRecordings = Album(
+        id: watchRecordingsID,
+        name: "⌚️ Recordings",
+        createdAt: Date(timeIntervalSince1970: 0),
+        isSystem: true
+    )
+
     /// Check if this is the Imports album
     var isImportsAlbum: Bool {
         id == Album.importsID
@@ -264,6 +273,11 @@ struct Album: Identifiable, Codable, Equatable, Hashable {
     /// Check if this is the Drafts album
     var isDraftsAlbum: Bool {
         id == Album.draftsID
+    }
+
+    /// Check if this is the Watch Recordings album
+    var isWatchRecordingsAlbum: Bool {
+        id == Album.watchRecordingsID
     }
 }
 

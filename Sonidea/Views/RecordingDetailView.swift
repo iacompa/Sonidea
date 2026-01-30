@@ -121,9 +121,10 @@ struct RecordingDetailView: View {
     @State private var isLoadingHighResWaveform = false
     @State private var silenceRMSMeter = SilenceRMSMeter()
 
-    // Waveform height constants
-    private let compactWaveformHeight: CGFloat = 100
-    private let expandedWaveformHeight: CGFloat = 250  // Edit mode: 2.5x details height
+    // Waveform height (adaptive for iPad)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var compactWaveformHeight: CGFloat { sizeClass == .regular ? 140 : 100 }
+    private var expandedWaveformHeight: CGFloat { sizeClass == .regular ? 350 : 250 }
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
@@ -385,12 +386,6 @@ struct RecordingDetailView: View {
                         dismiss()
                     }
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        isNotesFocused = false
-                    }
-                }
             }
             .onAppear {
                 setupPlayback()
@@ -572,7 +567,7 @@ struct RecordingDetailView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .sheet(isPresented: $showTipJar) {
+            .iPadSheet(isPresented: $showTipJar) {
                 TipJarView()
                     .environment(appState)
                     .environment(\.themePalette, palette)
@@ -1968,14 +1963,11 @@ struct RecordingDetailView: View {
         let userId = appState.cachedCurrentUserId
 
         // Determine if current user is the creator - only when data is loaded
-        // If cache is empty, fall back to album ownership (creator added it)
         let isCreator: Bool = {
             guard downloadPermissionLoaded else { return false }
-            // If we have cache info and user ID, use exact match
             if let info = info, let userId = userId {
                 return info.creatorId == userId
             }
-            // Fallback: album owner is considered creator of their recordings
             return album.isOwner
         }()
 
@@ -1987,7 +1979,6 @@ struct RecordingDetailView: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(palette.textTertiary)
 
-                        // Info button
                         Button {
                             showDownloadPermissionInfo = true
                         } label: {
@@ -1998,7 +1989,6 @@ struct RecordingDetailView: View {
                     }
 
                     if !downloadPermissionLoaded {
-                        // Loading state
                         HStack(spacing: 8) {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -2007,23 +1997,13 @@ struct RecordingDetailView: View {
                                 .foregroundColor(palette.textSecondary)
                         }
                     } else if isCreator {
-                        HStack(spacing: 8) {
-                            Image(systemName: allowDownload ? "arrow.down.circle.fill" : "arrow.down.circle")
-                                .foregroundColor(allowDownload ? .blue : .gray)
-
-                            Text(allowDownload ? "Others can download" : "Stream only")
-                                .font(.system(size: 16))
-                                .foregroundColor(palette.textPrimary)
-                        }
+                        Text(allowDownload ? "Others can download" : "Stream only")
+                            .font(.system(size: 14))
+                            .foregroundColor(palette.textSecondary)
                     } else {
-                        HStack(spacing: 8) {
-                            Image(systemName: (info?.allowDownload ?? false) ? "arrow.down.circle.fill" : "arrow.down.circle")
-                                .foregroundColor((info?.allowDownload ?? false) ? .blue : .gray)
-
-                            Text((info?.allowDownload ?? false) ? "Download available" : "Stream only")
-                                .font(.system(size: 16))
-                                .foregroundColor(palette.textPrimary)
-                        }
+                        Text((info?.allowDownload ?? false) ? "Download available" : "Stream only")
+                            .font(.system(size: 14))
+                            .foregroundColor(palette.textSecondary)
                     }
                 }
 
@@ -2034,19 +2014,20 @@ struct RecordingDetailView: View {
                         ProgressView()
                             .scaleEffect(0.8)
                     } else {
-                        // Simple button approach - tap to toggle
-                        Button {
-                            print("🔘 Download button tapped, current: \(allowDownload)")
-                            let newValue = !allowDownload
-                            allowDownload = newValue
-                            performDownloadToggle(to: newValue, album: album)
-                        } label: {
-                            Image(systemName: allowDownload ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 24))
-                                .foregroundColor(allowDownload ? palette.accent : palette.textTertiary)
-                        }
-                        .buttonStyle(.plain)
+                        Toggle("", isOn: Binding(
+                            get: { allowDownload },
+                            set: { newValue in
+                                allowDownload = newValue
+                                performDownloadToggle(to: newValue, album: album)
+                            }
+                        ))
+                        .labelsHidden()
+                        .tint(palette.accent)
                     }
+                } else if downloadPermissionLoaded && !isCreator {
+                    Image(systemName: (info?.allowDownload ?? false) ? "arrow.down.circle.fill" : "lock.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor((info?.allowDownload ?? false) ? palette.accent : palette.textTertiary)
                 }
             }
             .padding(.horizontal, CardStyle.horizontalPadding)
@@ -2058,27 +2039,13 @@ struct RecordingDetailView: View {
                 .padding(.leading, CardStyle.horizontalPadding)
         }
         .task(id: currentRecording.id) {
-            // Reset state for new recording
             downloadPermissionLoaded = false
 
-            // Load user ID first if needed
             if appState.cachedCurrentUserId == nil {
                 appState.cachedCurrentUserId = await appState.sharedAlbumManager.getCurrentUserId()
             }
-            // Set initial value from cache
             let cachedInfo = appState.sharedRecordingInfoCache[currentRecording.id]
             allowDownload = cachedInfo?.allowDownload ?? false
-
-            #if DEBUG
-            print("📥 Download Permission Row loaded:")
-            print("   - Recording ID: \(currentRecording.id)")
-            print("   - User ID: \(appState.cachedCurrentUserId ?? "nil")")
-            print("   - Cache info: \(cachedInfo != nil ? "exists" : "nil")")
-            print("   - Album isOwner: \(album.isOwner)")
-            print("   - allowDownload: \(allowDownload)")
-            #endif
-
-            // Mark as loaded - this triggers re-render with correct isCreator
             downloadPermissionLoaded = true
         }
     }

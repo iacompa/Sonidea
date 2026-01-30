@@ -11,6 +11,7 @@ struct RecordingsListView: View {
     @Environment(AppState.self) var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.themePalette) private var palette
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var selectedRecording: RecordingItem?
     @State private var isSelectionMode = false
@@ -42,6 +43,38 @@ struct RecordingsListView: View {
         !selectedRecordingIDs.isEmpty
     }
 
+    // MARK: - Date-Grouped Recordings
+
+    private var groupedRecordings: [(date: Date, displayTitle: String, recordings: [RecordingItem])] {
+        let calendar = Calendar.current
+        let now = Date()
+        let grouped = Dictionary(grouping: appState.activeRecordings) { recording in
+            calendar.startOfDay(for: recording.createdAt)
+        }
+        return grouped.map { (date, recs) in
+            let title: String
+            if calendar.isDateInToday(date) {
+                title = "Today"
+            } else if calendar.isDateInYesterday(date) {
+                title = "Yesterday"
+            } else if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) {
+                let f = DateFormatter()
+                f.dateFormat = "EEEE"
+                title = f.string(from: date)
+            } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+                let f = DateFormatter()
+                f.dateFormat = "MMMM d"
+                title = f.string(from: date)
+            } else {
+                let f = DateFormatter()
+                f.dateFormat = "MMMM d, yyyy"
+                title = f.string(from: date)
+            }
+            return (date, title, recs.sorted { $0.createdAt > $1.createdAt })
+        }
+        .sorted { $0.date > $1.date }
+    }
+
     var body: some View {
         ZStack {
             // Full background - ensures no dead zones
@@ -65,8 +98,9 @@ struct RecordingsListView: View {
                     }
                 }
             }
+            .padding(.horizontal, sizeClass == .regular ? 40 : 0)
         }
-        .sheet(item: $selectedRecording) { recording in
+        .iPadSheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
         }
         .sheet(isPresented: $showBatchAlbumPicker) {
@@ -118,7 +152,7 @@ struct RecordingsListView: View {
             )
             .environment(\.themePalette, palette)
         }
-        .sheet(isPresented: $showTipJar) {
+        .iPadSheet(isPresented: $showTipJar) {
             TipJarView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
@@ -274,76 +308,87 @@ struct RecordingsListView: View {
 
     private var recordingsList: some View {
         List {
-            ForEach(appState.activeRecordings) { recording in
-                RecordingRow(
-                    recording: recording,
-                    isSelectionMode: isSelectionMode,
-                    isSelected: selectedRecordingIDs.contains(recording.id)
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if isSelectionMode {
-                        toggleSelection(recording)
-                    } else {
-                        selectedRecording = recording
-                    }
-                }
-                .onLongPressGesture {
-                    if !isSelectionMode {
-                        withAnimation(menuAnimation) {
-                            isSelectionMode = true
-                            selectedRecordingIDs.insert(recording.id)
-                        }
-                    }
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        appState.moveToTrash(recording)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-
-                    Button {
-                        shareRecording(recording)
-                    } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    .tint(palette.accent)
-
-                    Button {
-                        guard appState.supportManager.canUseProFeatures else {
-                            proUpgradeContext = .tags
-                            return
-                        }
-                        recordingToTag = recording
-                        showSingleTagSheet = true
-                    } label: {
-                        Label("Tags", systemImage: "tag")
-                    }
-                    .tint(.orange)
-
-                    Button {
-                        recordingToMove = recording
-                        showMoveToAlbumSheet = true
-                    } label: {
-                        Label("Album", systemImage: "square.stack")
-                    }
-                    .tint(.purple)
-                }
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button {
-                        _ = appState.toggleFavorite(for: recording)
-                    } label: {
-                        Label(
-                            appState.isFavorite(recording) ? "Unfavorite" : "Favorite",
-                            systemImage: appState.isFavorite(recording) ? "heart.slash" : "heart.fill"
+            ForEach(groupedRecordings, id: \.date) { group in
+                Section {
+                    ForEach(group.recordings) { recording in
+                        RecordingRow(
+                            recording: recording,
+                            isSelectionMode: isSelectionMode,
+                            isSelected: selectedRecordingIDs.contains(recording.id),
+                            showTime: Calendar.current.isDateInToday(group.date)
                         )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isSelectionMode {
+                                toggleSelection(recording)
+                            } else {
+                                selectedRecording = recording
+                            }
+                        }
+                        .onLongPressGesture {
+                            if !isSelectionMode {
+                                withAnimation(menuAnimation) {
+                                    isSelectionMode = true
+                                    selectedRecordingIDs.insert(recording.id)
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                appState.moveToTrash(recording)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+
+                            Button {
+                                shareRecording(recording)
+                            } label: {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                            .tint(palette.accent)
+
+                            Button {
+                                guard appState.supportManager.canUseProFeatures else {
+                                    proUpgradeContext = .tags
+                                    return
+                                }
+                                recordingToTag = recording
+                                showSingleTagSheet = true
+                            } label: {
+                                Label("Tags", systemImage: "tag")
+                            }
+                            .tint(.orange)
+
+                            Button {
+                                recordingToMove = recording
+                                showMoveToAlbumSheet = true
+                            } label: {
+                                Label("Album", systemImage: "square.stack")
+                            }
+                            .tint(.purple)
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button {
+                                _ = appState.toggleFavorite(for: recording)
+                            } label: {
+                                Label(
+                                    appState.isFavorite(recording) ? "Unfavorite" : "Favorite",
+                                    systemImage: appState.isFavorite(recording) ? "heart.slash" : "heart.fill"
+                                )
+                            }
+                            .tint(.pink)
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .listRowSeparatorTint(palette.separator)
                     }
-                    .tint(.pink)
+                } header: {
+                    Text(group.displayTitle)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(palette.textSecondary)
+                        .textCase(nil)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                .listRowSeparatorTint(palette.separator)
             }
 
             // Bottom spacer for floating record button
@@ -470,6 +515,13 @@ struct RecordingRow: View {
     let recording: RecordingItem
     var isSelectionMode: Bool = false
     var isSelected: Bool = false
+    var showTime: Bool = false
+
+    private var formattedTime: String {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f.string(from: recording.createdAt)
+    }
 
     private var recordingTags: [Tag] {
         appState.tags(for: recording.tagIDs)
@@ -532,6 +584,16 @@ struct RecordingRow: View {
                 }
 
                 HStack(spacing: 6) {
+                    if showTime {
+                        Text(formattedTime)
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+
+                        Text("·")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textTertiary)
+                    }
+
                     Text(recording.formattedDuration)
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)

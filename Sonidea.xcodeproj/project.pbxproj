@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		075A20B574C5E714967135CD /* WatchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C86396452DF9E60774A296 /* WatchTheme.swift */; };
+		0F4D30DAC2DF920A9033875C /* WatchRecorderManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3402FAA92A903E59A082DBC3 /* WatchRecorderManager.swift */; };
+		0FD471C94DEB7B0E41A37F1B /* SonideaWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5DEDB10009A37EF057AC9CD8 /* SonideaWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		13CAF09D771EB4689BB5D829 /* WatchRecordingItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49B16613A5406E17F1A50345 /* WatchRecordingItem.swift */; };
+		4D20E460A24BC5F8B0BFB987 /* SonideaWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AC93D3F88DA2E75615A2B79 /* SonideaWatchApp.swift */; };
+		503A0F2D452F5992F16F1318 /* WatchConnectivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E55118D3841396A5459A9465 /* WatchConnectivityService.swift */; };
+		87117FB05BAF931625956ACF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8888E55C6F12BB55E0A208EB /* Foundation.framework */; };
+		A30AACAB26A494EB62D8ED50 /* WatchAppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CDB3559113CEA84365A18B6 /* WatchAppState.swift */; };
+		A982174A8C087BF99614039C /* WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D86A8D499C656F1B31ED2547 /* WatchContentView.swift */; };
+		D68C970252CAFBE3F8C39283 /* WatchPlaybackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18250A291BC22BCCF6FC5315 /* WatchPlaybackView.swift */; };
+		FE6883F27FFD4C68CE886860 /* WatchPlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78798823F1F27756CB63A89B /* WatchPlaybackManager.swift */; };
 		WIDGET00212F22E34F001582DE /* SonideaRecordingWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -25,6 +36,13 @@
 			remoteGlobalIDString = 4C707E212F22E34F001582DE;
 			remoteInfo = Sonidea;
 		};
+		C9FB5DFEDD992B9138F0CFAF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4C707E1A2F22E34F001582DE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1B67932161FF5C1903ACEF94;
+			remoteInfo = "SonideaWatch Watch App";
+		};
 		WIDGET00142F22E34F001582DE /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 4C707E1A2F22E34F001582DE /* Project object */;
@@ -35,6 +53,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		88A3E815DE19466BF267792A /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				0FD471C94DEB7B0E41A37F1B /* SonideaWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		WIDGET00202F22E34F001582DE /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -49,9 +78,20 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0CDB3559113CEA84365A18B6 /* WatchAppState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchAppState.swift; sourceTree = "<group>"; };
+		18250A291BC22BCCF6FC5315 /* WatchPlaybackView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchPlaybackView.swift; sourceTree = "<group>"; };
+		3402FAA92A903E59A082DBC3 /* WatchRecorderManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRecorderManager.swift; sourceTree = "<group>"; };
+		49B16613A5406E17F1A50345 /* WatchRecordingItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRecordingItem.swift; sourceTree = "<group>"; };
 		4C707E222F22E34F001582DE /* Sonidea.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sonidea.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C707E2F2F22E34F001582DE /* SonideaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SonideaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C707E392F22E34F001582DE /* SonideaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SonideaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5AC93D3F88DA2E75615A2B79 /* SonideaWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SonideaWatchApp.swift; sourceTree = "<group>"; };
+		5DEDB10009A37EF057AC9CD8 /* SonideaWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SonideaWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		78798823F1F27756CB63A89B /* WatchPlaybackManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchPlaybackManager.swift; sourceTree = "<group>"; };
+		8888E55C6F12BB55E0A208EB /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		C7C86396452DF9E60774A296 /* WatchTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchTheme.swift; sourceTree = "<group>"; };
+		D86A8D499C656F1B31ED2547 /* WatchContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchContentView.swift; sourceTree = "<group>"; };
+		E55118D3841396A5459A9465 /* WatchConnectivityService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConnectivityService.swift; sourceTree = "<group>"; };
 		WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SonideaRecordingWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -123,6 +163,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D11DBDD84A4A4B497FCB5DA5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				87117FB05BAF931625956ACF /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		WIDGET00032F22E34F001582DE /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -133,6 +181,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		09A0972F4EE284EEB8F4EDA1 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				E55118D3841396A5459A9465 /* WatchConnectivityService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		14094D81ECD151D347AD8E74 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				49B16613A5406E17F1A50345 /* WatchRecordingItem.swift */,
+				C7C86396452DF9E60774A296 /* WatchTheme.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
 		4C707E192F22E34F001582DE = {
 			isa = PBXGroup;
 			children = (
@@ -141,6 +206,8 @@
 				4C707E322F22E34F001582DE /* SonideaTests */,
 				4C707E3C2F22E34F001582DE /* SonideaUITests */,
 				4C707E232F22E34F001582DE /* Products */,
+				54A28327009AE1D664B29BF1 /* Frameworks */,
+				E8823035BF3C83B535491B3B /* SonideaWatch Watch App */,
 			);
 			sourceTree = "<group>";
 		};
@@ -151,13 +218,86 @@
 				4C707E2F2F22E34F001582DE /* SonideaTests.xctest */,
 				4C707E392F22E34F001582DE /* SonideaUITests.xctest */,
 				WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */,
+				5DEDB10009A37EF057AC9CD8 /* SonideaWatch Watch App.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		54A28327009AE1D664B29BF1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				6DE32DA5A2C86299E49BBAA0 /* watchOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		6DE32DA5A2C86299E49BBAA0 /* watchOS */ = {
+			isa = PBXGroup;
+			children = (
+				8888E55C6F12BB55E0A208EB /* Foundation.framework */,
+			);
+			name = watchOS;
+			sourceTree = "<group>";
+		};
+		CD1CFAA27D733CF62DE0660E /* App */ = {
+			isa = PBXGroup;
+			children = (
+				5AC93D3F88DA2E75615A2B79 /* SonideaWatchApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E8823035BF3C83B535491B3B /* SonideaWatch Watch App */ = {
+			isa = PBXGroup;
+			children = (
+				CD1CFAA27D733CF62DE0660E /* App */,
+				14094D81ECD151D347AD8E74 /* Models */,
+				EE2E331A4C8C5C50DFDA37DA /* Managers */,
+				F25E7A64433B6CB1D1B9C3A2 /* Views */,
+				09A0972F4EE284EEB8F4EDA1 /* Services */,
+			);
+			path = "SonideaWatch Watch App";
+			sourceTree = "<group>";
+		};
+		EE2E331A4C8C5C50DFDA37DA /* Managers */ = {
+			isa = PBXGroup;
+			children = (
+				0CDB3559113CEA84365A18B6 /* WatchAppState.swift */,
+				3402FAA92A903E59A082DBC3 /* WatchRecorderManager.swift */,
+				78798823F1F27756CB63A89B /* WatchPlaybackManager.swift */,
+			);
+			path = Managers;
+			sourceTree = "<group>";
+		};
+		F25E7A64433B6CB1D1B9C3A2 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				D86A8D499C656F1B31ED2547 /* WatchContentView.swift */,
+				18250A291BC22BCCF6FC5315 /* WatchPlaybackView.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1B67932161FF5C1903ACEF94 /* SonideaWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6BD7B48A11FE26439BF0F880 /* Build configuration list for PBXNativeTarget "SonideaWatch Watch App" */;
+			buildPhases = (
+				F7BC67B631FF7F4F4E06693A /* Sources */,
+				D11DBDD84A4A4B497FCB5DA5 /* Frameworks */,
+				EFBE40373FF98B3716DB4EEE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "SonideaWatch Watch App";
+			productName = "SonideaWatch Watch App";
+			productReference = 5DEDB10009A37EF057AC9CD8 /* SonideaWatch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		4C707E212F22E34F001582DE /* Sonidea */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 4C707E432F22E34F001582DE /* Build configuration list for PBXNativeTarget "Sonidea" */;
@@ -166,18 +306,18 @@
 				4C707E1F2F22E34F001582DE /* Frameworks */,
 				4C707E202F22E34F001582DE /* Resources */,
 				WIDGET00202F22E34F001582DE /* Embed Foundation Extensions */,
+				88A3E815DE19466BF267792A /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				WIDGET00132F22E34F001582DE /* PBXTargetDependency */,
+				6005813CD4B1861178FFB370 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				4C707E242F22E34F001582DE /* Sonidea */,
 			);
 			name = Sonidea;
-			packageProductDependencies = (
-			);
 			productName = Sonidea;
 			productReference = 4C707E222F22E34F001582DE /* Sonidea.app */;
 			productType = "com.apple.product-type.application";
@@ -199,8 +339,6 @@
 				4C707E322F22E34F001582DE /* SonideaTests */,
 			);
 			name = SonideaTests;
-			packageProductDependencies = (
-			);
 			productName = SonideaTests;
 			productReference = 4C707E2F2F22E34F001582DE /* SonideaTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -222,8 +360,6 @@
 				4C707E3C2F22E34F001582DE /* SonideaUITests */,
 			);
 			name = SonideaUITests;
-			packageProductDependencies = (
-			);
 			productName = SonideaUITests;
 			productReference = 4C707E392F22E34F001582DE /* SonideaUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -244,8 +380,6 @@
 				WIDGET00022F22E34F001582DE /* SonideaRecordingWidget */,
 			);
 			name = SonideaRecordingWidgetExtension;
-			packageProductDependencies = (
-			);
 			productName = SonideaRecordingWidgetExtension;
 			productReference = WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -294,6 +428,7 @@
 				WIDGET00002F22E34F001582DE /* SonideaRecordingWidgetExtension */,
 				4C707E2E2F22E34F001582DE /* SonideaTests */,
 				4C707E382F22E34F001582DE /* SonideaUITests */,
+				1B67932161FF5C1903ACEF94 /* SonideaWatch Watch App */,
 			);
 		};
 /* End PBXProject section */
@@ -314,6 +449,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		4C707E372F22E34F001582DE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EFBE40373FF98B3716DB4EEE /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -351,6 +493,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F7BC67B631FF7F4F4E06693A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4D20E460A24BC5F8B0BFB987 /* SonideaWatchApp.swift in Sources */,
+				13CAF09D771EB4689BB5D829 /* WatchRecordingItem.swift in Sources */,
+				075A20B574C5E714967135CD /* WatchTheme.swift in Sources */,
+				A30AACAB26A494EB62D8ED50 /* WatchAppState.swift in Sources */,
+				0F4D30DAC2DF920A9033875C /* WatchRecorderManager.swift in Sources */,
+				FE6883F27FFD4C68CE886860 /* WatchPlaybackManager.swift in Sources */,
+				A982174A8C087BF99614039C /* WatchContentView.swift in Sources */,
+				D68C970252CAFBE3F8C39283 /* WatchPlaybackView.swift in Sources */,
+				503A0F2D452F5992F16F1318 /* WatchConnectivityService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		WIDGET00042F22E34F001582DE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -370,6 +528,12 @@
 			isa = PBXTargetDependency;
 			target = 4C707E212F22E34F001582DE /* Sonidea */;
 			targetProxy = 4C707E3A2F22E34F001582DE /* PBXContainerItemProxy */;
+		};
+		6005813CD4B1861178FFB370 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "SonideaWatch Watch App";
+			target = 1B67932161FF5C1903ACEF94 /* SonideaWatch Watch App */;
+			targetProxy = C9FB5DFEDD992B9138F0CFAF /* PBXContainerItemProxy */;
 		};
 		WIDGET00132F22E34F001582DE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -662,6 +826,69 @@
 			};
 			name = Release;
 		};
+		710788A27A9EC6273455226A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 14;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = XW9D82VGDU;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Sonidea;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sonidea needs microphone access to record voice memos on your Apple Watch.";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.iacompa.sonidea;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iacompa.sonidea.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
+		8903278E8D5019B2A4C82C01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 14;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = XW9D82VGDU;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Sonidea;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sonidea needs microphone access to record voice memos on your Apple Watch.";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.iacompa.sonidea;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iacompa.sonidea.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
 		WIDGET00062F22E34F001582DE /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -751,6 +978,15 @@
 			buildConfigurations = (
 				4C707E4A2F22E34F001582DE /* Debug */,
 				4C707E4B2F22E34F001582DE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6BD7B48A11FE26439BF0F880 /* Build configuration list for PBXNativeTarget "SonideaWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				710788A27A9EC6273455226A /* Release */,
+				8903278E8D5019B2A4C82C01 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

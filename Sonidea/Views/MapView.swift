@@ -28,6 +28,7 @@ enum BottomSheetState {
 struct GPSInsightsMapView: View {
     @Environment(AppState.self) var appState
     @Environment(\.themePalette) var palette
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var selectedRecording: RecordingItem?
     @State private var selectedSpot: RecordingSpot?
@@ -77,6 +78,12 @@ struct GPSInsightsMapView: View {
         }
     }
 
+    /// Check if a recording belongs to a shared album
+    private func isSharedRecording(_ recording: RecordingItem) -> Bool {
+        guard let albumID = recording.albumID else { return false }
+        return appState.album(for: albumID)?.isShared == true
+    }
+
     // MARK: - Map Layer
 
     private var mapLayer: some View {
@@ -88,7 +95,7 @@ struct GPSInsightsMapView: View {
                         Button {
                             handlePinTap(for: recording)
                         } label: {
-                            RecordingMapPin()
+                            RecordingMapPin(isShared: isSharedRecording(recording))
                         }
                     }
                 }
@@ -100,13 +107,13 @@ struct GPSInsightsMapView: View {
             showsTraffic: false
         ))
         .mapControlVisibility(.hidden)
-        .sheet(item: $selectedRecording) { recording in
+        .iPadSheet(item: $selectedRecording) { recording in
             RecordingDetailView(recording: recording)
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .sheet(item: $selectedSpot) { spot in
+        .iPadSheet(item: $selectedSpot) { spot in
             SpotRecordingsView(spot: spot)
                 .environment(appState)
                 .environment(\.themePalette, palette)
@@ -135,15 +142,18 @@ struct GPSInsightsMapView: View {
     // MARK: - Bottom Sheet
 
     private func bottomSheet(geometry: GeometryProxy, safeArea: EdgeInsets, screenHeight: CGFloat) -> some View {
-        let collapsedHeight: CGFloat = 180
-        let expandedHeight: CGFloat = min(500, screenHeight * 0.6)
+        let isIPad = sizeClass == .regular
+        let collapsedHeight: CGFloat = isIPad ? 220 : 180
+        let expandedHeight: CGFloat = isIPad
+            ? min(600, screenHeight * 0.5)
+            : min(500, screenHeight * 0.6)
         let currentHeight = sheetState == .collapsed ? collapsedHeight : expandedHeight
         let sheetHeight = currentHeight - dragOffset
         let clampedHeight = max(collapsedHeight, min(expandedHeight, sheetHeight))
 
         return VStack(spacing: 0) {
-            // Drag handle
-            dragHandle
+            // Drag handle — swipe + tap target
+            dragHandle(collapsedHeight: collapsedHeight, expandedHeight: expandedHeight, currentHeight: currentHeight)
 
             // Content
             if hasLocations {
@@ -153,44 +163,15 @@ struct GPSInsightsMapView: View {
             }
         }
         .frame(height: clampedHeight + safeArea.bottom)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: isIPad ? 600 : .infinity)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(palette.useMaterials ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(palette.sheetBackground))
                 .shadow(color: .black.opacity(0.15), radius: 10, y: -5)
         )
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    dragOffset = -value.translation.height
-                }
-                .onEnded { value in
-                    // Use predicted velocity for flick detection
-                    let predictedEndY = value.predictedEndLocation.y
-                    let currentY = value.location.y
-                    let velocityY = predictedEndY - currentY
-
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                        // Determine state based on drag direction and velocity
-                        if velocityY < -50 {
-                            // Swiped up fast (flick to expand)
-                            sheetState = .expanded
-                        } else if velocityY > 50 {
-                            // Swiped down fast (flick to collapse)
-                            sheetState = .collapsed
-                        } else {
-                            // Slow drag - snap to nearest
-                            let midpoint = (collapsedHeight + expandedHeight) / 2
-                            let targetHeight = currentHeight - value.translation.height
-                            sheetState = targetHeight > midpoint ? .expanded : .collapsed
-                        }
-                        dragOffset = 0
-                    }
-                }
-        )
     }
 
-    private var dragHandle: some View {
+    private func dragHandle(collapsedHeight: CGFloat, expandedHeight: CGFloat, currentHeight: CGFloat) -> some View {
         VStack(spacing: 8) {
             // Drag indicator capsule
             Capsule()
@@ -232,6 +213,30 @@ struct GPSInsightsMapView: View {
                 sheetState = sheetState == .collapsed ? .expanded : .collapsed
             }
         }
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    dragOffset = -value.translation.height
+                }
+                .onEnded { value in
+                    let predictedEndY = value.predictedEndLocation.y
+                    let currentY = value.location.y
+                    let velocityY = predictedEndY - currentY
+
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        if velocityY < -50 {
+                            sheetState = .expanded
+                        } else if velocityY > 50 {
+                            sheetState = .collapsed
+                        } else {
+                            let midpoint = (collapsedHeight + expandedHeight) / 2
+                            let targetHeight = currentHeight - value.translation.height
+                            sheetState = targetHeight > midpoint ? .expanded : .collapsed
+                        }
+                        dragOffset = 0
+                    }
+                }
+        )
     }
 
     @ViewBuilder
@@ -297,6 +302,32 @@ struct GPSInsightsMapView: View {
             .padding(.bottom, 16)
         }
         .scrollDisabled(sheetState == .collapsed)
+        // When collapsed, swiping the content area also expands/collapses the sheet.
+        // When expanded, the gesture no-ops so ScrollView scrolling works normally.
+        .simultaneousGesture(
+            DragGesture()
+                .onChanged { value in
+                    guard sheetState == .collapsed else { return }
+                    dragOffset = -value.translation.height
+                }
+                .onEnded { value in
+                    guard sheetState == .collapsed else { return }
+                    let predictedEndY = value.predictedEndLocation.y
+                    let currentY = value.location.y
+                    let velocityY = predictedEndY - currentY
+
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        if velocityY < -50 {
+                            sheetState = .expanded
+                        } else if velocityY > 50 {
+                            sheetState = .collapsed
+                        } else {
+                            sheetState = -value.translation.height > 50 ? .expanded : .collapsed
+                        }
+                        dragOffset = 0
+                    }
+                }
+        )
     }
 
     /// Handle tap on a spot row - open spot view if multiple recordings, else open recording directly
@@ -601,11 +632,17 @@ struct RecordingMapPin: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
 
+    var isShared: Bool = false
+
+    private var pinColor: Color {
+        isShared ? Color(red: 0.85, green: 0.65, blue: 0.13) : palette.recordButton
+    }
+
     var body: some View {
         ZStack {
             // Shadow/glow
             Circle()
-                .fill(palette.recordButton.opacity(0.3))
+                .fill(pinColor.opacity(0.3))
                 .frame(width: 36, height: 36)
 
             // Background circle - adapts to color scheme for visibility on maps
@@ -614,14 +651,14 @@ struct RecordingMapPin: View {
                 .frame(width: 28, height: 28)
                 .shadow(color: colorScheme == .dark ? .white.opacity(0.15) : .black.opacity(0.2), radius: 2, y: 1)
 
-            // Themed record button color
+            // Pin color
             Circle()
-                .fill(palette.recordButton)
+                .fill(pinColor)
                 .frame(width: 22, height: 22)
 
-            // Waveform icon - white to contrast with record button color
-            Image(systemName: "waveform")
-                .font(.system(size: 10, weight: .bold))
+            // Icon: shared recordings show person.2, others show waveform
+            Image(systemName: isShared ? "person.2.fill" : "waveform")
+                .font(.system(size: isShared ? 9 : 10, weight: .bold))
                 .foregroundColor(.white)
         }
     }
@@ -724,7 +761,7 @@ struct SpotRecordingsView: View {
                     .foregroundStyle(palette.accent)
                 }
             }
-            .sheet(item: $selectedRecording) { recording in
+            .iPadSheet(item: $selectedRecording) { recording in
                 RecordingDetailView(recording: recording)
                     .environment(appState)
                     .environment(\.themePalette, palette)
@@ -742,6 +779,11 @@ struct SpotRecordingRow: View {
     @Environment(\.themePalette) private var palette
 
     let recording: RecordingItem
+
+    private var isShared: Bool {
+        guard let albumID = recording.albumID else { return false }
+        return appState.album(for: albumID)?.isShared == true
+    }
 
     private var formattedDate: String {
         let formatter = DateFormatter()
@@ -772,24 +814,34 @@ struct SpotRecordingRow: View {
         return (project.title, "V\(recording.versionIndex)")
     }
 
+    private let sharedGold = Color(red: 0.85, green: 0.65, blue: 0.13)
+
     var body: some View {
         HStack(spacing: 12) {
-            // Waveform icon
+            // Icon: shared recordings get a distinct look
             ZStack {
                 Circle()
-                    .fill(palette.accent.opacity(0.1))
+                    .fill((isShared ? sharedGold : palette.accent).opacity(0.1))
                     .frame(width: 40, height: 40)
-                Image(systemName: "waveform")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(palette.accent)
+                Image(systemName: isShared ? "person.2.fill" : "waveform")
+                    .font(.system(size: isShared ? 13 : 14, weight: .medium))
+                    .foregroundStyle(isShared ? sharedGold : palette.accent)
             }
 
             // Content
             VStack(alignment: .leading, spacing: 4) {
-                Text(recording.title)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(palette.textPrimary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(recording.title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(palette.textPrimary)
+                        .lineLimit(1)
+
+                    if isShared {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(sharedGold)
+                    }
+                }
 
                 HStack(spacing: 8) {
                     // Date/time

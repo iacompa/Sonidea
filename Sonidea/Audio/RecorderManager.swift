@@ -461,10 +461,13 @@ final class RecorderManager: NSObject {
     private func engineOutputFormat(for preset: RecordingQualityPreset, inputFormat: AVAudioFormat) -> AVAudioFormat {
         let sampleRate = min(Double(inputFormat.sampleRate), preset.sampleRate)
         resolvedEngineSampleRate = sampleRate
+        let channels = AVAudioChannelCount(appSettings.recordingMode.channelCount)
+        // If input only has 1 channel, cap at mono regardless of setting
+        let effectiveChannels = min(channels, inputFormat.channelCount)
         return AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
-            channels: 1,
+            channels: effectiveChannels,
             interleaved: false
         ) ?? inputFormat
     }
@@ -473,29 +476,30 @@ final class RecorderManager: NSObject {
     /// Uses resolvedEngineSampleRate (set by engineOutputFormat) to ensure consistency
     private func engineFileSettings(for preset: RecordingQualityPreset) -> [String: Any] {
         let effectiveSampleRate = resolvedEngineSampleRate ?? AudioSessionManager.shared.actualSampleRate
+        let channels = appSettings.recordingMode.channelCount
 
         switch preset {
         case .standard:
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(effectiveSampleRate, 44100),
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 128000,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 128000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
         case .high:
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 256000,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 256000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
         case .lossless:
             return [
                 AVFormatIDKey: Int(kAudioFormatAppleLossless),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
+                AVNumberOfChannelsKey: channels,
                 AVEncoderBitDepthHintKey: 16,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
@@ -503,7 +507,7 @@ final class RecorderManager: NSObject {
             return [
                 AVFormatIDKey: Int(kAudioFormatLinearPCM),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
+                AVNumberOfChannelsKey: channels,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
                 AVLinearPCMIsBigEndianKey: false,
@@ -982,45 +986,41 @@ final class RecorderManager: NSObject {
     private func recordingSettings(for preset: RecordingQualityPreset) -> [String: Any] {
         // Use actual sample rate from audio session (may differ from requested)
         let effectiveSampleRate = AudioSessionManager.shared.actualSampleRate
+        let channels = appSettings.recordingMode.channelCount
 
         switch preset {
         case .standard:
-            // AAC, 44.1kHz, ~128kbps
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(effectiveSampleRate, 44100),
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 128000,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 128000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
 
         case .high:
-            // AAC, 48kHz, ~256kbps
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 256000,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 256000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
 
         case .lossless:
-            // Apple Lossless (ALAC), 48kHz
-            // Falls back gracefully if ALAC encoding fails
             return [
                 AVFormatIDKey: Int(kAudioFormatAppleLossless),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
+                AVNumberOfChannelsKey: channels,
                 AVEncoderBitDepthHintKey: 16,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
 
         case .wav:
-            // Linear PCM (WAV), 48kHz, 16-bit
             return [
                 AVFormatIDKey: Int(kAudioFormatLinearPCM),
                 AVSampleRateKey: min(effectiveSampleRate, 48000),
-                AVNumberOfChannelsKey: 1,
+                AVNumberOfChannelsKey: channels,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
                 AVLinearPCMIsBigEndianKey: false,

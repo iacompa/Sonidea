@@ -89,6 +89,46 @@ enum RecordingQualityPreset: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+// MARK: - Recording Mode
+
+enum RecordingMode: String, CaseIterable, Identifiable, Codable {
+    case mono
+    case stereo
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .mono: return "Mono"
+        case .stereo: return "Stereo"
+        }
+    }
+
+    var channelCount: Int {
+        switch self {
+        case .mono: return 1
+        case .stereo: return 2
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .mono: return "Single channel — best for built-in phone microphone."
+        case .stereo: return "Left + right channels — best with an external stereo mic."
+        }
+    }
+
+    // Migration from removed cases
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "dualMono", "spatial": self = .stereo
+        default: self = RecordingMode(rawValue: rawValue) ?? .mono
+        }
+    }
+}
+
 // MARK: - Transcription Language
 
 enum TranscriptionLanguage: String, CaseIterable, Identifiable, Codable {
@@ -325,8 +365,14 @@ struct AppSettings: Codable {
     var hasEverMovedRecordButton: Bool = false
     var lastMoveHintShownAt: Date? = nil
 
+    // Recording mode (mono, stereo, dual mono, spatial)
+    var recordingMode: RecordingMode = .mono
+
     // Auto icon detection (classify audio type post-save)
     var autoSelectIcon: Bool = true
+
+    // Auto-sync watch recordings to iPhone
+    var watchSyncEnabled: Bool = false
 
     static let `default` = AppSettings()
 }

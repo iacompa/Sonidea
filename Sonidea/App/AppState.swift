@@ -38,6 +38,7 @@ final class AppState {
     var selectedTheme: AppTheme = .system {
         didSet {
             saveSelectedTheme()
+            PhoneConnectivityManager.shared.sendThemeToWatch(selectedTheme)
         }
     }
     var appSettings: AppSettings = .default {
@@ -163,15 +164,15 @@ final class AppState {
             settingsChanged = true
         }
 
-        // Recording quality: only .standard is free
-        if appSettings.recordingQuality != .standard {
-            appSettings.recordingQuality = .standard
-            settingsChanged = true
-        }
-
         // iCloud sync is a Pro feature
         if appSettings.iCloudSyncEnabled {
             appSettings.iCloudSyncEnabled = false
+            settingsChanged = true
+        }
+
+        // Watch sync is a Pro feature
+        if appSettings.watchSyncEnabled {
+            appSettings.watchSyncEnabled = false
             settingsChanged = true
         }
 
@@ -383,6 +384,11 @@ final class AppState {
             Task {
                 await autoClassifyIcon(recording: recording)
             }
+        }
+
+        // Pre-compute waveform in background so it's cached when user opens the recording
+        Task.detached(priority: .utility) {
+            await AudioWaveformExtractor.shared.precomputeWaveform(for: rawData.fileURL)
         }
 
         return .success(recording)
@@ -848,6 +854,26 @@ final class AppState {
     /// Check if Imports album exists
     var hasImportsAlbum: Bool {
         albums.contains(where: { $0.id == Album.importsID })
+    }
+
+    /// Ensure the Watch Recordings system album exists (called on first watch import)
+    func ensureWatchRecordingsAlbum() {
+        if !albums.contains(where: { $0.id == Album.watchRecordingsID }) {
+            // Insert after Imports if it exists, otherwise after Drafts, otherwise at beginning
+            let insertIndex: Int
+            if let importsIdx = albums.firstIndex(where: { $0.id == Album.importsID }) {
+                insertIndex = importsIdx + 1
+            } else if let draftsIdx = albums.firstIndex(where: { $0.id == Album.draftsID }) {
+                insertIndex = draftsIdx + 1
+            } else {
+                insertIndex = 0
+            }
+            albums.insert(Album.watchRecordings, at: insertIndex)
+            saveAlbums()
+
+            // Trigger iCloud sync for new album
+            triggerSyncForAlbum(Album.watchRecordings)
+        }
     }
 
     // MARK: - Shared Album Management

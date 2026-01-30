@@ -52,6 +52,7 @@ struct ContentView: View {
     @Environment(AppState.self) var appState
     @Environment(\.themePalette) var palette
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var currentRoute: AppRoute = .recordings
     @State private var showSearch = false
     @State private var showSettings = false
@@ -172,19 +173,19 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $showSearch) {
+        .iPadSheet(isPresented: $showSearch) {
             SearchSheetView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .sheet(isPresented: $showSettings) {
+        .iPadSheet(isPresented: $showSettings) {
             SettingsSheetView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .sheet(isPresented: $showTipJar) {
+        .iPadSheet(isPresented: $showTipJar) {
             TipJarView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
@@ -610,6 +611,7 @@ struct ContentView: View {
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                            .iPadMaxWidth(iPadLayout.maxHUDWidth)
                         }
 
                         RecordingsListView()
@@ -631,7 +633,7 @@ struct ContentView: View {
         return VStack(spacing: 0) {
             topNavigationBar
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .padding(.top, sizeClass == .regular ? 20 : 8)
                 .padding(.bottom, 8)
                 .background(
                     Rectangle()
@@ -1551,7 +1553,7 @@ struct SearchSheetView: View {
                         .foregroundStyle(palette.accent)
                 }
             }
-            .sheet(item: $selectedRecording) { recording in
+            .iPadSheet(item: $selectedRecording) { recording in
                 RecordingDetailView(recording: recording)
             }
             .sheet(item: $selectedAlbum) { album in
@@ -3057,22 +3059,17 @@ struct SettingsSheetView: View {
                     // Recording Quality
                     Picker("Quality", selection: $appState.appSettings.recordingQuality) {
                         ForEach(RecordingQualityPreset.allCases) { preset in
-                            HStack {
-                                Text(preset.displayName)
-                                if preset != .standard && !appState.supportManager.canUseProFeatures {
-                                    Image(systemName: "lock.fill")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .tag(preset)
+                            Text(preset.displayName)
+                                .tag(preset)
                         }
                     }
-                    .onChange(of: appState.appSettings.recordingQuality) { oldValue, newValue in
-                        // Prevent free users from selecting premium quality presets
-                        if !appState.supportManager.canUseProFeatures && newValue != .standard {
-                            appState.appSettings.recordingQuality = .standard
-                            proUpgradeContext = .recordingQuality
+                    .listRowBackground(palette.cardBackground)
+
+                    // Recording Mode
+                    Picker("Mode", selection: $appState.appSettings.recordingMode) {
+                        ForEach(RecordingMode.allCases) { mode in
+                            Text(mode.displayName)
+                                .tag(mode)
                         }
                     }
                     .listRowBackground(palette.cardBackground)
@@ -3093,16 +3090,6 @@ struct SettingsSheetView: View {
                         }
                     }
                     .listRowBackground(palette.cardBackground)
-
-                    // Recording Mode (informational - mono only)
-                    HStack {
-                        Text("Recording Mode")
-                            .foregroundStyle(palette.textPrimary)
-                        Spacer()
-                        Text("Mono")
-                            .foregroundStyle(palette.textSecondary)
-                    }
-                    .listRowBackground(palette.cardBackground)
                 } header: {
                     HStack {
                         Text("Recording")
@@ -3120,7 +3107,7 @@ struct SettingsSheetView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(appState.appSettings.recordingQuality.description)
-                        Text("Mono recording captures the best quality on mobile devices. Stereo, Dual-Mono, and Spatial modes may be added in a future update.")
+                        Text(appState.appSettings.recordingMode.description)
                     }
                     .foregroundColor(palette.textSecondary)
                 }
@@ -3329,6 +3316,38 @@ struct SettingsSheetView: View {
                     )
                 } footer: {
                     Text("Sync recordings, tags, albums, and projects across all your devices.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
+                // MARK: - Watch Sync Section
+                Section {
+                    Toggle(isOn: $appState.appSettings.watchSyncEnabled) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "applewatch")
+                                .foregroundColor(.green)
+                                .font(.system(size: 14))
+                            Text("Auto Sync Watch Recordings")
+                        }
+                    }
+                    .tint(palette.toggleOnTint)
+                    .listRowBackground(palette.cardBackground)
+                    .onChange(of: appState.appSettings.watchSyncEnabled) { oldValue, enabled in
+                        if enabled && !appState.supportManager.canUseProFeatures {
+                            appState.appSettings.watchSyncEnabled = false
+                            proUpgradeContext = .watchSync
+                            return
+                        }
+                    }
+                } header: {
+                    HStack(spacing: 6) {
+                        Text("Apple Watch")
+                            .foregroundStyle(palette.textSecondary)
+                        if !appState.supportManager.canUseProFeatures {
+                            ProBadge()
+                        }
+                    }
+                } footer: {
+                    Text("Automatically import recordings from the Sonidea Apple Watch app into the ⌚️ Recordings album. Requires the Sonidea watch app and a Pro plan.")
                         .foregroundColor(palette.textSecondary)
                 }
 
@@ -3802,7 +3821,7 @@ struct SettingsSheetView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .sheet(isPresented: $showTipJar) {
+            .iPadSheet(isPresented: $showTipJar) {
                 TipJarView()
                     .environment(appState)
                     .environment(\.themePalette, palette)
@@ -4155,6 +4174,28 @@ struct GuideView: View {
 
                 Section {
                     NavigationLink {
+                        RecordingPlaybackInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "mic.fill",
+                            title: "Recording & Playback",
+                            subtitle: "Quality, EQ, speed, gain, and more"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        EditingInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "waveform.and.scissors",
+                            title: "Editing",
+                            subtitle: "Trim, cut, and remove silence"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
                         TagsInfoView()
                     } label: {
                         GuideRow(
@@ -4206,6 +4247,17 @@ struct GuideView: View {
                     .listRowBackground(palette.cardBackground)
 
                     NavigationLink {
+                        ExportInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "square.and.arrow.up",
+                            title: "Export",
+                            subtitle: "Share recordings as WAV or ZIP"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
                         MapsInfoView()
                     } label: {
                         GuideRow(
@@ -4232,8 +4284,8 @@ struct GuideView: View {
                     } label: {
                         GuideRow(
                             icon: "magnifyingglass",
-                            title: "Search",
-                            subtitle: "Find recordings by title or transcript"
+                            title: "Search & Browse",
+                            subtitle: "Find recordings by title, calendar, or timeline"
                         )
                     }
                     .listRowBackground(palette.cardBackground)
@@ -4243,8 +4295,8 @@ struct GuideView: View {
                     } label: {
                         GuideRow(
                             icon: "paintpalette",
-                            title: "Appearance",
-                            subtitle: "Customize themes and colors"
+                            title: "Themes",
+                            subtitle: "7 studio-inspired visual themes"
                         )
                     }
                     .listRowBackground(palette.cardBackground)
@@ -4256,6 +4308,17 @@ struct GuideView: View {
                             icon: "icloud",
                             title: "iCloud Sync",
                             subtitle: "Keep recordings synced across devices"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    NavigationLink {
+                        ProofReceiptsInfoView()
+                    } label: {
+                        GuideRow(
+                            icon: "checkmark.seal",
+                            title: "Proof Receipts",
+                            subtitle: "Tamper-evident timestamps for your recordings"
                         )
                     }
                     .listRowBackground(palette.cardBackground)
@@ -4706,6 +4769,8 @@ struct ImportDestinationSheet: View {
             return "square.and.arrow.down"
         } else if album.isDraftsAlbum {
             return "doc.text"
+        } else if album.isWatchRecordingsAlbum {
+            return "applewatch"
         } else {
             return "folder"
         }
@@ -4718,6 +4783,8 @@ struct ImportDestinationSheet: View {
             return .blue
         } else if album.isDraftsAlbum {
             return .orange
+        } else if album.isWatchRecordingsAlbum {
+            return .green
         } else {
             return palette.accent
         }
@@ -4831,19 +4898,161 @@ struct InfoTipRow: View {
     }
 }
 
+// MARK: - Recording & Playback Info View
+
+struct RecordingPlaybackInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Sonidea captures ideas the moment they happen and gives you studio-level playback controls.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                InfoCard {
+                    Text("Recording")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Tap the floating record button to start. Tap again to stop and save.")
+                        InfoBulletRow(text: "Pause and resume mid-recording — your audio is stitched seamlessly.")
+                        InfoBulletRow(text: "Adjust input gain (-6 to +6 dB) and enable a limiter to prevent clipping.")
+                        InfoBulletRow(text: "Recordings are auto-tagged with your GPS location when available.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Recording quality")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Standard — AAC 128 kbps at 44.1 kHz (free tier).")
+                        InfoBulletRow(text: "High — AAC 256 kbps at 48 kHz (Pro).")
+                        InfoBulletRow(text: "Lossless — Apple Lossless (ALAC) at 48 kHz (Pro).")
+                        InfoBulletRow(text: "WAV — Uncompressed PCM 16-bit at 48 kHz (Pro).")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Playback")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Adjust playback speed from 0.5x to 2x with pitch preserved.")
+                        InfoBulletRow(text: "Use the 4-band parametric EQ to shape the sound — drag the band points on the graph.")
+                        InfoBulletRow(text: "Skip Silence automatically jumps past quiet sections during playback.")
+                        InfoBulletRow(text: "Add markers at any point and tap them to jump back instantly.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Live Activity")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "While recording, a Live Activity appears on the Lock Screen and Dynamic Island.")
+                        InfoBulletRow(text: "Pause, resume, or stop your recording without unlocking the phone.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    InfoTipRow(text: "Enable the limiter when recording loud sources — it catches peaks that would otherwise clip.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Recording & Playback")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Editing Info View
+
+struct EditingInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Clean up recordings with trim, cut, and silence removal — all from the waveform editor.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                InfoCard {
+                    Text("How editing works")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Open a recording and tap Edit to enter the waveform editor.")
+                        InfoBulletRow(text: "Pinch to zoom into the waveform for precise selection.")
+                        InfoBulletRow(text: "Drag the selection handles to highlight a region.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Edit actions")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Trim — keep only the selected region, remove everything else.")
+                        InfoBulletRow(text: "Cut — remove the selected region and join the remaining audio.")
+                        InfoBulletRow(text: "Remove Silence — automatically detect and strip all silent sections at once.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Skip Silence settings")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Adjust the silence threshold (-60 to -20 dB) and minimum duration (100–1000 ms).")
+                        InfoBulletRow(text: "Toggle fade transitions on cut boundaries to avoid audio clicks.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    InfoTipRow(text: "Editing is a Pro feature. Edits create new files — your original is safe until you confirm.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Editing")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 // MARK: - Tags Info View
 
 struct TagsInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Summary
                 Text("Tags let you label ideas fast so you can find them later.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
                 InfoCard {
                     Text("How Tags work")
                         .font(.headline)
@@ -4852,27 +5061,15 @@ struct TagsInfoView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         InfoBulletRow(text: "Add tags to any recording (Hook, Verse, Beat, Lyrics, To Finish).")
                         InfoBulletRow(text: "Tap tags to filter your library instantly.")
-                        InfoBulletRow(text: "Use multiple tags to describe the same idea (e.g., Hook + Melody).")
-                        InfoBulletRow(text: "Customize tags in Settings → Manage Tags (rename, recolor, delete).")
+                        InfoBulletRow(text: "Use multiple tags on the same recording (e.g., Hook + Melody).")
+                        InfoBulletRow(text: "The Favorite tag is built-in and cannot be deleted — use it to mark your best ideas.")
+                        InfoBulletRow(text: "Create, rename, recolor, or delete tags in Settings → Manage Tags.")
                     }
-
-                    Text("You can always edit tags later—nothing is permanent.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
                 }
                 .padding(.horizontal)
 
-                // Tip
                 InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "lightbulb.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.yellow)
-                        Text("Tip: Keep tag names short (1–2 words) so your filters stay clean.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                    InfoTipRow(text: "Tags are a Pro feature. Keep names short (1–2 words) so your filters stay clean.")
                 }
                 .padding(.horizontal)
 
@@ -4892,13 +5089,11 @@ struct AlbumsInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Summary
                 Text("Albums are folders that keep your recordings organized by project, session, or vibe.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
                 InfoCard {
                     Text("How Albums work")
                         .font(.headline)
@@ -4907,22 +5102,15 @@ struct AlbumsInfoView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         InfoBulletRow(text: "Use Albums to separate drafts, sessions, clients, or song ideas.")
                         InfoBulletRow(text: "Move a recording into an Album from its Details screen, or use swipe actions in the list.")
-                        InfoBulletRow(text: "Albums work with Search and Tags—filter by Album first, then refine with tags.")
-                        InfoBulletRow(text: "Create a new Album anytime, and rename or delete Albums in Settings.")
+                        InfoBulletRow(text: "Albums work with Search and Tags — filter by Album first, then refine with tags.")
+                        InfoBulletRow(text: "Rename an album by tapping the pencil icon in its detail view.")
+                        InfoBulletRow(text: "Create, rename, or delete albums anytime. System albums (like Drafts) cannot be renamed or deleted.")
                     }
                 }
                 .padding(.horizontal)
 
-                // Tip
                 InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "lightbulb.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.yellow)
-                        Text("Tip: Keep a \"Drafts\" album for quick capture, then move ideas into project-specific albums later.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                    InfoTipRow(text: "Keep a \"Drafts\" album for quick capture, then move ideas into project-specific albums later.")
                 }
                 .padding(.horizontal)
 
@@ -5090,6 +5278,21 @@ struct SharedAlbumsInfoView: View {
                 }
                 .padding(.horizontal)
 
+                // Album Management
+                InfoCard {
+                    Text("Managing the Album")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "The album owner can rename the album from the toolbar menu or Settings. The new name syncs to all participants.")
+                        InfoBulletRow(text: "Add comments to any recording — great for feedback or notes to collaborators.")
+                        InfoBulletRow(text: "The recording creator controls whether others can download the audio file. Downloads default to off.")
+                        InfoBulletRow(text: "Recordings can be flagged as sensitive. If the album requires approval, an admin must approve before the recording is visible.")
+                    }
+                }
+                .padding(.horizontal)
+
                 // Activity Feed
                 InfoCard {
                     Text("Activity Feed")
@@ -5100,9 +5303,22 @@ struct SharedAlbumsInfoView: View {
                         SharedAlbumInfoBullet(
                             prefix: "Each shared album has an ",
                             highlight: "Activity",
-                            suffix: " tab showing who added, deleted, or renamed recordings."
+                            suffix: " tab showing all actions: recordings added, deleted, or renamed, participant changes, settings updates, comments, and more."
                         )
-                        InfoBulletRow(text: "This provides transparency and trust within the group.")
+                        InfoBulletRow(text: "This provides full transparency so everyone knows what happened and when.")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Offline
+                InfoCard {
+                    Text("Offline support")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "If you lose connectivity, changes are queued and automatically synced when you're back online.")
+                        InfoBulletRow(text: "Downloaded recordings are cached locally so you can listen without a connection.")
                     }
                 }
                 .padding(.horizontal)
@@ -5253,37 +5469,28 @@ struct ProjectsInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Summary
                 Text("Keep versions organized without clutter.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
                 InfoCard {
                     Text("How Projects work")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "A Project is a group of related takes for the same idea (Hook v1, Chorus v2, Verse idea).")
-                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3…) inside the same Project instead of making scattered files.")
-                        InfoBulletRow(text: "Best Take highlights the one to keep (optional). Press and hold a take to set it.")
-                        InfoBulletRow(text: "Albums vs Projects: Albums organize your library. Projects organize versions of the same idea.")
+                        InfoBulletRow(text: "A Project groups related takes for the same idea (Hook v1, Chorus v2, Verse idea).")
+                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3...) inside the same Project instead of making scattered files.")
+                        InfoBulletRow(text: "Mark a Best Take to highlight the version you want to keep. Press and hold a take to set it.")
+                        InfoBulletRow(text: "Pin important projects so they always appear at the top of your list.")
+                        InfoBulletRow(text: "Albums vs. Projects: Albums organize your library. Projects organize versions of the same idea.")
                     }
                 }
                 .padding(.horizontal)
 
-                // Tip
                 InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "lightbulb.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.yellow)
-                        Text("Tip: Use Record New Version in a recording's Details to quickly capture another take.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                    InfoTipRow(text: "Use Record New Version in a recording's Details to quickly capture another take without leaving the project.")
                 }
                 .padding(.horizontal)
 
@@ -5303,42 +5510,52 @@ struct OverdubInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Record new layers over an existing track—like a one-person band.")
+                Text("Record new layers over an existing track — like a one-person band.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
                 InfoCard {
                     Text("How Overdub works")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Open any recording's Details and tap Overdub to start.")
-                        InfoBulletRow(text: "Headphones are required—this prevents audio feedback from the speaker into the mic.")
+                        InfoBulletRow(text: "Open any recording's Details and tap Overdub to start a session.")
+                        InfoBulletRow(text: "Headphones are required — this prevents audio feedback from the speaker into the mic.")
                         InfoBulletRow(text: "You'll hear the original track (and any existing layers) while recording a new layer.")
                         InfoBulletRow(text: "Each base track supports up to 3 layers. All layers stay linked in an Overdub Group.")
                     }
                 }
                 .padding(.horizontal)
 
-                // Sync adjustment
                 InfoCard {
-                    Text("Fine-tuning sync")
+                    Text("Mix controls")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "After recording, use the Sync Offset slider to shift your layer ±500ms.")
-                        InfoBulletRow(text: "This helps align your performance if there's any latency.")
+                        InfoBulletRow(text: "Adjust the base track volume and layer volume independently while recording.")
+                        InfoBulletRow(text: "Toggle \"Hear Previous Layers\" off if you only want to hear the base track during recording.")
+                        InfoBulletRow(text: "Auto-headroom reduces the mixer gain when multiple sources play to prevent clipping.")
+                    }
+                }
+                .padding(.horizontal)
+
+                InfoCard {
+                    Text("Sync adjustment & preview")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "After recording a layer, expand Sync Adjustment to shift it ±500 ms in 10 ms steps.")
+                        InfoBulletRow(text: "Tap Preview Mix to hear the base, existing layers, and the new layer together before saving.")
+                        InfoBulletRow(text: "Drag the slider while previewing — playback restarts instantly with the new offset so you can dial it in by ear.")
                         InfoBulletRow(text: "Positive values delay the layer; negative values make it play earlier.")
                     }
                 }
                 .padding(.horizontal)
 
-                // Library badges
                 InfoCard {
                     Text("Finding overdubs in your library")
                         .font(.headline)
@@ -5352,13 +5569,12 @@ struct OverdubInfoView: View {
                 }
                 .padding(.horizontal)
 
-                // Tip
                 InfoCard {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "headphones")
                             .font(.system(size: 14))
                             .foregroundColor(.orange)
-                        Text("Tip: Wired headphones have the lowest latency. Bluetooth headphones work but may need more sync adjustment.")
+                        Text("Tip: Wired headphones have the lowest latency. Bluetooth works but may need more sync adjustment.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -5482,24 +5698,44 @@ struct SearchInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("Search finds recordings by title, tags, and metadata.")
+                Text("Find any recording instantly using search, or browse your library by calendar or timeline.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
+                // Search
                 InfoCard {
-                    Text("How to use")
+                    Text("Search")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
                         InfoBulletRow(text: "Tap the magnifying glass in the top bar")
-                        InfoBulletRow(text: "Search by recording name")
-                        InfoBulletRow(text: "Search by tags (e.g., \"melody\")")
-                        InfoBulletRow(text: "Filter results by selecting tag chips")
-                        InfoBulletRow(text: "Quickly jump to the exact take you need")
+                        InfoBulletRow(text: "Search by recording name or tag (e.g., \"melody\")")
+                        InfoBulletRow(text: "Filter results by tapping tag chips below the search bar")
+                        InfoBulletRow(text: "Results update as you type")
                     }
+                }
+                .padding(.horizontal)
+
+                // Browse modes
+                InfoCard {
+                    Text("Browse modes")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "List — classic scrollable list of all recordings")
+                        InfoBulletRow(text: "Grid — visual card layout with color thumbnails")
+                        InfoBulletRow(text: "Calendar — monthly view with dots on days you recorded; tap a day to see that day's recordings")
+                        InfoBulletRow(text: "Timeline — chronological journal grouped by day, showing time, tags, location, and project context")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    InfoTipRow(text: "Switch browse modes using the view picker at the top of the recordings list.")
                 }
                 .padding(.horizontal)
 
@@ -5508,7 +5744,7 @@ struct SearchInfoView: View {
             .padding(.top)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Search")
+        .navigationTitle("Search & Browse")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -5520,28 +5756,46 @@ struct AppearanceInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Summary
-                Text("Make Sonidea feel like yours by customizing colors.")
+                Text("Choose from 7 studio-inspired themes to make Sonidea feel like your favorite DAW.")
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                // How it works
+                // Themes
                 InfoCard {
-                    Text("What you can customize")
+                    Text("Available themes")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Change tag colors in Settings → Manage Tags")
-                        InfoBulletRow(text: "Recording icon colors can vary based on favorite status")
-                        InfoBulletRow(text: "Switch between Light, Dark, or System appearance")
+                        InfoBulletRow(text: "System — clean default look, follows Light or Dark mode")
+                        InfoBulletRow(text: "Angst Robot — purple-tinted dark theme inspired by Ableton Live")
+                        InfoBulletRow(text: "Cream — warm amber tones on a light background")
+                        InfoBulletRow(text: "Logic — periwinkle accents on dark, inspired by Logic Pro")
+                        InfoBulletRow(text: "Fruity — orange accents on dark, inspired by FL Studio")
+                        InfoBulletRow(text: "AVID — teal and mint on dark, inspired by Pro Tools")
+                        InfoBulletRow(text: "Dynamite — bold red and blue on charcoal")
+                    }
+                }
+                .padding(.horizontal)
+
+                // How to change
+                InfoCard {
+                    Text("How to change your theme")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Go to Settings → Theme")
+                        InfoBulletRow(text: "Tap any theme to preview it instantly")
+                        InfoBulletRow(text: "Your choice applies across the entire app")
                     }
                 }
                 .padding(.horizontal)
 
                 // Tip
                 InfoCard {
-                    InfoTipRow(text: "Use color as a system: red for hooks, blue for beats, purple for lyrics — whatever works for you.")
+                    InfoTipRow(text: "You can also customize tag colors in Settings → Manage Tags to match your workflow.")
                 }
                 .padding(.horizontal)
 
@@ -5550,7 +5804,7 @@ struct AppearanceInfoView: View {
             .padding(.top)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Appearance")
+        .navigationTitle("Themes")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -5678,6 +5932,152 @@ struct iCloudSyncInfoView: View {
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("iCloud Sync")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Export Info View
+
+struct ExportInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Export your recordings as high-quality WAV files, or bulk-export an entire album as a ZIP archive.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // Single export
+                InfoCard {
+                    Text("Exporting a single recording")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Open a recording and tap the share icon")
+                        InfoBulletRow(text: "The recording is converted to 16-bit PCM WAV at its original sample rate")
+                        InfoBulletRow(text: "Share via AirDrop, Files, Messages, or any app that accepts audio")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Bulk export
+                InfoCard {
+                    Text("Bulk export (ZIP)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Export all recordings or a single album at once")
+                        InfoBulletRow(text: "Creates a ZIP file with WAV audio organized into album folders")
+                        InfoBulletRow(text: "Includes a manifest.json with metadata: titles, dates, durations, tags, and locations")
+                        InfoBulletRow(text: "Recordings without an album are placed in an \"Unsorted\" folder")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    InfoTipRow(text: "The manifest file makes it easy to catalog or import your recordings into a DAW or project manager.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Export")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Proof Receipts Info View
+
+struct ProofReceiptsInfoView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Summary
+                Text("Proof receipts create a tamper-evident record of your recordings, proving when and where they were captured.")
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal)
+
+                // How it works
+                InfoCard {
+                    Text("How it works")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "A SHA-256 hash (digital fingerprint) of your audio file is computed")
+                        InfoBulletRow(text: "The hash is uploaded to Apple's CloudKit servers, which stamp it with a server-side timestamp")
+                        InfoBulletRow(text: "If location was captured, a separate hash of the GPS coordinates is stored as well")
+                        InfoBulletRow(text: "The result is a verifiable receipt that the recording existed at that time and place")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Verification
+                InfoCard {
+                    Text("Verification")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        InfoBulletRow(text: "Sonidea re-computes the hash and compares it to the stored receipt")
+                        InfoBulletRow(text: "If the file has been altered, the hashes won't match and the status shows a mismatch warning")
+                        InfoBulletRow(text: "An unmodified recording shows a green \"Proven\" status")
+                    }
+                }
+                .padding(.horizontal)
+
+                // Status indicators
+                InfoCard {
+                    Text("Status indicators")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundColor(.green)
+                            Text("Proven — receipt verified, file unmodified")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.fill")
+                                .foregroundColor(.orange)
+                            Text("Pending — waiting to upload (e.g., offline)")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text("Mismatch — file was modified after proof was created")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+
+                // Tip
+                InfoCard {
+                    InfoTipRow(text: "Proof receipts work offline too. Pending proofs are automatically uploaded when you reconnect.")
+                }
+                .padding(.horizontal)
+
+                Spacer(minLength: 40)
+            }
+            .padding(.top)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Proof Receipts")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

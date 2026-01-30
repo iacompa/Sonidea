@@ -13,7 +13,7 @@ import OSLog
 // MARK: - Waveform Data
 
 /// Multi-resolution waveform data with LOD pyramid
-struct WaveformData: Equatable {
+struct WaveformData: Equatable, Codable {
     /// LOD levels - index 0 is highest resolution, higher indices are lower resolution
     /// LOD0: ~1ms per sample (for max zoom)
     /// LOD1: ~2ms per sample
@@ -171,13 +171,67 @@ actor AudioWaveformExtractor {
     private let silenceExitHoldMs: Double = 30.0        // Debounce: must stay non-silent for 30ms to exit silence (reduced for better transient detection)
     private let mergeGapMs: Double = 40.0               // Merge silence regions separated by gaps < 40ms (reduced from 120ms to avoid swallowing short audio)
 
+    // MARK: - Disk Cache
+
+    /// Directory for persisted waveform cache files
+    private var diskCacheDirectory: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = caches.appendingPathComponent("Waveforms", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Disk cache URL for an audio file
+    private func diskCacheURL(for audioURL: URL) -> URL {
+        let name = audioURL.deletingPathExtension().lastPathComponent
+        return diskCacheDirectory.appendingPathComponent("\(name).waveform")
+    }
+
+    /// Load waveform from disk cache, validating it's newer than the audio file
+    private func loadFromDiskCache(for audioURL: URL) -> WaveformData? {
+        let cacheURL = diskCacheURL(for: audioURL)
+        guard FileManager.default.fileExists(atPath: cacheURL.path) else { return nil }
+
+        // Invalidate if audio file is newer than cache
+        if let audioDate = (try? FileManager.default.attributesOfItem(atPath: audioURL.path))?[.modificationDate] as? Date,
+           let cacheDate = (try? FileManager.default.attributesOfItem(atPath: cacheURL.path))?[.modificationDate] as? Date,
+           audioDate > cacheDate {
+            try? FileManager.default.removeItem(at: cacheURL)
+            return nil
+        }
+
+        guard let data = try? Data(contentsOf: cacheURL),
+              let waveform = try? JSONDecoder().decode(WaveformData.self, from: data) else {
+            try? FileManager.default.removeItem(at: cacheURL)
+            return nil
+        }
+
+        logger.info("Loaded waveform from disk cache: \(audioURL.lastPathComponent)")
+        return waveform
+    }
+
+    /// Save waveform to disk cache
+    private func saveToDiskCache(_ waveform: WaveformData, for audioURL: URL) {
+        let cacheURL = diskCacheURL(for: audioURL)
+        if let data = try? JSONEncoder().encode(waveform) {
+            try? data.write(to: cacheURL, options: .atomic)
+            logger.debug("Saved waveform to disk cache: \(audioURL.lastPathComponent)")
+        }
+    }
+
     // MARK: - Public API
 
-    /// Extract waveform data with LOD pyramid
+    /// Extract waveform data with LOD pyramid (chunked reading, disk + memory cache)
     func extractWaveform(from url: URL) async throws -> WaveformData {
-        // Check cache first
+        // 1. Check memory cache (instant)
         if let cached = waveformCache[url] {
             return cached
+        }
+
+        // 2. Check disk cache (fast — avoids re-reading the audio file)
+        if let diskCached = loadFromDiskCache(for: url) {
+            waveformCache[url] = diskCached
+            return diskCached
         }
 
         logger.info("Extracting waveform for: \(url.lastPathComponent)")
@@ -185,42 +239,61 @@ actor AudioWaveformExtractor {
         let audioFile = try AVAudioFile(forReading: url)
         let format = audioFile.processingFormat
         let sampleRate = format.sampleRate
-        let frameCount = AVAudioFrameCount(audioFile.length)
-        let duration = Double(frameCount) / sampleRate
+        let totalFrames = Int(audioFile.length)
+        let duration = Double(totalFrames) / sampleRate
 
-        guard frameCount > 0 else {
+        guard totalFrames > 0 else {
             throw WaveformError.emptyAudioFile
         }
 
-        // Read audio data
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+        // 3. Chunked extraction — build LOD0 incrementally without loading entire file
+        let lod0TargetCount = max(1, Int(duration * Double(baseSamplesPerSecond)))
+        let bucketSize = Double(totalFrames) / Double(lod0TargetCount)
+        var lod0Samples = [Float](repeating: 0, count: lod0TargetCount)
+
+        let chunkCapacity: AVAudioFrameCount = 65536
+        guard let chunkBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkCapacity) else {
             throw WaveformError.bufferCreationFailed
         }
 
-        try audioFile.read(into: buffer)
+        var framesRead = 0
+        while framesRead < totalFrames {
+            let remaining = AVAudioFrameCount(totalFrames - framesRead)
+            let toRead = min(chunkCapacity, remaining)
 
-        guard let floatChannelData = buffer.floatChannelData else {
-            throw WaveformError.noAudioData
+            chunkBuffer.frameLength = 0
+            try audioFile.read(into: chunkBuffer, frameCount: toRead)
+
+            guard let channelData = chunkBuffer.floatChannelData?[0] else {
+                throw WaveformError.noAudioData
+            }
+            let actualFrames = Int(chunkBuffer.frameLength)
+
+            for i in 0..<actualFrames {
+                let globalFrame = framesRead + i
+                let bucketIndex = min(Int(Double(globalFrame) / bucketSize), lod0TargetCount - 1)
+                let amplitude = abs(channelData[i])
+                if amplitude > lod0Samples[bucketIndex] {
+                    lod0Samples[bucketIndex] = amplitude
+                }
+            }
+
+            framesRead += actualFrames
         }
 
-        let channelData = floatChannelData[0]
-        let length = Int(buffer.frameLength)
+        // Normalize LOD0 to 0...1
+        let maxValue = lod0Samples.max() ?? 1.0
+        if maxValue > 0.001 {
+            lod0Samples = lod0Samples.map { min(1.0, $0 / maxValue) }
+        }
 
-        // Build LOD pyramid
-        var lodLevels: [[Float]] = []
-
-        for lodIndex in 0..<lodLevelCount {
-            let samplesPerSecond = baseSamplesPerSecond / (1 << lodIndex) // 1000, 500, 250, 125, 62, 31
-            let targetSampleCount = max(1, Int(duration * Double(samplesPerSecond)))
-
-            let samples = extractLODSamples(
-                from: channelData,
-                length: length,
-                targetCount: targetSampleCount
-            )
-
-            lodLevels.append(samples)
-            logger.debug("LOD\(lodIndex): \(samples.count) samples (\(samplesPerSecond) samples/sec)")
+        // 4. Derive LOD1-5 by downsampling LOD0
+        var lodLevels: [[Float]] = [lod0Samples]
+        for lodIndex in 1..<lodLevelCount {
+            let factor = 1 << lodIndex // 2, 4, 8, 16, 32
+            let targetCount = max(1, lod0TargetCount / factor)
+            lodLevels.append(downsamplePeak(lod0Samples, to: targetCount))
+            logger.debug("LOD\(lodIndex): \(targetCount) samples")
         }
 
         let waveformData = WaveformData(
@@ -230,8 +303,9 @@ actor AudioWaveformExtractor {
             samplesPerSecondLOD0: baseSamplesPerSecond
         )
 
-        // Cache the result
+        // 5. Cache in memory + persist to disk
         waveformCache[url] = waveformData
+        saveToDiskCache(waveformData, for: url)
 
         logger.info("Waveform extracted: \(lodLevels[0].count) samples at LOD0, duration: \(String(format: "%.2f", duration))s")
 
@@ -519,10 +593,12 @@ actor AudioWaveformExtractor {
         return silenceRanges
     }
 
-    /// Clear cache for a specific URL
+    /// Clear cache for a specific URL (memory + disk)
     func clearCache(for url: URL) {
         waveformCache.removeValue(forKey: url)
         silenceCache.removeValue(forKey: url)
+        let cacheFile = diskCacheURL(for: url)
+        try? FileManager.default.removeItem(at: cacheFile)
     }
 
     /// Clear only silence cache for a specific URL (keeps waveform cache)
@@ -530,47 +606,51 @@ actor AudioWaveformExtractor {
         silenceCache.removeValue(forKey: url)
     }
 
-    /// Clear all caches
+    /// Clear all caches (memory + disk)
     func clearAllCaches() {
         waveformCache.removeAll()
         silenceCache.removeAll()
+        try? FileManager.default.removeItem(at: diskCacheDirectory)
+    }
+
+    /// Pre-warm the cache for an audio URL (call after recording finishes)
+    func precomputeWaveform(for url: URL) async {
+        // Skip if already cached
+        guard waveformCache[url] == nil else { return }
+        guard loadFromDiskCache(for: url) == nil else {
+            // Load disk cache into memory
+            if let diskCached = loadFromDiskCache(for: url) {
+                waveformCache[url] = diskCached
+            }
+            return
+        }
+
+        logger.info("Pre-computing waveform for: \(url.lastPathComponent)")
+        _ = try? await extractWaveform(from: url)
     }
 
     // MARK: - Private Helpers
 
-    private func extractLODSamples(from channelData: UnsafePointer<Float>, length: Int, targetCount: Int) -> [Float] {
-        guard length > 0, targetCount > 0 else { return [] }
+    /// Downsample by taking peak amplitude in each bucket
+    private func downsamplePeak(_ source: [Float], to targetCount: Int) -> [Float] {
+        guard !source.isEmpty, targetCount > 0 else { return [] }
+        guard source.count != targetCount else { return source }
 
-        var samples: [Float] = []
-        samples.reserveCapacity(targetCount)
+        var result = [Float]()
+        result.reserveCapacity(targetCount)
 
-        // Use floating-point bucket boundaries to ensure ALL audio samples are covered
-        // This prevents the "trailing samples skipped" bug from integer division
-        let bucketSize = Double(length) / Double(targetCount)
-
+        let bucketSize = Double(source.count) / Double(targetCount)
         for i in 0..<targetCount {
             let start = Int(Double(i) * bucketSize)
-            let end = min(Int(Double(i + 1) * bucketSize), length)
-
-            // Use peak amplitude for each bucket
-            var maxAmplitude: Float = 0
+            let end = min(Int(Double(i + 1) * bucketSize), source.count)
+            var maxVal: Float = 0
             for j in start..<end {
-                let amplitude = abs(channelData[j])
-                if amplitude > maxAmplitude {
-                    maxAmplitude = amplitude
-                }
+                if source[j] > maxVal { maxVal = source[j] }
             }
-
-            samples.append(maxAmplitude)
+            result.append(maxVal)
         }
 
-        // Normalize to 0...1
-        let maxValue = samples.max() ?? 1.0
-        if maxValue > 0.001 { // Avoid division by near-zero
-            samples = samples.map { min(1.0, $0 / maxValue) }
-        }
-
-        return samples
+        return result
     }
 }
 

@@ -113,6 +113,7 @@ struct ZoomableWaveformEditor: View {
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     // MARK: - Timeline State
 
@@ -123,7 +124,7 @@ struct ZoomableWaveformEditor: View {
 
     // MARK: - Constants
 
-    private let waveformHeight: CGFloat = 160  // Taller waveform in edit mode
+    private var waveformHeight: CGFloat { sizeClass == .regular ? 220 : 160 }
     private let timeRulerHeight: CGFloat = 24
     private let handleMinDistance: CGFloat = 10  // Increased from 1 to prevent accidental drags
 
@@ -248,7 +249,7 @@ struct ZoomableWaveformEditor: View {
                 // Pinch to zoom
                 .gesture(zoomGesture)
             }
-            .frame(height: isEditing ? waveformHeight : 100)
+            .frame(height: isEditing ? waveformHeight : (sizeClass == .regular ? 140 : 100))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .background(
                 RoundedRectangle(cornerRadius: 8)

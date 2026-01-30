@@ -284,6 +284,23 @@ struct TagManagerRow: View {
     }
 }
 
+// MARK: - Tag Preset Colors
+
+private let tagPresetColors: [Color] = [
+    Color(hex: "#FF6B6B")!, // Red
+    Color(hex: "#FF8E72")!, // Coral
+    Color(hex: "#F39C12")!, // Orange
+    Color(hex: "#F1C40F")!, // Yellow
+    Color(hex: "#2ECC71")!, // Green
+    Color(hex: "#4ECDC4")!, // Teal
+    Color(hex: "#3498DB")!, // Blue
+    Color(hex: "#5B7FFF")!, // Indigo
+    Color(hex: "#9B59B6")!, // Purple
+    Color(hex: "#E84393")!, // Pink
+    Color(hex: "#A0522D")!, // Brown
+    Color(hex: "#95A5A6")!, // Gray
+]
+
 // MARK: - Create Tag Sheet
 
 struct CreateTagSheet: View {
@@ -291,7 +308,7 @@ struct CreateTagSheet: View {
     @Environment(AppState.self) private var appState
 
     @State private var tagName = ""
-    @State private var tagColor = Color.blue
+    @State private var tagColor = Color(hex: "#3498DB")!
     @State private var showDuplicateError = false
 
     var body: some View {
@@ -302,8 +319,25 @@ struct CreateTagSheet: View {
                         .onChange(of: tagName) { _, _ in
                             showDuplicateError = false
                         }
+                }
 
-                    ColorPicker("Color", selection: $tagColor, supportsOpacity: false)
+                Section("Color") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6), spacing: 12) {
+                        ForEach(tagPresetColors, id: \.self) { color in
+                            Circle()
+                                .fill(color)
+                                .frame(width: 40, height: 40)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(Color.white, lineWidth: tagColor.toHex() == color.toHex() ? 3 : 0)
+                                )
+                                .shadow(color: tagColor.toHex() == color.toHex() ? color.opacity(0.6) : .clear, radius: 4)
+                                .onTapGesture {
+                                    tagColor = color
+                                }
+                        }
+                    }
+                    .padding(.vertical, 8)
                 }
 
                 if showDuplicateError {
@@ -378,12 +412,29 @@ struct TagEditSheet: View {
                                 showDuplicateError = false
                             }
                     }
-
-                    ColorPicker("Color", selection: $tagColor, supportsOpacity: false)
                 } footer: {
                     if tag.isProtected {
                         Text("The \"favorite\" tag cannot be renamed or deleted.")
                     }
+                }
+
+                Section("Color") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6), spacing: 12) {
+                        ForEach(tagPresetColors, id: \.self) { color in
+                            Circle()
+                                .fill(color)
+                                .frame(width: 40, height: 40)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(Color.white, lineWidth: tagColor.toHex() == color.toHex() ? 3 : 0)
+                                )
+                                .shadow(color: tagColor.toHex() == color.toHex() ? color.opacity(0.6) : .clear, radius: 4)
+                                .onTapGesture {
+                                    tagColor = color
+                                }
+                        }
+                    }
+                    .padding(.vertical, 8)
                 }
 
                 if showDuplicateError {
