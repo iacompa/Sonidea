@@ -123,54 +123,10 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                // Store UI metrics for Settings to use
-                appState.uiMetrics = UIMetrics(
-                    containerSize: containerSize,
-                    safeAreaInsets: safeArea,
-                    topBarHeight: topBarHeight,
-                    buttonDiameter: buttonDiameter
-                )
-
-                // Clamp position on appear (in case screen size changed)
-                if let pos = appState.recordButtonPosition {
-                    let clamped = appState.clampRecordButtonPosition(
-                        pos,
-                        containerSize: containerSize,
-                        safeInsets: safeArea,
-                        topBarHeight: topBarHeight,
-                        buttonDiameter: buttonDiameter
-                    )
-                    if clamped != pos {
-                        appState.recordButtonPosition = clamped
-                        appState.persistRecordButtonPosition()
-                    }
-                }
+                updateUIMetrics(containerSize: containerSize, safeArea: safeArea)
             }
             .onChange(of: geometry.size) { _, newSize in
-                // Update metrics when size changes
-                appState.uiMetrics = UIMetrics(
-                    containerSize: newSize,
-                    safeAreaInsets: safeArea,
-                    topBarHeight: topBarHeight,
-                    buttonDiameter: buttonDiameter
-                )
-
-                // Clamp position when size changes
-                if let pos = appState.recordButtonPosition {
-                    let newMaxY = newSize.height - safeArea.bottom - padding - radius
-                    let newMaxX = newSize.width - padding - radius
-                    let clamped = appState.clampRecordButtonPosition(
-                        pos,
-                        containerSize: newSize,
-                        safeInsets: safeArea,
-                        topBarHeight: topBarHeight,
-                        buttonDiameter: buttonDiameter
-                    )
-                    if clamped != pos {
-                        appState.recordButtonPosition = clamped
-                        appState.persistRecordButtonPosition()
-                    }
-                }
+                updateUIMetrics(containerSize: newSize, safeArea: safeArea)
             }
         }
         .iPadSheet(isPresented: $showSearch) {
@@ -340,27 +296,20 @@ struct ContentView: View {
                                     }
                                 }
 
-                                // Calculate new position from drag start + translation
-                                let newX = dragStartPosition.x + value.translation.width
-                                let newY = dragStartPosition.y + value.translation.height
-
-                                // Clamp to bounds (smooth, no snapping)
-                                let clampedX = min(max(newX, minX), maxX)
-                                let clampedY = min(max(newY, minY), maxY)
-
-                                // Update position directly (smooth movement)
-                                appState.recordButtonPosition = CGPoint(x: clampedX, y: clampedY)
+                                // Clamp to bounds and update position (smooth movement)
+                                appState.recordButtonPosition = clampedDragPosition(
+                                    translation: value.translation,
+                                    minX: minX, maxX: maxX, minY: minY, maxY: maxY
+                                )
                             }
                         }
                         .onEnded { value in
                             if isDragging {
                                 // Commit the final position
-                                let newX = dragStartPosition.x + value.translation.width
-                                let newY = dragStartPosition.y + value.translation.height
-                                let clampedX = min(max(newX, minX), maxX)
-                                let clampedY = min(max(newY, minY), maxY)
-
-                                appState.recordButtonPosition = CGPoint(x: clampedX, y: clampedY)
+                                appState.recordButtonPosition = clampedDragPosition(
+                                    translation: value.translation,
+                                    minX: minX, maxX: maxX, minY: minY, maxY: maxY
+                                )
                                 appState.persistRecordButtonPosition()
 
                                 isDragging = false
@@ -492,6 +441,41 @@ struct ContentView: View {
         }
     }
 
+    private func updateUIMetrics(containerSize: CGSize, safeArea: EdgeInsets) {
+        appState.uiMetrics = UIMetrics(
+            containerSize: containerSize,
+            safeAreaInsets: safeArea,
+            topBarHeight: topBarHeight,
+            buttonDiameter: buttonDiameter
+        )
+        if let pos = appState.recordButtonPosition {
+            let clamped = appState.clampRecordButtonPosition(
+                pos,
+                containerSize: containerSize,
+                safeInsets: safeArea,
+                topBarHeight: topBarHeight,
+                buttonDiameter: buttonDiameter
+            )
+            if clamped != pos {
+                appState.recordButtonPosition = clamped
+                appState.persistRecordButtonPosition()
+            }
+        }
+    }
+
+    private func clampedDragPosition(
+        translation: CGSize,
+        minX: CGFloat, maxX: CGFloat,
+        minY: CGFloat, maxY: CGFloat
+    ) -> CGPoint {
+        let newX = dragStartPosition.x + translation.width
+        let newY = dragStartPosition.y + translation.height
+        return CGPoint(
+            x: min(max(newX, minX), maxX),
+            y: min(max(newY, minY), maxY)
+        )
+    }
+
     private func checkAndShowMoveHint() {
         // Don't show if currently recording
         guard !appState.recorder.isActive else { return }
@@ -534,35 +518,13 @@ struct ContentView: View {
         let nudgeDistance: CGFloat = 10
         let singleOscillationDuration: Double = 0.18
 
-        // Oscillation sequence: right -> left -> right -> left -> right -> center
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = nudgeDistance
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = -nudgeDistance
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 2) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = nudgeDistance * 0.6
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 3) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = -nudgeDistance * 0.6
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 4) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = nudgeDistance * 0.3
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * 5) {
-            withAnimation(.easeInOut(duration: singleOscillationDuration)) {
-                hintNudgeOffset = 0
+        // Oscillation sequence: right -> left with decreasing amplitude -> center
+        let offsets: [CGFloat] = [1, -1, 0.6, -0.6, 0.3, 0]
+        for (i, scale) in offsets.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + singleOscillationDuration * Double(i)) {
+                withAnimation(.easeInOut(duration: singleOscillationDuration)) {
+                    hintNudgeOffset = nudgeDistance * scale
+                }
             }
         }
 
@@ -663,6 +625,14 @@ struct ContentView: View {
 
     // MARK: - Top Navigation Bar
 
+    private func navBarIcon(_ systemName: String, color: Color) -> some View {
+        Image(systemName: systemName)
+            .symbolRenderingMode(.monochrome)
+            .font(.system(size: 24, weight: .medium))
+            .foregroundColor(color)
+            .frame(width: 44, height: 44)
+    }
+
     private var topNavigationBar: some View {
         let isCustomTheme = appState.selectedTheme.isCustomTheme
 
@@ -674,31 +644,19 @@ struct ContentView: View {
         return HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Button { showSettings = true } label: {
-                    Image(systemName: "gearshape.fill")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(iconColor)
-                        .frame(width: 44, height: 44)
+                    navBarIcon("gearshape.fill", color: iconColor)
                 }
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .map }
                 } label: {
-                    Image(systemName: "map.fill")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .map ? activeIconColor : iconColor)
-                        .frame(width: 44, height: 44)
+                    navBarIcon("map.fill", color: currentRoute == .map ? activeIconColor : iconColor)
                 }
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { currentRoute = .recordings }
                 } label: {
-                    Image(systemName: "waveform")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(currentRoute == .recordings ? activeIconColor : iconColor)
-                        .frame(width: 44, height: 44)
+                    navBarIcon("waveform", color: currentRoute == .recordings ? activeIconColor : iconColor)
                 }
             }
 
@@ -706,19 +664,14 @@ struct ContentView: View {
 
             HStack(spacing: 8) {
                 Button { showSearch = true } label: {
-                    Image(systemName: "magnifyingglass")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(iconColor)
-                        .frame(width: 44, height: 44)
+                    navBarIcon("magnifyingglass", color: iconColor)
                 }
 
                 Button { showTipJar = true } label: {
-                    Image(systemName: appState.supportManager.canUseProFeatures ? "checkmark.seal.fill" : "star.circle.fill")
-                        .symbolRenderingMode(.monochrome)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(appState.supportManager.canUseProFeatures ? iconColor : palette.accent)
-                        .frame(width: 44, height: 44)
+                    navBarIcon(
+                        appState.supportManager.canUseProFeatures ? "checkmark.seal.fill" : "star.circle.fill",
+                        color: appState.supportManager.canUseProFeatures ? iconColor : palette.accent
+                    )
                 }
             }
         }
@@ -1500,6 +1453,7 @@ struct SearchSheetView: View {
     @State private var searchQuery = ""
     @State private var selectedTagIDs: Set<UUID> = []
     @State private var selectedRecording: RecordingItem?
+    @State private var computedStorageUsed: String = "…"
     @State private var selectedAlbum: Album?
     @State private var selectedProject: Project?
 
@@ -1530,21 +1484,7 @@ struct SearchSheetView: View {
     }
 
     private var totalStorageUsed: String {
-        let totalBytes = appState.activeRecordings.reduce(into: Int64(0)) { result, recording in
-            let url = recording.fileURL
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-               let fileSize = attrs[.size] as? Int64 {
-                result += fileSize
-            }
-        }
-        return formatBytes(totalBytes)
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useKB, .useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
+        computedStorageUsed
     }
 
     var body: some View {
@@ -1630,6 +1570,23 @@ struct SearchSheetView: View {
             .onChange(of: searchScope) { _, _ in
                 if searchScope != .recordings { selectedTagIDs.removeAll() }
             }
+        }
+        .task {
+            let recordings = appState.activeRecordings
+            let result = await Task.detached {
+                let totalBytes = recordings.reduce(into: Int64(0)) { result, recording in
+                    let url = recording.fileURL
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                       let fileSize = attrs[.size] as? Int64 {
+                        result += fileSize
+                    }
+                }
+                let formatter = ByteCountFormatter()
+                formatter.allowedUnits = [.useKB, .useMB, .useGB]
+                formatter.countStyle = .file
+                return formatter.string(fromByteCount: totalBytes)
+            }.value
+            computedStorageUsed = result
         }
     }
 
@@ -5013,83 +4970,117 @@ struct InfoTipRow: View {
     }
 }
 
-// MARK: - Recording & Playback Info View
+// MARK: - Info Guide Template
 
-struct RecordingPlaybackInfoView: View {
+/// Data model for a section in an info guide (headline + bullet list)
+struct InfoGuideSection {
+    let headline: String
+    let bullets: [String]
+}
+
+/// Data model for a note callout in an info guide (icon + text)
+struct InfoGuideNote {
+    let icon: String
+    let iconColor: Color
+    let text: String
+}
+
+/// Reusable template for info/guide views.
+/// All standard info views share this pattern: intro text → info card sections → optional note → optional tip.
+struct InfoGuideView: View {
+    let title: String
+    let intro: String
+    let sections: [InfoGuideSection]
+    var tip: String? = nil
+    var note: InfoGuideNote? = nil
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Sonidea captures ideas the moment they happen and gives you studio-level playback controls.")
+                Text(intro)
                     .font(.body)
                     .foregroundColor(.primary)
                     .padding(.horizontal)
 
-                InfoCard {
-                    Text("Recording")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                    InfoCard {
+                        Text(section.headline)
+                            .font(.headline)
+                            .foregroundColor(.primary)
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Tap the floating record button to start. Tap again to stop and save.")
-                        InfoBulletRow(text: "Pause and resume mid-recording — your audio is stitched seamlessly.")
-                        InfoBulletRow(text: "Adjust input gain (-6 to +6 dB) and enable a limiter to prevent clipping.")
-                        InfoBulletRow(text: "Recordings are auto-tagged with your GPS location when available.")
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(section.bullets, id: \.self) { bullet in
+                                InfoBulletRow(text: bullet)
+                            }
+                        }
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
 
-                InfoCard {
-                    Text("Recording quality")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Standard — AAC 128 kbps at 44.1 kHz (free tier).")
-                        InfoBulletRow(text: "High — AAC 256 kbps at 48 kHz (Pro).")
-                        InfoBulletRow(text: "Lossless — Apple Lossless (ALAC) at 48 kHz (Pro).")
-                        InfoBulletRow(text: "WAV — Uncompressed PCM 16-bit at 48 kHz (Pro).")
+                if let note {
+                    InfoCard {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: note.icon)
+                                .font(.system(size: 14))
+                                .foregroundColor(note.iconColor)
+                            Text(note.text)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
 
-                InfoCard {
-                    Text("Playback")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Adjust playback speed from 0.5x to 2x with pitch preserved.")
-                        InfoBulletRow(text: "Use the 4-band parametric EQ to shape the sound — drag the band points on the graph.")
-                        InfoBulletRow(text: "Skip Silence automatically jumps past quiet sections during playback.")
-                        InfoBulletRow(text: "Add markers at any point and tap them to jump back instantly.")
+                if let tip {
+                    InfoCard {
+                        InfoTipRow(text: tip)
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Live Activity")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "While recording, a Live Activity appears on the Lock Screen and Dynamic Island.")
-                        InfoBulletRow(text: "Pause, resume, or stop your recording without unlocking the phone.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    InfoTipRow(text: "Enable the limiter when recording loud sources — it catches peaks that would otherwise clip.")
-                }
-                .padding(.horizontal)
 
                 Spacer(minLength: 40)
             }
             .padding(.top)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Recording & Playback")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Recording & Playback Info View
+
+struct RecordingPlaybackInfoView: View {
+    var body: some View {
+        InfoGuideView(
+            title: "Recording & Playback",
+            intro: "Sonidea captures ideas the moment they happen and gives you studio-level playback controls.",
+            sections: [
+                InfoGuideSection(headline: "Recording", bullets: [
+                    "Tap the floating record button to start. Tap again to stop and save.",
+                    "Pause and resume mid-recording — your audio is stitched seamlessly.",
+                    "Adjust input gain (-6 to +6 dB) and enable a limiter to prevent clipping.",
+                    "Recordings are auto-tagged with your GPS location when available."
+                ]),
+                InfoGuideSection(headline: "Recording quality", bullets: [
+                    "Standard — AAC 128 kbps at 44.1 kHz (free tier).",
+                    "High — AAC 256 kbps at 48 kHz (Pro).",
+                    "Lossless — Apple Lossless (ALAC) at 48 kHz (Pro).",
+                    "WAV — Uncompressed PCM 16-bit at 48 kHz (Pro)."
+                ]),
+                InfoGuideSection(headline: "Playback", bullets: [
+                    "Adjust playback speed from 0.5x to 2x with pitch preserved.",
+                    "Use the 4-band parametric EQ to shape the sound — drag the band points on the graph.",
+                    "Skip Silence automatically jumps past quiet sections during playback.",
+                    "Add markers at any point and tap them to jump back instantly."
+                ]),
+                InfoGuideSection(headline: "Live Activity", bullets: [
+                    "While recording, a Live Activity appears on the Lock Screen and Dynamic Island.",
+                    "Pause, resume, or stop your recording without unlocking the phone."
+                ])
+            ],
+            tip: "Enable the limiter when recording loud sources — it catches peaks that would otherwise clip."
+        )
     }
 }
 
@@ -5097,63 +5088,27 @@ struct RecordingPlaybackInfoView: View {
 
 struct EditingInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Clean up recordings with trim, cut, and silence removal — all from the waveform editor.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                InfoCard {
-                    Text("How editing works")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Open a recording and tap Edit to enter the waveform editor.")
-                        InfoBulletRow(text: "Pinch to zoom into the waveform for precise selection.")
-                        InfoBulletRow(text: "Drag the selection handles to highlight a region.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Edit actions")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Trim — keep only the selected region, remove everything else.")
-                        InfoBulletRow(text: "Cut — remove the selected region and join the remaining audio.")
-                        InfoBulletRow(text: "Remove Silence — automatically detect and strip all silent sections at once.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Skip Silence settings")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Adjust the silence threshold (-60 to -20 dB) and minimum duration (100–1000 ms).")
-                        InfoBulletRow(text: "Toggle fade transitions on cut boundaries to avoid audio clicks.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    InfoTipRow(text: "Editing is a Pro feature. Edits create new files — your original is safe until you confirm.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Editing")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Editing",
+            intro: "Clean up recordings with trim, cut, and silence removal — all from the waveform editor.",
+            sections: [
+                InfoGuideSection(headline: "How editing works", bullets: [
+                    "Open a recording and tap Edit to enter the waveform editor.",
+                    "Pinch to zoom into the waveform for precise selection.",
+                    "Drag the selection handles to highlight a region."
+                ]),
+                InfoGuideSection(headline: "Edit actions", bullets: [
+                    "Trim — keep only the selected region, remove everything else.",
+                    "Cut — remove the selected region and join the remaining audio.",
+                    "Remove Silence — automatically detect and strip all silent sections at once."
+                ]),
+                InfoGuideSection(headline: "Skip Silence settings", bullets: [
+                    "Adjust the silence threshold (-60 to -20 dB) and minimum duration (100–1000 ms).",
+                    "Toggle fade transitions on cut boundaries to avoid audio clicks."
+                ])
+            ],
+            tip: "Editing is a Pro feature. Edits create new files — your original is safe until you confirm."
+        )
     }
 }
 
@@ -5161,40 +5116,20 @@ struct EditingInfoView: View {
 
 struct TagsInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Tags let you label ideas fast so you can find them later.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                InfoCard {
-                    Text("How Tags work")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Add tags to any recording (Hook, Verse, Beat, Lyrics, To Finish).")
-                        InfoBulletRow(text: "Tap tags to filter your library instantly.")
-                        InfoBulletRow(text: "Use multiple tags on the same recording (e.g., Hook + Melody).")
-                        InfoBulletRow(text: "The Favorite tag is built-in and cannot be deleted — use it to mark your best ideas.")
-                        InfoBulletRow(text: "Create, rename, recolor, or delete tags in Settings → Manage Tags.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    InfoTipRow(text: "Tags are a Pro feature. Keep names short (1–2 words) so your filters stay clean.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Tags")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Tags",
+            intro: "Tags let you label ideas fast so you can find them later.",
+            sections: [
+                InfoGuideSection(headline: "How Tags work", bullets: [
+                    "Add tags to any recording (Hook, Verse, Beat, Lyrics, To Finish).",
+                    "Tap tags to filter your library instantly.",
+                    "Use multiple tags on the same recording (e.g., Hook + Melody).",
+                    "The Favorite tag is built-in and cannot be deleted — use it to mark your best ideas.",
+                    "Create, rename, recolor, or delete tags in Settings → Manage Tags."
+                ])
+            ],
+            tip: "Tags are a Pro feature. Keep names short (1–2 words) so your filters stay clean."
+        )
     }
 }
 
@@ -5202,40 +5137,20 @@ struct TagsInfoView: View {
 
 struct AlbumsInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Albums are folders that keep your recordings organized by project, session, or vibe.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                InfoCard {
-                    Text("How Albums work")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Use Albums to separate drafts, sessions, clients, or song ideas.")
-                        InfoBulletRow(text: "Move a recording into an Album from its Details screen, or use swipe actions in the list.")
-                        InfoBulletRow(text: "Albums work with Search and Tags — filter by Album first, then refine with tags.")
-                        InfoBulletRow(text: "Rename an album by tapping the pencil icon in its detail view.")
-                        InfoBulletRow(text: "Create, rename, or delete albums anytime. System albums (like Drafts) cannot be renamed or deleted.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    InfoTipRow(text: "Keep a \"Drafts\" album for quick capture, then move ideas into project-specific albums later.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Albums")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Albums",
+            intro: "Albums are folders that keep your recordings organized by project, session, or vibe.",
+            sections: [
+                InfoGuideSection(headline: "How Albums work", bullets: [
+                    "Use Albums to separate drafts, sessions, clients, or song ideas.",
+                    "Move a recording into an Album from its Details screen, or use swipe actions in the list.",
+                    "Albums work with Search and Tags — filter by Album first, then refine with tags.",
+                    "Rename an album by tapping the pencil icon in its detail view.",
+                    "Create, rename, or delete albums anytime. System albums (like Drafts) cannot be renamed or deleted."
+                ])
+            ],
+            tip: "Keep a \"Drafts\" album for quick capture, then move ideas into project-specific albums later."
+        )
     }
 }
 
@@ -5582,40 +5497,20 @@ struct SharedAlbumRoleRow: View {
 
 struct ProjectsInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Keep versions organized without clutter.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                InfoCard {
-                    Text("How Projects work")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "A Project groups related takes for the same idea (Hook v1, Chorus v2, Verse idea).")
-                        InfoBulletRow(text: "Record New Version creates a linked take (V2, V3...) inside the same Project instead of making scattered files.")
-                        InfoBulletRow(text: "Mark a Best Take to highlight the version you want to keep. Press and hold a take to set it.")
-                        InfoBulletRow(text: "Pin important projects so they always appear at the top of your list.")
-                        InfoBulletRow(text: "Albums vs. Projects: Albums organize your library. Projects organize versions of the same idea.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    InfoTipRow(text: "Use Record New Version in a recording's Details to quickly capture another take without leaving the project.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Projects")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Projects",
+            intro: "Keep versions organized without clutter.",
+            sections: [
+                InfoGuideSection(headline: "How Projects work", bullets: [
+                    "A Project groups related takes for the same idea (Hook v1, Chorus v2, Verse idea).",
+                    "Record New Version creates a linked take (V2, V3...) inside the same Project instead of making scattered files.",
+                    "Mark a Best Take to highlight the version you want to keep. Press and hold a take to set it.",
+                    "Pin important projects so they always appear at the top of your list.",
+                    "Albums vs. Projects: Albums organize your library. Projects organize versions of the same idea."
+                ])
+            ],
+            tip: "Use Record New Version in a recording's Details to quickly capture another take without leaving the project."
+        )
     }
 }
 
@@ -5623,86 +5518,35 @@ struct ProjectsInfoView: View {
 
 struct OverdubInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Record new layers over an existing track — like a one-person band.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                InfoCard {
-                    Text("How Overdub works")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Open any recording's Details and tap Overdub to start a session.")
-                        InfoBulletRow(text: "Headphones are required — this prevents audio feedback from the speaker into the mic.")
-                        InfoBulletRow(text: "You'll hear the original track (and any existing layers) while recording a new layer.")
-                        InfoBulletRow(text: "Each base track supports up to 3 layers. All layers stay linked in an Overdub Group.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Mix controls")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Adjust the base track volume and layer volume independently while recording.")
-                        InfoBulletRow(text: "Toggle \"Hear Previous Layers\" off if you only want to hear the base track during recording.")
-                        InfoBulletRow(text: "Auto-headroom reduces the mixer gain when multiple sources play to prevent clipping.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Sync adjustment & preview")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "After recording a layer, expand Sync Adjustment to shift it ±500 ms in 10 ms steps.")
-                        InfoBulletRow(text: "Tap Preview Mix to hear the base, existing layers, and the new layer together before saving.")
-                        InfoBulletRow(text: "Drag the slider while previewing — playback restarts instantly with the new offset so you can dial it in by ear.")
-                        InfoBulletRow(text: "Positive values delay the layer; negative values make it play earlier.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    Text("Finding overdubs in your library")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Base tracks show an orange OVERDUB badge with layer count.")
-                        InfoBulletRow(text: "Layers show a purple LAYER 1/2/3 badge.")
-                        InfoBulletRow(text: "In any overdub recording's Details, the Overdub Group section shows all linked tracks.")
-                    }
-                }
-                .padding(.horizontal)
-
-                InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "headphones")
-                            .font(.system(size: 14))
-                            .foregroundColor(.orange)
-                        Text("Tip: Wired headphones have the lowest latency. Bluetooth works but may need more sync adjustment.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Overdub")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Overdub",
+            intro: "Record new layers over an existing track — like a one-person band.",
+            sections: [
+                InfoGuideSection(headline: "How Overdub works", bullets: [
+                    "Open any recording's Details and tap Overdub to start a session.",
+                    "Headphones are required — this prevents audio feedback from the speaker into the mic.",
+                    "You'll hear the original track (and any existing layers) while recording a new layer.",
+                    "Each base track supports up to 3 layers. All layers stay linked in an Overdub Group."
+                ]),
+                InfoGuideSection(headline: "Mix controls", bullets: [
+                    "Adjust the base track volume and layer volume independently while recording.",
+                    "Toggle \"Hear Previous Layers\" off if you only want to hear the base track during recording.",
+                    "Auto-headroom reduces the mixer gain when multiple sources play to prevent clipping."
+                ]),
+                InfoGuideSection(headline: "Sync adjustment & preview", bullets: [
+                    "After recording a layer, expand Sync Adjustment to shift it ±500 ms in 10 ms steps.",
+                    "Tap Preview Mix to hear the base, existing layers, and the new layer together before saving.",
+                    "Drag the slider while previewing — playback restarts instantly with the new offset so you can dial it in by ear.",
+                    "Positive values delay the layer; negative values make it play earlier."
+                ]),
+                InfoGuideSection(headline: "Finding overdubs in your library", bullets: [
+                    "Base tracks show an orange OVERDUB badge with layer count.",
+                    "Layers show a purple LAYER 1/2/3 badge.",
+                    "In any overdub recording's Details, the Overdub Group section shows all linked tracks."
+                ])
+            ],
+            note: InfoGuideNote(icon: "headphones", iconColor: .orange, text: "Tip: Wired headphones have the lowest latency. Bluetooth works but may need more sync adjustment.")
+        )
     }
 }
 
@@ -5710,49 +5554,19 @@ struct OverdubInfoView: View {
 
 struct MapsInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Maps lets you see your creative footprint—where your ideas were captured over time.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                // How it works
-                InfoCard {
-                    Text("How Maps work")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Each recording can save an optional location when it's created.")
-                        InfoBulletRow(text: "Open Maps to see your recording spots over time—sessions, trips, and favorite places.")
-                        InfoBulletRow(text: "Tap a pin to jump straight to that recording's details.")
-                        InfoBulletRow(text: "You control it anytime: enable or disable Location in iOS Settings.")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Note
-                InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "info.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.blue)
-                        Text("Location is optional. Sonidea works fully without it, and you can turn it off anytime.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Maps")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Maps",
+            intro: "Maps lets you see your creative footprint—where your ideas were captured over time.",
+            sections: [
+                InfoGuideSection(headline: "How Maps work", bullets: [
+                    "Each recording can save an optional location when it's created.",
+                    "Open Maps to see your recording spots over time—sessions, trips, and favorite places.",
+                    "Tap a pin to jump straight to that recording's details.",
+                    "You control it anytime: enable or disable Location in iOS Settings."
+                ])
+            ],
+            note: InfoGuideNote(icon: "info.circle.fill", iconColor: .blue, text: "Location is optional. Sonidea works fully without it, and you can turn it off anytime.")
+        )
     }
 }
 
@@ -5760,49 +5574,19 @@ struct MapsInfoView: View {
 
 struct RecordButtonInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Move the record button anywhere so it's always where your thumb expects it.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                // How it works
-                InfoCard {
-                    Text("How it works")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Drag the record button anywhere on screen (below the top bar).")
-                        InfoBulletRow(text: "Your placement is saved automatically.")
-                        InfoBulletRow(text: "Long-press the button to reveal quick options, including Reset.")
-                        InfoBulletRow(text: "You can also reset it anytime in Settings → Reset Record Button Position.")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Note
-                InfoCard {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 14))
-                            .foregroundColor(.blue)
-                        Text("Reset returns the button to the default bottom position.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Movable Record Button")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Movable Record Button",
+            intro: "Move the record button anywhere so it's always where your thumb expects it.",
+            sections: [
+                InfoGuideSection(headline: "How it works", bullets: [
+                    "Drag the record button anywhere on screen (below the top bar).",
+                    "Your placement is saved automatically.",
+                    "Long-press the button to reveal quick options, including Reset.",
+                    "You can also reset it anytime in Settings → Reset Record Button Position."
+                ])
+            ],
+            note: InfoGuideNote(icon: "arrow.counterclockwise", iconColor: .blue, text: "Reset returns the button to the default bottom position.")
+        )
     }
 }
 
@@ -5810,57 +5594,25 @@ struct RecordButtonInfoView: View {
 
 struct SearchInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Find any recording instantly using search, or browse your library by calendar or timeline.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                // Search
-                InfoCard {
-                    Text("Search")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Tap the magnifying glass in the top bar")
-                        InfoBulletRow(text: "Search by recording name or tag (e.g., \"melody\")")
-                        InfoBulletRow(text: "Filter results by tapping tag chips below the search bar")
-                        InfoBulletRow(text: "Results update as you type")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Browse modes
-                InfoCard {
-                    Text("Browse modes")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "List — classic scrollable list of all recordings")
-                        InfoBulletRow(text: "Grid — visual card layout with color thumbnails")
-                        InfoBulletRow(text: "Calendar — monthly view with dots on days you recorded; tap a day to see that day's recordings")
-                        InfoBulletRow(text: "Timeline — chronological journal grouped by day, showing time, tags, location, and project context")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Tip
-                InfoCard {
-                    InfoTipRow(text: "Switch browse modes using the view picker at the top of the recordings list.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Search & Browse")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Search & Browse",
+            intro: "Find any recording instantly using search, or browse your library by calendar or timeline.",
+            sections: [
+                InfoGuideSection(headline: "Search", bullets: [
+                    "Tap the magnifying glass in the top bar",
+                    "Search by recording name or tag (e.g., \"melody\")",
+                    "Filter results by tapping tag chips below the search bar",
+                    "Results update as you type"
+                ]),
+                InfoGuideSection(headline: "Browse modes", bullets: [
+                    "List — classic scrollable list of all recordings",
+                    "Grid — visual card layout with color thumbnails",
+                    "Calendar — monthly view with dots on days you recorded; tap a day to see that day's recordings",
+                    "Timeline — chronological journal grouped by day, showing time, tags, location, and project context"
+                ])
+            ],
+            tip: "Switch browse modes using the view picker at the top of the recordings list."
+        )
     }
 }
 
@@ -5868,59 +5620,27 @@ struct SearchInfoView: View {
 
 struct AppearanceInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Choose from 7 studio-inspired themes to make Sonidea feel like your favorite DAW.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                // Themes
-                InfoCard {
-                    Text("Available themes")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "System — clean default look, follows Light or Dark mode")
-                        InfoBulletRow(text: "Angst Robot — purple-tinted dark theme inspired by Ableton Live")
-                        InfoBulletRow(text: "Cream — warm amber tones on a light background")
-                        InfoBulletRow(text: "Logic — periwinkle accents on dark, inspired by Logic Pro")
-                        InfoBulletRow(text: "Fruity — orange accents on dark, inspired by FL Studio")
-                        InfoBulletRow(text: "AVID — teal and mint on dark, inspired by Pro Tools")
-                        InfoBulletRow(text: "Dynamite — bold red and blue on charcoal")
-                    }
-                }
-                .padding(.horizontal)
-
-                // How to change
-                InfoCard {
-                    Text("How to change your theme")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Go to Settings → Theme")
-                        InfoBulletRow(text: "Tap any theme to preview it instantly")
-                        InfoBulletRow(text: "Your choice applies across the entire app")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Tip
-                InfoCard {
-                    InfoTipRow(text: "You can also customize tag colors in Settings → Manage Tags to match your workflow.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Themes")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Themes",
+            intro: "Choose from 7 studio-inspired themes to make Sonidea feel like your favorite DAW.",
+            sections: [
+                InfoGuideSection(headline: "Available themes", bullets: [
+                    "System — clean default look, follows Light or Dark mode",
+                    "Angst Robot — purple-tinted dark theme inspired by Ableton Live",
+                    "Cream — warm amber tones on a light background",
+                    "Logic — periwinkle accents on dark, inspired by Logic Pro",
+                    "Fruity — orange accents on dark, inspired by FL Studio",
+                    "AVID — teal and mint on dark, inspired by Pro Tools",
+                    "Dynamite — bold red and blue on charcoal"
+                ]),
+                InfoGuideSection(headline: "How to change your theme", bullets: [
+                    "Go to Settings → Theme",
+                    "Tap any theme to preview it instantly",
+                    "Your choice applies across the entire app"
+                ])
+            ],
+            tip: "You can also customize tag colors in Settings → Manage Tags to match your workflow."
+        )
     }
 }
 
@@ -6055,56 +5775,24 @@ struct iCloudSyncInfoView: View {
 
 struct ExportInfoView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Summary
-                Text("Export your recordings as high-quality WAV files, or bulk-export an entire album as a ZIP archive.")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-
-                // Single export
-                InfoCard {
-                    Text("Exporting a single recording")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Open a recording and tap the share icon")
-                        InfoBulletRow(text: "The recording is converted to 16-bit PCM WAV at its original sample rate")
-                        InfoBulletRow(text: "Share via AirDrop, Files, Messages, or any app that accepts audio")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Bulk export
-                InfoCard {
-                    Text("Bulk export (ZIP)")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        InfoBulletRow(text: "Export all recordings or a single album at once")
-                        InfoBulletRow(text: "Creates a ZIP file with WAV audio organized into album folders")
-                        InfoBulletRow(text: "Includes a manifest.json with metadata: titles, dates, durations, tags, and locations")
-                        InfoBulletRow(text: "Recordings without an album are placed in an \"Unsorted\" folder")
-                    }
-                }
-                .padding(.horizontal)
-
-                // Tip
-                InfoCard {
-                    InfoTipRow(text: "The manifest file makes it easy to catalog or import your recordings into a DAW or project manager.")
-                }
-                .padding(.horizontal)
-
-                Spacer(minLength: 40)
-            }
-            .padding(.top)
-        }
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Export")
-        .navigationBarTitleDisplayMode(.inline)
+        InfoGuideView(
+            title: "Export",
+            intro: "Export your recordings as high-quality WAV files, or bulk-export an entire album as a ZIP archive.",
+            sections: [
+                InfoGuideSection(headline: "Exporting a single recording", bullets: [
+                    "Open a recording and tap the share icon",
+                    "The recording is converted to 16-bit PCM WAV at its original sample rate",
+                    "Share via AirDrop, Files, Messages, or any app that accepts audio"
+                ]),
+                InfoGuideSection(headline: "Bulk export (ZIP)", bullets: [
+                    "Export all recordings or a single album at once",
+                    "Creates a ZIP file with WAV audio organized into album folders",
+                    "Includes a manifest.json with metadata: titles, dates, durations, tags, and locations",
+                    "Recordings without an album are placed in an \"Unsorted\" folder"
+                ])
+            ],
+            tip: "The manifest file makes it easy to catalog or import your recordings into a DAW or project manager."
+        )
     }
 }
 
