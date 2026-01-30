@@ -398,19 +398,21 @@ final class RecorderManager: NSObject {
             engine.connect(inputNode, to: gainMixer, format: inputFormat)
             engine.connect(gainMixer, to: limiter, format: inputFormat)
 
-            // Determine output format for file
-            let outputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
+            // Use limiter's actual output format for tap (avoids sample rate mismatch that causes 0-frame files)
+            let tapFormat = limiter.outputFormat(forBus: 0)
+            resolvedEngineSampleRate = tapFormat.sampleRate
+            print("🎙️ [RecorderManager] Tap format: \(tapFormat.sampleRate)Hz, \(tapFormat.channelCount)ch")
 
-            // Create output audio file
+            // Create output audio file matching tap format
             let file = try AVAudioFile(
                 forWriting: fileURL,
                 settings: engineFileSettings(for: qualityPreset),
-                commonFormat: outputFormat.commonFormat,
-                interleaved: outputFormat.isInterleaved
+                commonFormat: tapFormat.commonFormat,
+                interleaved: tapFormat.isInterleaved
             )
 
-            // Install tap on limiter output to write to file
-            limiter.installTap(onBus: 0, bufferSize: 4096, format: outputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+            // Install tap on limiter output to write to file (using native format, no conversion)
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
                 do {
                     try file.write(from: buffer)
                 } catch {
@@ -488,7 +490,7 @@ final class RecorderManager: NSObject {
         case .standard:
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: min(effectiveSampleRate, 44100),
+                AVSampleRateKey: effectiveSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitRateKey: 128000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
@@ -496,7 +498,7 @@ final class RecorderManager: NSObject {
         case .high:
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVSampleRateKey: effectiveSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitRateKey: 256000 * channels,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
@@ -504,7 +506,7 @@ final class RecorderManager: NSObject {
         case .lossless:
             return [
                 AVFormatIDKey: Int(kAudioFormatAppleLossless),
-                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVSampleRateKey: effectiveSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitDepthHintKey: 16,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
@@ -512,7 +514,7 @@ final class RecorderManager: NSObject {
         case .wav:
             return [
                 AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: min(effectiveSampleRate, 48000),
+                AVSampleRateKey: effectiveSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
@@ -589,10 +591,14 @@ final class RecorderManager: NSObject {
         }
 
         // Stop based on which method is in use
+        // CRITICAL: Nil out recorder BEFORE reading the file for duration.
+        // On real devices, AVAudioRecorder holds a file handle that prevents
+        // AVAudioFile(forReading:) from getting accurate frame counts.
         if isUsingEngine {
             stopEngineRecording()
         } else {
             audioRecorder?.stop()
+            audioRecorder = nil  // Release file handle so AVAudioFile can read it accurately
         }
         stopTimer()
 
@@ -621,13 +627,15 @@ final class RecorderManager: NSObject {
 
         // Get actual duration from the audio file, not wall clock time
         // Wall clock accumulation can differ from actual audio frames due to buffer latency
+        // Fall back to wall clock if file reports 0 (e.g. simulator with no mic input)
         let duration: TimeInterval
         if fileVerified {
             do {
                 let audioFile = try AVAudioFile(forReading: fileURL)
                 let actualDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
                 print("✅ [RecorderManager] Actual file duration: \(actualDuration)s (wall clock was: \(accumulatedDuration)s)")
-                duration = actualDuration
+                // Use file duration if valid, otherwise fall back to wall clock
+                duration = actualDuration > 0.1 ? actualDuration : accumulatedDuration
             } catch {
                 print("⚠️ [RecorderManager] Could not read file for duration, using wall clock: \(error.localizedDescription)")
                 duration = accumulatedDuration

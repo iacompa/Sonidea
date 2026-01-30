@@ -972,11 +972,10 @@ struct RecordingHUDCard: View {
             }
             .padding(.horizontal, 20)
 
-            Rectangle()
-                .fill(palette.separator)
-                .frame(height: 1)
+            // Level meter (green → yellow → red with dB scale)
+            LevelMeterBar(level: liveSamples.last ?? 0, isPaused: isPaused)
                 .padding(.horizontal, 20)
-                .padding(.top, 16)
+                .padding(.top, 12)
 
             // Bottom row: Mic info + Controls
             HStack {
@@ -1038,10 +1037,6 @@ struct RecordingHUDCard: View {
                     onPause?()
                 }
             )
-
-            if let lastSample = liveSamples.last {
-                PremiumLevelMeter(level: lastSample)
-            }
         }
     }
 
@@ -1274,6 +1269,135 @@ struct RecordingControlsSheet: View {
     }
 }
 
+// MARK: - Level Meter Bar (green → yellow → red with dB scale)
+
+struct LevelMeterBar: View {
+    let level: Float   // 0.0 – 1.0 normalized
+    var isPaused: Bool = false
+
+    @Environment(\.themePalette) private var palette
+
+    // dB scale marks placed evenly across the bar at 25%, 50%, 75%, 100%
+    private let scaleMarks: [(db: String, normalized: CGFloat)] = [
+        ("-6", 0.25),
+        ("-3", 0.50),
+        ("0",  0.75),
+        ("+3", 1.0),
+    ]
+
+    private let clipThreshold: Float = 0.97  // ~-1.5 dB input level
+
+    @State private var displayLevel: CGFloat = 0
+    @State private var isClipping = false
+    @State private var clipTimer: Timer?
+
+    /// Convert normalized level (0-1, representing -50 to 0 dB) to display position.
+    /// Piecewise mapping so dB marks are evenly spaced:
+    ///   below -6 dB → 0% to 25%  (compressed)
+    ///   -6 to -3 dB → 25% to 50%
+    ///   -3 to  0 dB → 50% to 75%
+    ///    0 to +3 dB → 75% to 100% (clipping zone)
+    private func levelToPosition(_ level: Float) -> CGFloat {
+        let dB = level * 50 - 50
+        if dB <= -6 {
+            return CGFloat(max(0, (dB + 50) / 44.0 * 0.25))
+        } else if dB <= -3 {
+            return CGFloat(0.25 + (dB + 6) / 3.0 * 0.25)
+        } else if dB <= 0 {
+            return CGFloat(0.50 + (dB + 3) / 3.0 * 0.25)
+        } else {
+            return CGFloat(min(1.0, 0.75 + dB / 3.0 * 0.25))
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            // Meter bar with gradient
+            GeometryReader { geo in
+                let width = geo.size.width
+
+                ZStack(alignment: .leading) {
+                    // Background track
+                    Capsule()
+                        .fill(Color.gray.opacity(0.15))
+
+                    // Filled meter with gradient
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .green, location: 0),
+                                    .init(color: .green, location: 0.40),
+                                    .init(color: .yellow, location: 0.55),
+                                    .init(color: .orange, location: 0.70),
+                                    .init(color: .red, location: 0.85),
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(0, min(displayLevel * width, width)))
+
+                    // Clip dot
+                    if isClipping && !isPaused {
+                        HStack {
+                            Spacer()
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 6, height: 6)
+                                .shadow(color: .red.opacity(0.8), radius: 3)
+                        }
+                    }
+
+                    // dB tick lines
+                    ForEach(scaleMarks, id: \.db) { mark in
+                        let x = mark.normalized * width
+                        Rectangle()
+                            .fill(palette.textSecondary.opacity(0.3))
+                            .frame(width: 1)
+                            .position(x: min(x, width - 1), y: geo.size.height / 2)
+                    }
+                }
+            }
+            .frame(height: 4)
+            .clipShape(Capsule())
+
+            // dB labels
+            GeometryReader { geo in
+                let width = geo.size.width
+                ForEach(scaleMarks, id: \.db) { mark in
+                    let x = mark.normalized * width
+                    Text(mark.db)
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(palette.textSecondary.opacity(0.6))
+                        .position(x: min(x, width - 8), y: 5)
+                }
+            }
+            .frame(height: 10)
+        }
+        .animation(.easeOut(duration: 0.08), value: displayLevel)
+        .onChange(of: level) { _, newLevel in
+            let newDisplay = isPaused ? CGFloat(0) : levelToPosition(newLevel)
+            displayLevel = newDisplay
+
+            // Hold clip indicator for 500ms after clipping
+            if newLevel >= clipThreshold && !isPaused {
+                isClipping = true
+                clipTimer?.invalidate()
+                clipTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                    Task { @MainActor in isClipping = false }
+                }
+            }
+        }
+        .onChange(of: isPaused) { _, paused in
+            if paused {
+                displayLevel = 0
+                isClipping = false
+            }
+        }
+    }
+}
+
 // MARK: - Recording Control Chip (Apple-like compact button)
 
 private struct RecordingControlChip: View {
@@ -1347,69 +1471,6 @@ private struct RecordingControlChip: View {
     }
 }
 
-// MARK: - Premium Level Meter
-
-struct PremiumLevelMeter: View {
-    let level: Float
-
-    private let barCount = 6
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 2
-    private let maxHeight: CGFloat = 16
-
-    private func barHeight(at index: Int) -> CGFloat {
-        let baseHeight: CGFloat = 4
-        let increment = (maxHeight - baseHeight) / CGFloat(barCount - 1)
-        return baseHeight + increment * CGFloat(index)
-    }
-
-    private func isActive(at index: Int) -> Bool {
-        Float(index) / Float(barCount) <= level
-    }
-
-    private func barColor(at index: Int) -> Color {
-        guard isActive(at: index) else { return Color(.systemGray4) }
-        if index >= barCount - 1 { return .red }
-        if index >= barCount - 2 { return .orange }
-        return .green
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(barColor(at: index))
-                    .frame(width: barWidth, height: barHeight(at: index))
-            }
-        }
-    }
-}
-
-// MARK: - Legacy Level Indicator
-struct LevelIndicator: View {
-    let level: Float
-    private var barCount: Int { 5 }
-
-    private func barColor(at index: Int) -> Color {
-        let threshold = Float(index) / Float(barCount)
-        if level >= threshold {
-            if index >= barCount - 1 { return .red }
-            if index >= barCount - 2 { return .orange }
-            return .green
-        }
-        return Color(.systemGray4)
-    }
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(barColor(at: index))
-                    .frame(width: 4, height: CGFloat(8 + index * 3))
-            }
-        }
-    }
-}
 
 // MARK: - Placeholder Views
 struct MapPlaceholderView: View {
