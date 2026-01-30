@@ -10,6 +10,9 @@ enum ProFeatureContext: String, Identifiable {
     case recordOverTrack
     case watchSync
     case projects
+    case metronome
+    case recordingEffects
+    case mixer
 
     var id: String { rawValue }
 
@@ -24,6 +27,9 @@ enum ProFeatureContext: String, Identifiable {
         case .recordOverTrack: return "Multi-Track Recording"
         case .watchSync: return "Unlock Watch Sync"
         case .projects: return "Unlock Projects & Versioning"
+        case .metronome: return "Unlock Click Track"
+        case .recordingEffects: return "Unlock Live Effects"
+        case .mixer: return "Unlock Mixer & Mixdown"
         }
     }
 
@@ -38,6 +44,9 @@ enum ProFeatureContext: String, Identifiable {
         case .recordOverTrack: return "Layer recordings on top of existing tracks with the Record Over Track feature. Mix, adjust sync, and create rich audio with up to 3 layers."
         case .watchSync: return "Automatically sync recordings from your Apple Watch to your iPhone. Recordings appear in the ⌚️ Recordings album."
         case .projects: return "Group recordings into projects with version tracking and best-take marking."
+        case .metronome: return "Add a click track to keep time while recording. Count-in, tap tempo, and customizable time signatures."
+        case .recordingEffects: return "Monitor your recording through EQ and compression in real time. Effects are for monitoring only — the recording stays clean."
+        case .mixer: return "Mix overdub layers with per-track volume, pan, mute, and solo. Bounce to a stereo mixdown."
         }
     }
 
@@ -52,6 +61,9 @@ enum ProFeatureContext: String, Identifiable {
         case .recordOverTrack: return "square.stack.3d.up.fill"
         case .watchSync: return "applewatch"
         case .projects: return "folder.fill"
+        case .metronome: return "metronome"
+        case .recordingEffects: return "slider.horizontal.3"
+        case .mixer: return "slider.vertical.3"
         }
     }
 }

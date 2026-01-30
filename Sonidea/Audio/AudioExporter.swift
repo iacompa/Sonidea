@@ -13,6 +13,53 @@ enum ExportScope: Equatable {
     case album(Album)
 }
 
+// MARK: - Export Format
+
+enum ExportFormat: String, CaseIterable, Identifiable {
+    case original
+    case wav
+    case m4a
+    case alac
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .original: return "Original"
+        case .wav: return "WAV"
+        case .m4a: return "M4A (AAC)"
+        case .alac: return "ALAC"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .original: return "As recorded (smallest file)"
+        case .wav: return "16-bit PCM (universal compatibility)"
+        case .m4a: return "AAC 256kbps (high quality, compact)"
+        case .alac: return "Apple Lossless (lossless, Apple devices)"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .original: return "m4a"
+        case .wav: return "wav"
+        case .m4a: return "m4a"
+        case .alac: return "m4a"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .original: return "doc"
+        case .wav: return "waveform"
+        case .m4a: return "waveform.path"
+        case .alac: return "leaf"
+        }
+    }
+}
+
 struct ExportManifestItem: Codable {
     let id: String
     let title: String
@@ -53,20 +100,19 @@ final class AudioExporter {
 
     // MARK: - Safe Filename Generation
 
-    /// Generates a safe WAV filename from a recording's title
+    /// Generates a safe filename for a recording in the given format.
     /// - Parameters:
     ///   - recording: The recording to generate a filename for
+    ///   - format: The export format (determines file extension)
     ///   - existingNames: Set of already-used filenames (without extension) to avoid collisions
-    /// - Returns: A safe filename with .wav extension
-    func safeWAVFileName(for recording: RecordingItem, existingNames: Set<String> = []) -> String {
+    /// - Returns: A safe filename with the appropriate extension
+    func safeFileName(for recording: RecordingItem, format: ExportFormat, existingNames: Set<String> = []) -> String {
         let baseName = sanitizeFilename(recording.title)
 
-        // If base name is unique, use it directly
         if !existingNames.contains(baseName) {
-            return "\(baseName).wav"
+            return "\(baseName).\(format.fileExtension)"
         }
 
-        // Otherwise, append a counter to make it unique
         var counter = 2
         var uniqueName = "\(baseName) (\(counter))"
         while existingNames.contains(uniqueName) {
@@ -74,7 +120,12 @@ final class AudioExporter {
             uniqueName = "\(baseName) (\(counter))"
         }
 
-        return "\(uniqueName).wav"
+        return "\(uniqueName).\(format.fileExtension)"
+    }
+
+    /// Legacy convenience for WAV-only callers.
+    func safeWAVFileName(for recording: RecordingItem, existingNames: Set<String> = []) -> String {
+        safeFileName(for: recording, format: .wav, existingNames: existingNames)
     }
 
     /// Sanitizes a string for use as a filename
@@ -161,11 +212,107 @@ final class AudioExporter {
         return shareURL
     }
 
+    // MARK: - Multi-Format Single Export
+
+    /// Export a recording in the specified format for sharing.
+    func export(recording: RecordingItem, format: ExportFormat) async throws -> URL {
+        switch format {
+        case .wav:
+            return try await exportToWAV(recording: recording)
+        case .original:
+            return try await exportOriginal(recording: recording)
+        case .m4a:
+            return try await exportToM4A(recording: recording)
+        case .alac:
+            return try await exportToALAC(recording: recording)
+        }
+    }
+
+    /// Export the original file as-is (copy to share directory with proper name).
+    private func exportOriginal(recording: RecordingItem) async throws -> URL {
+        cleanShareDirectory()
+        let filename = safeFileName(for: recording, format: .original)
+        let shareURL = shareDirectory.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: shareURL)
+
+        do {
+            try FileManager.default.linkItem(at: recording.fileURL, to: shareURL)
+        } catch {
+            try FileManager.default.copyItem(at: recording.fileURL, to: shareURL)
+        }
+        return shareURL
+    }
+
+    /// Export as AAC M4A at 256kbps.
+    private func exportToM4A(recording: RecordingItem) async throws -> URL {
+        let cachedURL = wavCacheDirectory.appendingPathComponent("\(recording.id.uuidString)_aac.m4a")
+
+        var needsConversion = !FileManager.default.fileExists(atPath: cachedURL.path)
+        if !needsConversion {
+            let sourceAttrs = try? FileManager.default.attributesOfItem(atPath: recording.fileURL.path)
+            let cacheAttrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path)
+            if let srcDate = sourceAttrs?[.modificationDate] as? Date,
+               let cacheDate = cacheAttrs?[.modificationDate] as? Date,
+               srcDate > cacheDate {
+                needsConversion = true
+            }
+        }
+
+        if needsConversion {
+            try await convertToM4A(sourceURL: recording.fileURL, outputURL: cachedURL)
+        }
+
+        cleanShareDirectory()
+        let filename = safeFileName(for: recording, format: .m4a)
+        let shareURL = shareDirectory.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: shareURL)
+
+        do {
+            try FileManager.default.linkItem(at: cachedURL, to: shareURL)
+        } catch {
+            try FileManager.default.copyItem(at: cachedURL, to: shareURL)
+        }
+        return shareURL
+    }
+
+    /// Export as Apple Lossless (ALAC) M4A.
+    private func exportToALAC(recording: RecordingItem) async throws -> URL {
+        let cachedURL = wavCacheDirectory.appendingPathComponent("\(recording.id.uuidString)_alac.m4a")
+
+        var needsConversion = !FileManager.default.fileExists(atPath: cachedURL.path)
+        if !needsConversion {
+            let sourceAttrs = try? FileManager.default.attributesOfItem(atPath: recording.fileURL.path)
+            let cacheAttrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path)
+            if let srcDate = sourceAttrs?[.modificationDate] as? Date,
+               let cacheDate = cacheAttrs?[.modificationDate] as? Date,
+               srcDate > cacheDate {
+                needsConversion = true
+            }
+        }
+
+        if needsConversion {
+            try await convertToALAC(sourceURL: recording.fileURL, outputURL: cachedURL)
+        }
+
+        cleanShareDirectory()
+        let filename = safeFileName(for: recording, format: .alac)
+        let shareURL = shareDirectory.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: shareURL)
+
+        do {
+            try FileManager.default.linkItem(at: cachedURL, to: shareURL)
+        } catch {
+            try FileManager.default.copyItem(at: cachedURL, to: shareURL)
+        }
+        return shareURL
+    }
+
     // MARK: - Bulk Export to ZIP
 
     func exportRecordings(
         _ recordings: [RecordingItem],
         scope: ExportScope,
+        format: ExportFormat = .wav,
         albumLookup: (UUID?) -> Album?,
         tagsLookup: ([UUID]) -> [Tag]
     ) async throws -> URL {
@@ -209,18 +356,19 @@ final class AudioExporter {
             // Get or create the set of used names for this folder
             var usedNames = usedNamesByFolder[folderName] ?? []
 
-            // Generate unique filename
-            let wavFilename = safeWAVFileName(for: recording, existingNames: usedNames)
+            // Generate unique filename in chosen format
+            let exportFilename = safeFileName(for: recording, format: format, existingNames: usedNames)
 
             // Track this name (without extension) as used
-            let nameWithoutExtension = String(wavFilename.dropLast(4)) // Remove ".wav"
+            let extLength = format.fileExtension.count + 1 // +1 for the dot
+            let nameWithoutExtension = String(exportFilename.dropLast(extLength))
             usedNames.insert(nameWithoutExtension)
             usedNamesByFolder[folderName] = usedNames
 
-            let wavDestination = folder.appendingPathComponent(wavFilename)
+            let destination = folder.appendingPathComponent(exportFilename)
 
             do {
-                _ = try await convertToWAV(sourceURL: recording.fileURL, outputURL: wavDestination)
+                try await convertFile(sourceURL: recording.fileURL, outputURL: destination, format: format)
             } catch {
                 // Skip files that fail to convert
                 continue
@@ -229,9 +377,9 @@ final class AudioExporter {
             // Build manifest item
             let relativePath: String
             if folderName.isEmpty {
-                relativePath = wavFilename
+                relativePath = exportFilename
             } else {
-                relativePath = "\(folderName)/\(wavFilename)"
+                relativePath = "\(folderName)/\(exportFilename)"
             }
 
             let transcriptSnippet = String(recording.transcript.prefix(200))
@@ -364,6 +512,176 @@ final class AudioExporter {
 
             try outputFile.write(from: outputBuffer)
             position += AVAudioFramePosition(framesToRead)
+        }
+    }
+
+    // MARK: - M4A (AAC) Conversion
+
+    private func convertToM4A(sourceURL: URL, outputURL: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try? FileManager.default.removeItem(at: outputURL)
+                    try self.manualConvertToAAC(sourceURL: sourceURL, outputURL: outputURL)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func manualConvertToAAC(sourceURL: URL, outputURL: URL) throws {
+        let inputFile = try AVAudioFile(forReading: sourceURL)
+        let format = inputFile.processingFormat
+
+        // AAC output: 256kbps
+        let outputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount,
+            AVEncoderBitRateKey: 256_000
+        ]
+
+        guard let outputFormat = AVAudioFormat(settings: outputSettings) else {
+            throw NSError(domain: "AudioExporter", code: 10,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create AAC output format"])
+        }
+
+        guard let converter = AVAudioConverter(from: format, to: outputFormat) else {
+            throw NSError(domain: "AudioExporter", code: 11,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create AAC converter"])
+        }
+
+        let outputFile = try AVAudioFile(forWriting: outputURL, settings: outputSettings)
+
+        let bufferSize: AVAudioFrameCount = 4096
+        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: bufferSize) else {
+            throw NSError(domain: "AudioExporter", code: 12,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create input buffer"])
+        }
+
+        var position: AVAudioFramePosition = 0
+        while position < inputFile.length {
+            let framesToRead = min(bufferSize, AVAudioFrameCount(inputFile.length - position))
+            inputBuffer.frameLength = framesToRead
+            try inputFile.read(into: inputBuffer)
+
+            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
+                throw NSError(domain: "AudioExporter", code: 13,
+                              userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
+            }
+
+            var error: NSError?
+            var hasProvidedData = false
+            let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                if hasProvidedData {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                hasProvidedData = true
+                outStatus.pointee = .haveData
+                return inputBuffer
+            }
+
+            if status == .error, let error = error { throw error }
+            if outputBuffer.frameLength > 0 {
+                try outputFile.write(from: outputBuffer)
+            }
+            position += AVAudioFramePosition(framesToRead)
+        }
+    }
+
+    // MARK: - ALAC Conversion
+
+    private func convertToALAC(sourceURL: URL, outputURL: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try? FileManager.default.removeItem(at: outputURL)
+                    try self.manualConvertToALAC(sourceURL: sourceURL, outputURL: outputURL)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func manualConvertToALAC(sourceURL: URL, outputURL: URL) throws {
+        let inputFile = try AVAudioFile(forReading: sourceURL)
+        let format = inputFile.processingFormat
+
+        let outputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatAppleLossless,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount,
+            AVEncoderBitDepthHintKey: 16
+        ]
+
+        guard let outputFormat = AVAudioFormat(settings: outputSettings) else {
+            throw NSError(domain: "AudioExporter", code: 20,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create ALAC output format"])
+        }
+
+        guard let converter = AVAudioConverter(from: format, to: outputFormat) else {
+            throw NSError(domain: "AudioExporter", code: 21,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create ALAC converter"])
+        }
+
+        let outputFile = try AVAudioFile(forWriting: outputURL, settings: outputSettings)
+
+        let bufferSize: AVAudioFrameCount = 4096
+        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: bufferSize) else {
+            throw NSError(domain: "AudioExporter", code: 22,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create input buffer"])
+        }
+
+        var position: AVAudioFramePosition = 0
+        while position < inputFile.length {
+            let framesToRead = min(bufferSize, AVAudioFrameCount(inputFile.length - position))
+            inputBuffer.frameLength = framesToRead
+            try inputFile.read(into: inputBuffer)
+
+            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
+                throw NSError(domain: "AudioExporter", code: 23,
+                              userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
+            }
+
+            var error: NSError?
+            var hasProvidedData = false
+            let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                if hasProvidedData {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                hasProvidedData = true
+                outStatus.pointee = .haveData
+                return inputBuffer
+            }
+
+            if status == .error, let error = error { throw error }
+            if outputBuffer.frameLength > 0 {
+                try outputFile.write(from: outputBuffer)
+            }
+            position += AVAudioFramePosition(framesToRead)
+        }
+    }
+
+    // MARK: - Bulk Conversion Router
+
+    /// Convert a source file to the given format at the output URL.
+    private func convertFile(sourceURL: URL, outputURL: URL, format: ExportFormat) async throws {
+        switch format {
+        case .wav:
+            _ = try await convertToWAV(sourceURL: sourceURL, outputURL: outputURL)
+        case .m4a:
+            try await convertToM4A(sourceURL: sourceURL, outputURL: outputURL)
+        case .alac:
+            try await convertToALAC(sourceURL: sourceURL, outputURL: outputURL)
+        case .original:
+            try? FileManager.default.removeItem(at: outputURL)
+            try FileManager.default.copyItem(at: sourceURL, to: outputURL)
         }
     }
 

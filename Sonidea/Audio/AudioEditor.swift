@@ -16,6 +16,37 @@ struct AudioEditResult {
     let error: Error?
 }
 
+/// Fade curve types for audio fade operations.
+enum FadeCurve: String, CaseIterable, Identifiable {
+    case linear
+    case sCurve
+    case exponential
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .linear: return "Linear"
+        case .sCurve: return "S-Curve"
+        case .exponential: return "Exponential"
+        }
+    }
+
+    /// Apply curve to a normalized t value (0...1).
+    func apply(_ t: Float) -> Float {
+        switch self {
+        case .linear:
+            return t
+        case .sCurve:
+            // Smoothstep: 3t² - 2t³
+            return t * t * (3.0 - 2.0 * t)
+        case .exponential:
+            // Exponential rise/fall
+            return t * t
+        }
+    }
+}
+
 /// Audio editing operations for trim and cut
 @MainActor
 final class AudioEditor {
@@ -357,6 +388,388 @@ final class AudioEditor {
                 success: false,
                 error: error
             )
+        }
+    }
+
+    // MARK: - Fade In/Out
+
+    /// Apply fade in and/or fade out to audio.
+    func applyFade(
+        sourceURL: URL,
+        fadeInDuration: TimeInterval,
+        fadeOutDuration: TimeInterval,
+        curve: FadeCurve = .sCurve
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performFade(
+                    sourceURL: sourceURL,
+                    fadeInDuration: fadeInDuration,
+                    fadeOutDuration: fadeOutDuration,
+                    curve: curve
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performFade(
+        sourceURL: URL,
+        fadeInDuration: TimeInterval,
+        fadeOutDuration: TimeInterval,
+        curve: FadeCurve
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+
+            let fadeInFrames = AVAudioFrameCount(fadeInDuration * sampleRate)
+            let fadeOutFrames = AVAudioFrameCount(fadeOutDuration * sampleRate)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+            sourceFile.framePosition = 0
+            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
+
+            guard let floatData = buffer.floatChannelData else {
+                throw AudioEditorError.editFailed("Cannot access float channel data")
+            }
+
+            let frameCount = Int(buffer.frameLength)
+
+            // Apply fade in
+            if fadeInFrames > 0 {
+                let fadeLen = min(Int(fadeInFrames), frameCount)
+                for frame in 0..<fadeLen {
+                    let t = Float(frame) / Float(fadeLen)
+                    let gain = curve.apply(t)
+                    for ch in 0..<channelCount {
+                        floatData[ch][frame] *= gain
+                    }
+                }
+            }
+
+            // Apply fade out
+            if fadeOutFrames > 0 {
+                let fadeLen = min(Int(fadeOutFrames), frameCount)
+                let fadeStart = frameCount - fadeLen
+                for frame in 0..<fadeLen {
+                    let t = Float(frame) / Float(fadeLen)
+                    let gain = curve.apply(1.0 - t) // Reverse: 1 -> 0
+                    for ch in 0..<channelCount {
+                        floatData[ch][fadeStart + frame] *= gain
+                    }
+                }
+            }
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+            try outputFile.write(from: buffer)
+
+            let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Normalize
+
+    /// Normalize audio to a target peak level.
+    func normalize(
+        sourceURL: URL,
+        targetPeakDb: Float = -0.3
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performNormalize(
+                    sourceURL: sourceURL,
+                    targetPeakDb: targetPeakDb
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performNormalize(
+        sourceURL: URL,
+        targetPeakDb: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+            sourceFile.framePosition = 0
+            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
+
+            guard let floatData = buffer.floatChannelData else {
+                throw AudioEditorError.editFailed("Cannot access float channel data")
+            }
+
+            let frameCount = Int(buffer.frameLength)
+
+            // Pass 1: find peak absolute value across all channels
+            var peak: Float = 0
+            for ch in 0..<channelCount {
+                for frame in 0..<frameCount {
+                    let abs = Swift.abs(floatData[ch][frame])
+                    if abs > peak { peak = abs }
+                }
+            }
+
+            guard peak > 0 else {
+                // Silence — nothing to normalize
+                return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
+            }
+
+            // Pass 2: apply uniform gain
+            let targetLinear = powf(10.0, targetPeakDb / 20.0)
+            let gain = targetLinear / peak
+
+            for ch in 0..<channelCount {
+                for frame in 0..<frameCount {
+                    floatData[ch][frame] *= gain
+                }
+            }
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+            try outputFile.write(from: buffer)
+
+            let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Noise Gate
+
+    /// Apply a noise gate to silence audio below the threshold.
+    func noiseGate(
+        sourceURL: URL,
+        thresholdDb: Float = -40,
+        attackMs: Float = 5,
+        releaseMs: Float = 50,
+        holdMs: Float = 50
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performNoiseGate(
+                    sourceURL: sourceURL,
+                    thresholdDb: thresholdDb,
+                    attackMs: attackMs,
+                    releaseMs: releaseMs,
+                    holdMs: holdMs
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performNoiseGate(
+        sourceURL: URL,
+        thresholdDb: Float,
+        attackMs: Float,
+        releaseMs: Float,
+        holdMs: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+            sourceFile.framePosition = 0
+            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
+
+            guard let floatData = buffer.floatChannelData else {
+                throw AudioEditorError.editFailed("Cannot access float channel data")
+            }
+
+            let frameCount = Int(buffer.frameLength)
+            let thresholdLinear = powf(10.0, thresholdDb / 20.0)
+            let attackSamples = Int(attackMs * Float(sampleRate) / 1000.0)
+            let releaseSamples = Int(releaseMs * Float(sampleRate) / 1000.0)
+            let holdSamples = Int(holdMs * Float(sampleRate) / 1000.0)
+
+            var gateOpen = false
+            var holdCounter = 0
+            var envelope: Float = 0
+
+            for frame in 0..<frameCount {
+                // Linked-stereo: use loudest channel
+                var maxAbs: Float = 0
+                for ch in 0..<channelCount {
+                    let abs = Swift.abs(floatData[ch][frame])
+                    if abs > maxAbs { maxAbs = abs }
+                }
+
+                let aboveThreshold = maxAbs >= thresholdLinear
+
+                if aboveThreshold {
+                    gateOpen = true
+                    holdCounter = holdSamples
+                } else if holdCounter > 0 {
+                    holdCounter -= 1
+                } else {
+                    gateOpen = false
+                }
+
+                // Smooth envelope
+                let target: Float = gateOpen ? 1.0 : 0.0
+                if target > envelope {
+                    // Attack
+                    let coeff = attackSamples > 0 ? 1.0 / Float(attackSamples) : 1.0
+                    envelope = min(1.0, envelope + coeff)
+                } else {
+                    // Release
+                    let coeff = releaseSamples > 0 ? 1.0 / Float(releaseSamples) : 1.0
+                    envelope = max(0.0, envelope - coeff)
+                }
+
+                for ch in 0..<channelCount {
+                    floatData[ch][frame] *= envelope
+                }
+            }
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+            try outputFile.write(from: buffer)
+
+            let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Cut with Crossfade
+
+    /// Cut out a selection with a crossfade at the splice point instead of a hard cut.
+    func cutWithCrossfade(
+        sourceURL: URL,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        crossfadeDuration: TimeInterval = 0.05
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performCutWithCrossfade(
+                    sourceURL: sourceURL,
+                    startTime: startTime,
+                    endTime: endTime,
+                    crossfadeDuration: crossfadeDuration
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performCutWithCrossfade(
+        sourceURL: URL,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        crossfadeDuration: TimeInterval
+    ) -> AudioEditResult {
+        guard startTime >= 0, endTime > startTime else {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: AudioEditorError.invalidRange)
+        }
+
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+
+            let cutStartFrame = max(0, min(AVAudioFramePosition(startTime * sampleRate), totalFrames))
+            let cutEndFrame = max(cutStartFrame, min(AVAudioFramePosition(endTime * sampleRate), totalFrames))
+            let crossfadeFrames = Int(crossfadeDuration * sampleRate)
+
+            // Read entire file for crossfade processing
+            guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+            sourceFile.framePosition = 0
+            try sourceFile.read(into: sourceBuffer, frameCount: AVAudioFrameCount(totalFrames))
+
+            guard let srcData = sourceBuffer.floatChannelData else {
+                throw AudioEditorError.editFailed("Cannot access float channel data")
+            }
+
+            let beforeCount = Int(cutStartFrame)
+            let afterStart = Int(cutEndFrame)
+            let afterCount = Int(totalFrames) - afterStart
+
+            // Actual crossfade length is limited by available audio on both sides
+            let actualCrossfade = min(crossfadeFrames, beforeCount, afterCount)
+
+            let totalOutput = beforeCount + afterCount - actualCrossfade
+            guard totalOutput > 0 else {
+                return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: AudioEditorError.invalidRange)
+            }
+
+            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalOutput)) else {
+                throw AudioEditorError.editFailed("Failed to allocate output buffer")
+            }
+            outputBuffer.frameLength = AVAudioFrameCount(totalOutput)
+
+            guard let outData = outputBuffer.floatChannelData else {
+                throw AudioEditorError.editFailed("Cannot access output channel data")
+            }
+
+            // Copy part before cut (minus crossfade overlap)
+            let beforeEnd = beforeCount - actualCrossfade
+            for ch in 0..<channelCount {
+                for frame in 0..<beforeEnd {
+                    outData[ch][frame] = srcData[ch][frame]
+                }
+            }
+
+            // Crossfade zone: blend end of "before" with start of "after"
+            for i in 0..<actualCrossfade {
+                let t = Float(i) / Float(max(1, actualCrossfade))
+                let fadeOut = 1.0 - t // Before fades out
+                let fadeIn = t        // After fades in
+                let beforeFrame = beforeCount - actualCrossfade + i
+                let afterFrame = afterStart + i
+                for ch in 0..<channelCount {
+                    outData[ch][beforeEnd + i] = srcData[ch][beforeFrame] * fadeOut + srcData[ch][afterFrame] * fadeIn
+                }
+            }
+
+            // Copy remaining after (past crossfade)
+            let afterRemaining = afterCount - actualCrossfade
+            let outputOffset = beforeEnd + actualCrossfade
+            for ch in 0..<channelCount {
+                for frame in 0..<afterRemaining {
+                    outData[ch][outputOffset + frame] = srcData[ch][afterStart + actualCrossfade + frame]
+                }
+            }
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+            try outputFile.write(from: outputBuffer)
+
+            let newDuration = Double(totalOutput) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
         }
     }
 

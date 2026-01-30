@@ -663,26 +663,32 @@ final class CloudKitSyncEngine {
 
             case SonideaRecordType.tag.rawValue:
                 if let tag = Tag.from(ckRecord: record) {
-                    if !appState.tags.contains(where: { $0.id == tag.id }) {
+                    if let existingIndex = appState.tags.firstIndex(where: { $0.id == tag.id }) {
+                        appState.tags[existingIndex] = tag
+                    } else {
                         appState.tags.append(tag)
-                        tagsChanged = true
                     }
+                    tagsChanged = true
                 }
 
             case SonideaRecordType.album.rawValue:
                 if let album = Album.from(ckRecord: record) {
-                    if !appState.albums.contains(where: { $0.id == album.id }) {
+                    if let existingIndex = appState.albums.firstIndex(where: { $0.id == album.id }) {
+                        appState.albums[existingIndex] = album
+                    } else {
                         appState.albums.append(album)
-                        albumsChanged = true
                     }
+                    albumsChanged = true
                 }
 
             case SonideaRecordType.project.rawValue:
                 if let project = Project.from(ckRecord: record) {
-                    if !appState.projects.contains(where: { $0.id == project.id }) {
+                    if let existingIndex = appState.projects.firstIndex(where: { $0.id == project.id }) {
+                        appState.projects[existingIndex] = project
+                    } else {
                         appState.projects.append(project)
-                        projectsChanged = true
                     }
+                    projectsChanged = true
                 }
 
             case SonideaRecordType.tombstone.rawValue:
@@ -698,6 +704,10 @@ final class CloudKitSyncEngine {
 
                     switch targetType {
                     case SonideaRecordType.recording.rawValue:
+                        // Delete the audio file on disk before removing from state
+                        if let recording = appState.recordings.first(where: { $0.id == targetUUID }) {
+                            try? FileManager.default.removeItem(at: recording.fileURL)
+                        }
                         appState.recordings.removeAll { $0.id == targetUUID }
                         recordingsChanged = true
                     case SonideaRecordType.tag.rawValue:
@@ -723,7 +733,8 @@ final class CloudKitSyncEngine {
         for recordID in deletions {
             let id = recordID.recordName
             if let uuid = UUID(uuidString: id) {
-                if appState.recordings.contains(where: { $0.id == uuid }) {
+                if let recording = appState.recordings.first(where: { $0.id == uuid }) {
+                    try? FileManager.default.removeItem(at: recording.fileURL)
                     appState.recordings.removeAll { $0.id == uuid }
                     recordingsChanged = true
                 }
@@ -830,6 +841,34 @@ extension RecordingItem {
             record["eqSettingsJSON"] = String(data: eqData, encoding: .utf8)
         }
 
+        // Proof fields
+        record["proofStatusRaw"] = proofStatusRaw
+        record["proofSHA256"] = proofSHA256
+        record["proofCloudCreatedAt"] = proofCloudCreatedAt
+        record["proofCloudRecordName"] = proofCloudRecordName
+
+        // Location proof fields
+        record["locationModeRaw"] = locationModeRaw
+        record["locationProofHash"] = locationProofHash
+        record["locationProofStatusRaw"] = locationProofStatusRaw
+
+        // Overdub fields
+        record["overdubGroupId"] = overdubGroupId?.uuidString
+        record["overdubRoleRaw"] = overdubRoleRaw
+        record["overdubIndex"] = overdubIndex
+        record["overdubOffsetSeconds"] = overdubOffsetSeconds
+        record["overdubSourceBaseId"] = overdubSourceBaseId?.uuidString
+
+        // Icon classification fields
+        record["iconSourceRaw"] = iconSourceRaw
+        if let predictions = iconPredictions,
+           let data = try? JSONEncoder().encode(predictions) {
+            record["iconPredictionsJSON"] = String(data: data, encoding: .utf8)
+        }
+        if let secondary = secondaryIcons {
+            record["secondaryIcons"] = secondary
+        }
+
         return record
     }
 
@@ -865,6 +904,13 @@ extension RecordingItem {
             eqSettings = try? JSONDecoder().decode(EQSettings.self, from: data)
         }
 
+        // Parse icon predictions
+        var iconPredictions: [IconPrediction]?
+        if let predictionsJSON = record["iconPredictionsJSON"] as? String,
+           let data = predictionsJSON.data(using: .utf8) {
+            iconPredictions = try? JSONDecoder().decode([IconPrediction].self, from: data)
+        }
+
         return RecordingItem(
             id: id,
             fileURL: fileURL,
@@ -882,11 +928,26 @@ extension RecordingItem {
             lastPlaybackPosition: record["lastPlaybackPosition"] as? TimeInterval ?? 0,
             iconColorHex: record["iconColorHex"] as? String,
             iconName: record["iconName"] as? String,
+            iconSourceRaw: record["iconSourceRaw"] as? String,
+            iconPredictions: iconPredictions,
+            secondaryIcons: record["secondaryIcons"] as? [String],
             eqSettings: eqSettings,
             projectId: (record["projectId"] as? String).flatMap { UUID(uuidString: $0) },
             parentRecordingId: (record["parentRecordingId"] as? String).flatMap { UUID(uuidString: $0) },
             versionIndex: record["versionIndex"] as? Int ?? 1,
+            proofStatusRaw: record["proofStatusRaw"] as? String,
+            proofSHA256: record["proofSHA256"] as? String,
+            proofCloudCreatedAt: record["proofCloudCreatedAt"] as? Date,
+            proofCloudRecordName: record["proofCloudRecordName"] as? String,
+            locationModeRaw: record["locationModeRaw"] as? String,
+            locationProofHash: record["locationProofHash"] as? String,
+            locationProofStatusRaw: record["locationProofStatusRaw"] as? String,
             markers: markers,
+            overdubGroupId: (record["overdubGroupId"] as? String).flatMap { UUID(uuidString: $0) },
+            overdubRoleRaw: record["overdubRoleRaw"] as? String,
+            overdubIndex: record["overdubIndex"] as? Int,
+            overdubOffsetSeconds: record["overdubOffsetSeconds"] as? Double ?? 0,
+            overdubSourceBaseId: (record["overdubSourceBaseId"] as? String).flatMap { UUID(uuidString: $0) },
             modifiedAt: record["modifiedAt"] as? Date ?? createdAt
         )
     }

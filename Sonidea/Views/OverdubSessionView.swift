@@ -28,6 +28,8 @@ struct OverdubSessionView: View {
 
     @State private var isRecording = false
     @State private var isPrepared = false
+    @State private var showMixer = false
+    @State private var isBouncing = false
     @State private var recordedLayerURL: URL?
     
     @State private var recordedLayerDuration: TimeInterval = 0
@@ -93,6 +95,40 @@ struct OverdubSessionView: View {
                     Button("Close") {
                         handleClose()
                     }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        if appState.supportManager.canUseProFeatures {
+                            showMixer = true
+                        }
+                    } label: {
+                        Image(systemName: "slider.vertical.3")
+                    }
+                    .disabled(isRecording)
+                }
+            }
+            .sheet(isPresented: $showMixer) {
+                if var group = overdubGroup {
+                    MixerView(
+                        mixSettings: Binding(
+                            get: { group.mixSettings },
+                            set: { newValue in
+                                group.mixSettings = newValue
+                                // Apply mix settings in real time
+                                engine.applyMixSettings(newValue)
+                                // Persist
+                                if let gIdx = appState.overdubGroups.firstIndex(where: { $0.id == group.id }) {
+                                    appState.overdubGroups[gIdx].mixSettings = newValue
+                                }
+                            }
+                        ),
+                        layerCount: existingLayers.count,
+                        onBounce: {
+                            bounceMix()
+                        },
+                        isBouncing: isBouncing
+                    )
+                    .presentationDetents([.medium, .large])
                 }
             }
             .alert("Headphones Required", isPresented: $showHeadphonesAlert) {
@@ -934,6 +970,46 @@ struct OverdubSessionView: View {
         recordedLayerDuration = 0
         offsetSliderValue = 0
         showOffsetSlider = false
+    }
+
+    private func bounceMix() {
+        guard let group = overdubGroup else { return }
+        isBouncing = true
+
+        let baseURL = baseRecording.fileURL
+        let layerURLs = existingLayers.map { $0.fileURL }
+        // Layer offsets: use overdubIndex-based ordering, offset 0 for simplicity
+        let offsets = existingLayers.map { _ in TimeInterval(0) }
+        var settings = group.mixSettings
+        settings.syncLayerCount(existingLayers.count)
+
+        let outputDir = FileManager.default.temporaryDirectory.appendingPathComponent("SonideaBounce", isDirectory: true)
+        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let outputURL = outputDir.appendingPathComponent("\(baseRecording.title) - Mix.wav")
+
+        Task {
+            let engine = MixdownEngine()
+            let result = await engine.bounce(
+                baseFileURL: baseURL,
+                layerFileURLs: layerURLs,
+                layerOffsets: offsets,
+                mixSettings: settings,
+                outputURL: outputURL
+            )
+            await MainActor.run {
+                isBouncing = false
+                if result.success {
+                    // Import the bounced file as a new recording
+                    try? appState.importRecording(
+                        from: result.outputURL,
+                        duration: result.duration,
+                        title: "\(baseRecording.title) - Mix",
+                        albumID: baseRecording.albumID ?? Album.draftsID
+                    )
+                    showMixer = false
+                }
+            }
+        }
     }
 
     private func handleClose() {

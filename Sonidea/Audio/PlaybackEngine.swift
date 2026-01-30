@@ -52,6 +52,12 @@ final class PlaybackEngine {
         setupInterruptionHandling()
     }
 
+    deinit {
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     // MARK: - Public API
 
     /// Load audio file for playback with error reporting

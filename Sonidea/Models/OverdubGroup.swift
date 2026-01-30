@@ -13,6 +13,7 @@ struct OverdubGroup: Identifiable, Codable, Equatable {
     let baseRecordingId: UUID
     var layerRecordingIds: [UUID]  // Ordered list of layer IDs
     let createdAt: Date
+    var mixSettings: MixSettings = MixSettings()
 
     /// Maximum allowed layers per overdub group
     static let maxLayers = 3
@@ -42,12 +43,23 @@ struct OverdubGroup: Identifiable, Codable, Equatable {
         id: UUID = UUID(),
         baseRecordingId: UUID,
         layerRecordingIds: [UUID] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        mixSettings: MixSettings = MixSettings()
     ) {
         self.id = id
         self.baseRecordingId = baseRecordingId
         self.layerRecordingIds = layerRecordingIds
         self.createdAt = createdAt
+        self.mixSettings = mixSettings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        baseRecordingId = try container.decode(UUID.self, forKey: .baseRecordingId)
+        layerRecordingIds = try container.decode([UUID].self, forKey: .layerRecordingIds)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        mixSettings = try container.decodeIfPresent(MixSettings.self, forKey: .mixSettings) ?? MixSettings()
     }
 
     /// Add a layer to the group

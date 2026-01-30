@@ -47,6 +47,19 @@ final class OverdubEngine {
     /// Whether to monitor previous layers during recording
     var monitorLayers: Bool = true
 
+    /// Apply mix settings from the overdub group to player volumes and pans.
+    func applyMixSettings(_ settings: MixSettings) {
+        let volumes = settings.effectiveVolumes()
+
+        basePlayerNode?.volume = volumes.base
+        basePlayerNode?.pan = settings.baseChannel.pan
+
+        for (i, player) in layerPlayerNodes.enumerated() {
+            player.volume = i < volumes.layers.count ? volumes.layers[i] : 1.0
+            player.pan = i < settings.layerChannels.count ? settings.layerChannels[i].pan : 0.0
+        }
+    }
+
     // MARK: - Private Audio Components
 
     private var audioEngine: AVAudioEngine?

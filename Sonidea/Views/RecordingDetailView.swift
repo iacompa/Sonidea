@@ -128,8 +128,10 @@ struct RecordingDetailView: View {
 
     @State private var isTranscribing = false
     @State private var transcriptionError: String?
-    @State private var exportedWAVURL: URL?
+    @State private var exportedURL: URL?
     @State private var isExporting = false
+    @State private var showExportFormatPicker = false
+    @State private var showAudioEditTools = false
 
     @State private var editedIconColor: Color
     // Track if icon color was explicitly modified by user (to avoid lossy round-trip conversion)
@@ -335,9 +337,9 @@ struct RecordingDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     HStack(spacing: 12) {
-                        // Share button
+                        // Share button (opens format picker)
                         Button {
-                            shareRecording()
+                            showExportFormatPicker = true
                         } label: {
                             if isExporting {
                                 ProgressView()
@@ -490,9 +492,30 @@ struct RecordingDetailView: View {
                 }
             }
             .sheet(isPresented: $showShareSheet) {
-                if let url = exportedWAVURL {
+                if let url = exportedURL {
                     ShareSheet(items: [url])
                 }
+            }
+            .sheet(isPresented: $showExportFormatPicker) {
+                ExportFormatPicker { format in
+                    shareRecording(format: format)
+                }
+                .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $showAudioEditTools) {
+                AudioEditToolsPanel(
+                    isProcessing: $isProcessingEdit,
+                    onFade: { fadeIn, fadeOut, curve in
+                        applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
+                    },
+                    onNormalize: { targetDb in
+                        applyNormalize(targetDb: targetDb)
+                    },
+                    onNoiseGate: { threshold in
+                        applyNoiseGate(threshold: threshold)
+                    }
+                )
+                .presentationDetents([.medium])
             }
             .sheet(isPresented: $showProjectSheet) {
                 if let projectId = currentRecording.projectId,
@@ -916,6 +939,29 @@ struct RecordingDetailView: View {
                         onCut: performCut,
                         onAddMarker: addMarkerAtPlayhead
                     )
+
+                    // Audio tools: Fade, Normalize, Noise Gate
+                    Button {
+                        if appState.supportManager.canUseProFeatures {
+                            showAudioEditTools = true
+                        } else {
+                            proUpgradeContext = .editMode
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 12))
+                            Text("More Tools")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                        }
+                        .foregroundColor(palette.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(palette.accent.opacity(0.12))
+                        .cornerRadius(6)
+                    }
+                    .disabled(isProcessingEdit)
 
                     // Processing indicator
                     if isProcessingEdit {
@@ -1461,6 +1507,100 @@ struct RecordingDetailView: View {
         // Haptic feedback
         let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
         impactGenerator.impactOccurred()
+    }
+
+    // MARK: - Audio Edit Tools (Fade, Normalize, Noise Gate)
+
+    private func applyFade(fadeIn: TimeInterval, fadeOut: TimeInterval, curve: FadeCurve) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Fade")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.applyFade(
+                sourceURL: sourceURL,
+                fadeInDuration: fadeIn,
+                fadeOutDuration: fadeOut,
+                curve: curve
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Fade applied"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func applyNormalize(targetDb: Float) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Normalize")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.normalize(
+                sourceURL: sourceURL,
+                targetPeakDb: targetDb
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Normalized audio"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func applyNoiseGate(threshold: Float) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Noise Gate")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.noiseGate(
+                sourceURL: sourceURL,
+                thresholdDb: threshold
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Noise gate applied"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
     }
 
     private func reloadWaveformForPendingEdit() {
@@ -2773,7 +2913,7 @@ struct RecordingDetailView: View {
 
     @State private var showDownloadNotAllowedAlert = false
 
-    private func shareRecording() {
+    private func shareRecording(format: ExportFormat = .wav) {
         // Check download permission for shared album recordings
         if let album = appState.album(for: currentRecording.albumID), album.isShared {
             let sharedInfo = appState.sharedRecordingInfoCache[currentRecording.id]
@@ -2789,8 +2929,8 @@ struct RecordingDetailView: View {
         isExporting = true
         Task {
             do {
-                let wavURL = try await AudioExporter.shared.exportToWAV(recording: currentRecording)
-                exportedWAVURL = wavURL
+                let url = try await AudioExporter.shared.export(recording: currentRecording, format: format)
+                exportedURL = url
                 isExporting = false
                 showShareSheet = true
             } catch {
@@ -3285,13 +3425,8 @@ struct LocationEditorSheet: View {
     }
 
     private func clearLocation() {
-        // Clear coordinates from recording
-        appState.updateRecordingLocation(
-            recordingID: recording.id,
-            latitude: 0,
-            longitude: 0,
-            label: ""
-        )
+        // Clear coordinates from recording (sets to nil, not 0,0)
+        appState.clearRecordingLocation(recordingID: recording.id)
 
         // Update local state
         recording.latitude = nil

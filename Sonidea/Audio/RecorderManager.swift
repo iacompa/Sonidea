@@ -33,6 +33,8 @@ final class RecorderManager: NSObject {
     var currentDuration: TimeInterval = 0
     var liveMeterSamples: [Float] = []
     var qualityPreset: RecordingQualityPreset = .high
+    var metronome = MetronomeEngine()
+    var monitorEffects = RecordingMonitorEffects()
 
     // Reference to app settings (set by AppState)
     var appSettings: AppSettings = .default
@@ -322,7 +324,7 @@ final class RecorderManager: NSObject {
 
         // Decide which recording method to use:
         // Use AVAudioEngine if gain/limiter are active, otherwise use AVAudioRecorder (simpler)
-        let needsEngine = !inputSettings.isDefault
+        let needsEngine = !inputSettings.isDefault || metronome.isEnabled || monitorEffects.isEnabled
         isUsingEngine = needsEngine
 
         if needsEngine {
@@ -452,8 +454,41 @@ final class RecorderManager: NSObject {
             // Apply current input settings
             applyInputSettings()
 
+            // Attach metronome click source to main mixer (NOT to recording chain)
+            // Click goes: ClickSourceNode -> MainMixerNode -> Output (speakers)
+            // Recording tap is on LimiterNode, so click is not captured
+            if metronome.isEnabled {
+                let clickNode = metronome.createSourceNode(sampleRate: inputFormat.sampleRate)
+                engine.attach(clickNode)
+                let monoFormat = AVAudioFormat(
+                    commonFormat: .pcmFormatFloat32,
+                    sampleRate: inputFormat.sampleRate,
+                    channels: 1,
+                    interleaved: false
+                )!
+                engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
+            }
+
+            // Attach monitoring effects chain (hear effects, record clean)
+            // Chain: Limiter -> MonitorMixer -> MonitorEQ -> MonitorCompressor -> MainMixerNode
+            if monitorEffects.isEnabled {
+                let nodes = monitorEffects.createNodes()
+                engine.attach(nodes.mixer)
+                engine.attach(nodes.eq)
+                engine.attach(nodes.compressor)
+                engine.connect(limiter, to: nodes.mixer, format: tapFormat)
+                engine.connect(nodes.mixer, to: nodes.eq, format: tapFormat)
+                engine.connect(nodes.eq, to: nodes.compressor, format: tapFormat)
+                engine.connect(nodes.compressor, to: engine.mainMixerNode, format: tapFormat)
+            }
+
             // Start the engine
             try engine.start()
+
+            // Start metronome if enabled
+            if metronome.isEnabled {
+                metronome.start()
+            }
 
             recordingState = .recording
             let startDate = Date()
@@ -500,9 +535,12 @@ final class RecorderManager: NSObject {
 
     /// Get file settings for engine recording
     /// Uses resolvedEngineSampleRate (set by engineOutputFormat) to ensure consistency
+    /// Caps channel count to input device capability to avoid requesting stereo from a mono mic
     private func engineFileSettings(for preset: RecordingQualityPreset) -> [String: Any] {
         let effectiveSampleRate = resolvedEngineSampleRate ?? AudioSessionManager.shared.actualSampleRate
-        let channels = appSettings.recordingMode.channelCount
+        let requestedChannels = appSettings.recordingMode.channelCount
+        let inputChannels = Int(audioEngine?.inputNode.inputFormat(forBus: 0).channelCount ?? 1)
+        let channels = min(requestedChannels, max(inputChannels, 1))
 
         switch preset {
         case .standard:
@@ -680,6 +718,9 @@ final class RecorderManager: NSObject {
         // Log final file info for debugging
         AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - final")
 
+        // Protect audio file: set file protection and ensure iCloud backup inclusion
+        Self.protectAudioFile(at: fileURL)
+
         return RawRecordingData(
             fileURL: fileURL,
             createdAt: createdAt,
@@ -692,6 +733,10 @@ final class RecorderManager: NSObject {
 
     /// Stop the AVAudioEngine recording
     private func stopEngineRecording() {
+        // Stop metronome and monitor effects
+        metronome.stop()
+        monitorEffects.teardown()
+
         // Remove tap from limiter (stops new buffers from being enqueued)
         limiterNode?.removeTap(onBus: 0)
 
@@ -1063,6 +1108,36 @@ final class RecorderManager: NSObject {
                 AVLinearPCMIsBigEndianKey: false,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
+        }
+    }
+
+    // MARK: - Audio File Protection
+
+    /// Protect an audio file after recording: set file protection attributes
+    /// and ensure iCloud backup inclusion.
+    static func protectAudioFile(at url: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+
+        // Set file protection to complete until first user authentication
+        // This ensures the file is encrypted at rest but accessible after unlock
+        do {
+            try fm.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: url.path
+            )
+        } catch {
+            print("⚠️ [RecorderManager] Failed to set file protection: \(error.localizedDescription)")
+        }
+
+        // Ensure file is included in iCloud backup (not excluded)
+        var fileURL = url
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = false
+        do {
+            try fileURL.setResourceValues(resourceValues)
+        } catch {
+            print("⚠️ [RecorderManager] Failed to set backup inclusion: \(error.localizedDescription)")
         }
     }
 

@@ -32,6 +32,10 @@ struct RecordingGridView: View {
     @State private var showMoveToAlbumSheet = false
     @State private var showSingleTagSheet = false
 
+    // Pro feature gating
+    @State private var proUpgradeContext: ProFeatureContext?
+    @State private var showTipJar = false
+
     // Grid configuration — adaptive for iPad
     private var columns: [GridItem] {
         let columnCount = sizeClass == .regular ? 3 : 2
@@ -100,6 +104,23 @@ struct RecordingGridView: View {
             }
         } message: {
             Text("Are you sure you want to delete \(selectedRecordingIDs.count) recording\(selectedRecordingIDs.count == 1 ? "" : "s")? They will be moved to Recently Deleted.")
+        }
+        .sheet(item: $proUpgradeContext) { context in
+            ProUpgradeSheet(
+                context: context,
+                onViewPlans: {
+                    proUpgradeContext = nil
+                    showTipJar = true
+                },
+                onDismiss: {
+                    proUpgradeContext = nil
+                }
+            )
+            .environment(\.themePalette, palette)
+        }
+        .sheet(isPresented: $showTipJar) {
+            TipJarView()
+                .environment(\.themePalette, palette)
         }
     }
 
@@ -194,6 +215,10 @@ struct RecordingGridView: View {
             Divider().frame(height: 40).background(palette.separator)
 
             SelectionActionButton(icon: "tag", label: "Tags", isEnabled: hasSelection, isDestructive: false) {
+                guard appState.supportManager.canUseProFeatures else {
+                    proUpgradeContext = .tags
+                    return
+                }
                 showBatchTagPicker = true
             }
 
@@ -278,6 +303,10 @@ struct RecordingGridView: View {
         case .album:
             showMoveToAlbumSheet = true
         case .tags:
+            guard appState.supportManager.canUseProFeatures else {
+                proUpgradeContext = .tags
+                return
+            }
             showSingleTagSheet = true
         case .share:
             shareRecording(recording)

@@ -26,6 +26,8 @@ struct SonideaApp: App {
 
                     // Wire shared album manager for remote notifications
                     AppDelegate.sharedAlbumManager = appState.sharedAlbumManager
+                    // Wire iCloud sync manager for private database push notifications
+                    AppDelegate.syncManager = appState.syncManager
 
                     // Wire WatchConnectivity for watch recording transfers and theme sync
                     PhoneConnectivityManager.shared.appState = appState
@@ -182,6 +184,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// Shared album manager reference (set from SonideaApp on launch)
     static weak var sharedAlbumManager: SharedAlbumManager?
 
+    /// iCloud sync manager reference (set from SonideaApp on launch)
+    static weak var syncManager: iCloudSyncManager?
+
     func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
@@ -192,6 +197,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // Trigger shared album sync on remote notification
             if let manager = AppDelegate.sharedAlbumManager {
                 await manager.handleRemoteNotification()
+            }
+            // Forward to iCloud sync manager for private database sync
+            if let syncManager = AppDelegate.syncManager {
+                await syncManager.handleRemoteNotification(userInfo)
             }
             completionHandler(.newData)
         }

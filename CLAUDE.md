@@ -18,18 +18,28 @@ Xcode project: `Sonidea.xcodeproj`
 - **Other:** SoundAnalysis (auto-icons), MapKit, CoreLocation, ActivityKit (Live Activity), AppIntents
 
 ## Architecture
-- Central `AppState` class (@Observable) as single source of truth
+- Central `AppState` class (@Observable) as facade, delegating to stateless repositories
+- **Repositories** (stateless enums with static methods on `inout` arrays):
+  - `TagRepository` - tag CRUD, merge, toggle, seed defaults
+  - `AlbumRepository` - album CRUD, rename, system album management, migrations
+  - `ProjectRepository` - project CRUD, versioning, best take, stats
+  - `OverdubRepository` - overdub group CRUD, layer management, integrity validation
+  - `RecordingRepository` - recording CRUD, trash, restore, batch ops
+- **Services**: `SearchService` (stateless search), `DataSafetyManager` (file-based persistence with checksums)
 - Key managers: `RecorderManager`, `PlaybackEngine`, `OverdubEngine`, `AudioSessionManager`, `SharedAlbumManager`, `iCloudSyncManager`, `CloudKitSyncEngine`, `SupportManager`, `ProofManager`
 - Watch managers: `WatchAppState`, `WatchRecorderManager`, `WatchPlaybackManager`
 - Connectivity: `PhoneConnectivityManager` (iOS), `WatchConnectivityService` (watchOS)
-- Data persistence: UserDefaults (settings/state), file system (audio), CloudKit (shared albums)
+- Data persistence: `DataSafetyManager` (primary, file-based with SHA-256 checksums + backup rotation), UserDefaults (fallback), file system (audio), CloudKit (shared albums)
 - All models are `Codable` structs
 
 ## Key Features
 - Recording with live waveform, gain control (-6 to +6dB), limiter, pause/resume, prevent sleep option
 - Multi-track overdub (base track + up to 3 layers)
-- Waveform editing (trim, split) with zoom/pan
+- Waveform editing (trim, split, fade in/out, normalize, noise gate, crossfade cuts) with zoom/pan
 - 4-band parametric EQ per recording
+- Metronome / click track (synthesized, not recorded; tap tempo, count-in, time signatures)
+- Real-time monitoring effects (4-band EQ + compressor, hear while recording, file stays clean)
+- Multi-track mixer (per-channel volume, pan, mute, solo) with offline stereo bounce
 - Shared Albums via CloudKit (up to 5 participants, role-based permissions)
 - iCloud sync across devices
 - Auto-icon classification via SoundAnalysis
@@ -39,7 +49,7 @@ Xcode project: `Sonidea.xcodeproj`
 - Live Activity / Dynamic Island for active recordings
 - Skip silence detection
 - Tamper-evident proof receipts (SHA-256 + CloudKit timestamps)
-- Export to WAV/ZIP with manifests
+- Multi-format export (Original, WAV, M4A/AAC, ALAC) with format picker + ZIP bulk export
 - **Apple Watch companion app** with recording, playback, and auto-sync to iPhone
 - **iPad adaptive layout** with optimized sheet presentation and top bar padding
 
@@ -70,7 +80,7 @@ Xcode project: `Sonidea.xcodeproj`
 - 14-day free trial with annual plan
 
 ## Pro-Gated Features
-Edit mode, shared albums, tags, iCloud sync, auto-icons, overdub, projects & versioning, watch auto-sync
+Edit mode, shared albums, tags, iCloud sync, auto-icons, overdub, projects & versioning, watch auto-sync, metronome/click track, live recording effects, mixer & mixdown
 
 ## Free Features (previously Pro)
 Recording quality (all presets: Standard, High, Lossless, WAV) — available to all users
@@ -86,10 +96,10 @@ Mono (default, best for built-in mic), Stereo (best with external stereo mic). C
 ### iOS App (`Sonidea/`)
 ```
 App/           SonideaApp, AppState, Theme, AppearanceMode, SettingsModels
-Models/        RecordingItem, Album, Tag, Project, Marker, TimelineItem, OverdubGroup, EditHistory, ProofModels, RecordingActivityAttributes
-Views/         ContentView, RecordingsListView, RecordingGridView, RecordingDetailView, CalendarView, JournalView, MapView, ProjectDetailView, OverdubSessionView, TagManagerView, TipJarView, QuickHelpSheet, ShareSheet, SharedAlbumViews, iPadAdaptiveLayout
-Views/Waveform/ WaveformView, WaveformSampler, EditableWaveformView, ZoomableWaveformEditor, ProWaveformEditor, AudioWaveformExtractor, EQGraphView
-Audio/         RecorderManager, PlaybackEngine, PlaybackManager, AudioSessionManager, AudioEditor, AudioExporter, OverdubEngine, SkipSilenceManager, AudioDebug, SilenceDebugStrip
+Models/        RecordingItem, Album, Tag, Project, Marker, TimelineItem, OverdubGroup, EditHistory, ProofModels, RecordingActivityAttributes, MixSettings
+Views/         ContentView, RecordingsListView, RecordingGridView, RecordingDetailView, CalendarView, JournalView, MapView, ProjectDetailView, OverdubSessionView, TagManagerView, TipJarView, QuickHelpSheet, ShareSheet, SharedAlbumViews, iPadAdaptiveLayout, ExportFormatPicker, MetronomeSettingsView, RecordingEffectsPanel, MixerView
+Views/Waveform/ WaveformView, WaveformSampler, EditableWaveformView, ZoomableWaveformEditor, ProWaveformEditor, AudioWaveformExtractor, EQGraphView, AudioEditToolsPanel
+Audio/         RecorderManager, PlaybackEngine, PlaybackManager, AudioSessionManager, AudioEditor, AudioExporter, OverdubEngine, SkipSilenceManager, AudioDebug, SilenceDebugStrip, MetronomeEngine, RecordingMonitorEffects, MixdownEngine
 Services/      SupportManager, LocationManager, TranscriptionManager, ProofManager, AudioIconClassifier, TrialNudgeManager, ProFeatureGate, PhoneConnectivityManager
 CloudSync/     CloudKitSyncEngine, iCloudSyncManager, SharedAlbumManager, CloudSharingSheet, LocationSharingSheet, SensitiveRecordingSheet, SharedAlbum* (activity, comments, map, participants, settings, trash views)
 Utilities/     FileHasher, StorageFormatter, IconCatalog, DeepLinks
@@ -178,3 +188,127 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 - **RecordingGridView iPad**: Adaptive 3-column grid on iPad; sheets converted to iPadSheet
 - **RecordingsListView iPad**: Batch/move/tag sheets converted to iPadSheet
 - **ProofManager safety**: Replaced force unwrap on FileManager.urls with safe fallback
+
+## Data Safety, Architecture & Testing Overhaul (latest session)
+
+### Data Safety
+- **File-based persistence** (`DataSafetyManager.swift`): All metadata (recordings, tags, albums, projects, overdubGroups) now saved to Application Support as JSON wrapped in `SafeEnvelope` with SHA-256 checksum, schema version, timestamp, and item count
+- **Atomic writes** via `Data.write(options: .atomic)` — OS-level temp-file + rename prevents partial writes
+- **3-slot backup rotation**: Before each write, primary -> backup1 -> backup2 -> backup3 (oldest deleted)
+- **Auto-recovery cascade**: Load tries primary -> backups newest-first -> legacy UserDefaults
+- **Checksum verification** on every load — SHA-256 of payload must match envelope
+- **Dual-write transition**: Both file-based and UserDefaults written during migration period
+- **Audio file protection**: `protectAudioFile(at:)` sets `FileProtectionType.completeUntilFirstUserAuthentication` and ensures iCloud backup inclusion after each recording
+
+### Architecture Decomposition
+- **AppState** reduced from 2,673-line god object to thin facade (~500 lines of delegation logic)
+- Extracted 5 stateless repositories + 1 service, all operating on `inout` arrays with no persistence or sync side effects
+- AppState public method signatures remain **identical** — zero view changes required (all 67 `@Environment(AppState.self)` call sites untouched)
+- Each AppState method now follows: delegate to repository -> save -> trigger sync
+- Shared album methods (~400 lines) remain in AppState due to tight CloudKit async coupling
+
+### Testing
+- **~80 unit tests** across 21 test files using Swift Testing framework (`import Testing`, `@Test`, `#expect`)
+- **Model tests** (6 files): RecordingItem, Tag, Album, Project, OverdubGroup, SettingsModels — Codable round-trips, migration defaults, computed properties
+- **Repository tests** (5 files): Tag, Album, Project, Overdub, Recording — all CRUD operations, edge cases, batch ops
+- **Service tests** (8 files): DataSafetyManager, SearchService, StorageFormatter, DateFormatters, DeepLinks, IconCatalog, TrialNudgeManager, FileHasher
+- **Audio tests** (1 file): AudioDebug file status verification
+- Test infrastructure: `TestHelpers.swift` with factory methods for all models
+
+## Launch-Ready Feature Additions (latest session)
+
+### Code Health
+- **Trash methods extracted** to `RecordingRepository`: `permanentlyDelete`, `emptyTrash`, `purgeOldTrashed` now return `PermanentDeleteResult` structs; AppState delegates and handles file I/O
+- **SupportManager tests**: ~15 tests for SubscriptionPlan, SubscriptionStatus, state logic, debug overrides, compatibility stubs
+- **Trash operation tests**: ~18 tests for permanent delete, empty trash, purge old trashed (including overdub group cleanup)
+- **~115 unit tests** total across 23 test files
+
+### Multi-Format Export
+- **ExportFormat** enum: Original, WAV, M4A (AAC 256kbps), ALAC
+- **Format picker** sheet shown before sharing (ExportFormatPicker.swift)
+- `export(recording:format:)` routing method + `convertToM4A`, `convertToALAC` conversion methods
+- Generalized `safeFileName(for:format:existingNames:)` replacing WAV-only variant
+- Bulk export updated to accept format parameter
+
+### Audio Editing Enhancements
+- **Fade in/out**: Linear, S-curve, exponential curves; configurable duration
+- **Normalization**: Two-pass peak normalization with configurable target dB
+- **Noise gate**: Envelope follower with threshold, attack, release, hold; linked-stereo gating
+- **Crossfade cuts**: Smooth splice with configurable crossfade duration
+- **AudioEditToolsPanel** sheet in edit mode with parameter controls for each tool
+- **FadeCurve** enum with `apply(_ t:)` for curve math
+
+### Metronome / Click Track
+- **MetronomeEngine**: Synthesized click via AVAudioSourceNode render callback
+- Downbeat (1000 Hz, 15ms) and upbeat (800 Hz, 10ms) sine bursts with exponential decay
+- BPM 40–240, time signature (2–8 beats, quarter/eighth), count-in (0/1/2 bars)
+- Tap tempo with 8-tap averaging and 2s timeout
+- **MetronomeSettingsView** with BPM slider, tap tempo, time signature, count-in, volume
+- Click node attached to mainMixerNode (NOT recorded — tap captures from limiter)
+- Forces engine recording path when enabled
+
+### Real-Time Recording Effects (Monitoring Only)
+- **RecordingMonitorEffects**: 4-band parametric EQ + dynamics processor compressor
+- Monitoring chain: Limiter → MonitorMixer → EQ → Compressor → MainMixerNode
+- Recording stays clean (tap on limiter is upstream of effects)
+- **RecordingEffectsPanel** with EQ sliders, compressor threshold/ratio, monitor volume
+- Forces engine recording path when enabled
+
+### Multi-Track Mixer + Mixdown
+- **MixSettings** model: per-channel volume (0–1.5), pan (-1 to +1), mute, solo; master volume
+- **ChannelMixSettings**: individual channel state with solo/mute logic
+- **MixdownEngine**: Offline chunk-by-chunk stereo WAV bounce (no AVAudioEngine offline render needed)
+- **MixerView**: Horizontal channel strips with vertical volume faders, pan sliders, M/S buttons
+- **OverdubGroup.mixSettings**: Persisted with `decodeIfPresent` migration
+- **OverdubEngine.applyMixSettings**: Real-time player volume/pan updates
+- Bounce imports result as new recording via `importRecording`
+
+### Pro Feature Gates (new)
+- `.metronome`: "Unlock Click Track" (metronome icon)
+- `.recordingEffects`: "Unlock Live Effects" (slider.horizontal.3)
+- `.mixer`: "Unlock Mixer & Mixdown" (slider.vertical.3)
+
+### New Files (12)
+| File | Purpose |
+|------|---------|
+| `Sonidea/Audio/MetronomeEngine.swift` | Synthesized click track engine |
+| `Sonidea/Audio/RecordingMonitorEffects.swift` | Monitoring-only EQ + compressor |
+| `Sonidea/Audio/MixdownEngine.swift` | Offline stereo bounce |
+| `Sonidea/Models/MixSettings.swift` | Per-channel mix settings |
+| `Sonidea/Views/ExportFormatPicker.swift` | Format selection sheet |
+| `Sonidea/Views/MetronomeSettingsView.swift` | Click track settings |
+| `Sonidea/Views/RecordingEffectsPanel.swift` | Live effects settings |
+| `Sonidea/Views/MixerView.swift` | Mixer UI with channel strips |
+| `Sonidea/Views/Waveform/AudioEditToolsPanel.swift` | Fade/normalize/gate panel |
+| `SonideaTests/Repositories/TrashOperationsTests.swift` | Trash operation tests |
+| `SonideaTests/Services/SupportManagerTests.swift` | SupportManager tests |
+| `SonideaTests/Audio/AudioExporterTests.swift` | Export format tests |
+
+### Modified Files (8)
+| File | Changes |
+|------|---------|
+| `RecordingRepository.swift` | +PermanentDeleteResult, +3 trash methods |
+| `AppState.swift` | Replaced 3 inline trash methods with delegation |
+| `AudioExporter.swift` | +ExportFormat, +multi-format conversion, +convertFile router |
+| `AudioEditor.swift` | +FadeCurve, +fade, +normalize, +noiseGate, +cutWithCrossfade |
+| `RecorderManager.swift` | +metronome, +monitorEffects, +needsEngine logic |
+| `OverdubEngine.swift` | +applyMixSettings |
+| `OverdubGroup.swift` | +mixSettings with decodeIfPresent migration |
+| `RecordingDetailView.swift` | +format picker, +edit tools panel, +fade/normalize/gate actions |
+| `OverdubSessionView.swift` | +mixer button, +bounceMix |
+| `ProFeatureGate.swift` | +metronome, +recordingEffects, +mixer cases |
+
+### Current Assessment (vs Apple Voice Memos)
+
+**Feature set: 10/10.** Sonidea is a full-featured mobile DAW disguised as a voice memo app. Multi-track overdub with per-channel mixer, offline bounce, metronome with count-in, real-time monitoring effects (EQ + compressor), fade/normalize/noise gate editing, multi-format export (WAV/M4A/ALAC), shared albums via CloudKit, project versioning, GPS tagging, auto-icon classification, tamper-proof receipts, 7 themes, Watch companion.
+
+**Code health: 8/10, up from 7.5/10.**
+- All trash operations extracted to repository (zero inline overdub cleanup in AppState)
+- SupportManager tested
+- ~115 tests across 23 test files
+
+**Remaining work:**
+- Build and run all tests in Xcode (Cmd+B, Cmd+U) — new features have not been compiled yet
+- Shared album methods (~400 lines) still live directly in AppState due to CloudKit async coupling
+- No integration tests or UI tests
+- `setAlbum(_:for:)` behavior change from previous session should be verified

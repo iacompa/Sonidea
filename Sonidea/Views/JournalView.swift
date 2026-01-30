@@ -20,7 +20,7 @@ struct JournalView: View {
 
     private var timelineGroups: [TimelineGroup] {
         let items = TimelineBuilder.buildTimeline(
-            recordings: appState.recordings,
+            recordings: appState.activeRecordings,
             projects: appState.projects
         )
         return TimelineBuilder.groupByDay(items)

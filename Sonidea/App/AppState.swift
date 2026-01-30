@@ -97,6 +97,9 @@ final class AppState {
     var uiMetrics: UIMetrics = UIMetrics()
 
     init() {
+        // CRITICAL: Migrate UserDefaults data to file-based storage on first launch
+        DataSafetyFileOps.migrateFromUserDefaultsIfNeeded()
+
         loadAppearanceMode()
         loadSelectedTheme()
         loadAppSettings()
@@ -444,72 +447,58 @@ final class AppState {
     }
 
     func updateRecording(_ updated: RecordingItem) {
-        guard let index = recordings.firstIndex(where: { $0.id == updated.id }) else {
-            return
-        }
-        var recording = updated
-        recording.modifiedAt = Date()
-        recordings[index] = recording
+        guard RecordingRepository.updateRecording(updated, recordings: &recordings) else { return }
         saveRecordings()
-
-        // Trigger iCloud sync
-        triggerSyncForRecording(recording)
+        if let rec = recording(for: updated.id) {
+            triggerSyncForRecording(rec)
+        }
     }
 
     func updateTranscript(_ text: String, for recordingID: UUID) {
-        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
-            return
-        }
-        recordings[index].transcript = text
-        recordings[index].modifiedAt = Date()
+        guard RecordingRepository.updateTranscript(text, for: recordingID, recordings: &recordings) else { return }
         saveRecordings()
-
-        // Trigger iCloud sync
-        triggerSyncForRecording(recordings[index])
+        if let rec = recording(for: recordingID) {
+            triggerSyncForRecording(rec)
+        }
     }
 
     func updatePlaybackPosition(_ position: TimeInterval, for recordingID: UUID) {
-        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
-            return
-        }
-        recordings[index].lastPlaybackPosition = position
+        RecordingRepository.updatePlaybackPosition(position, for: recordingID, recordings: &recordings)
         saveRecordings()
     }
 
     func updateRecordingLocation(recordingID: UUID, latitude: Double, longitude: Double, label: String) {
-        guard let index = recordings.firstIndex(where: { $0.id == recordingID }) else {
+        guard let updated = RecordingRepository.updateRecordingLocation(
+            recordingID: recordingID, latitude: latitude, longitude: longitude, label: label, recordings: &recordings
+        ) else { return }
+        saveRecordings()
+        triggerSyncForRecording(updated)
+    }
+
+    func clearRecordingLocation(recordingID: UUID) {
+        guard let updated = RecordingRepository.clearRecordingLocation(recordingID: recordingID, recordings: &recordings) else {
             return
         }
-        recordings[index].latitude = latitude
-        recordings[index].longitude = longitude
-        recordings[index].locationLabel = label
-        recordings[index].modifiedAt = Date()
         saveRecordings()
-
-        // Trigger iCloud sync
-        triggerSyncForRecording(recordings[index])
+        triggerSyncForRecording(updated)
     }
 
     func recording(for id: UUID) -> RecordingItem? {
-        recordings.first { $0.id == id }
+        RecordingRepository.recording(for: id, in: recordings)
     }
 
     func recordings(for ids: [UUID]) -> [RecordingItem] {
-        ids.compactMap { id in recordings.first { $0.id == id && !$0.isTrashed } }
+        RecordingRepository.recordings(for: ids, in: recordings)
     }
 
     // MARK: - Trash Management
 
     func moveToTrash(_ recording: RecordingItem) {
-        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else {
-            return
-        }
-        recordings[index].trashedAt = Date()
-        recordings[index].modifiedAt = Date()
+        guard RecordingRepository.moveToTrash(recording, recordings: &recordings) else { return }
         saveRecordings()
-
-        // Trigger iCloud sync
-        triggerSyncForRecording(recordings[index])
+        if let rec = self.recording(for: recording.id) {
+            triggerSyncForRecording(rec)
+        }
     }
 
     func moveToTrash(at offsets: IndexSet, from list: [RecordingItem]) {
@@ -520,123 +509,51 @@ final class AppState {
     }
 
     func restoreFromTrash(_ recording: RecordingItem) {
-        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else {
-            return
-        }
-        recordings[index].trashedAt = nil
-        recordings[index].modifiedAt = Date()
+        guard let restored = RecordingRepository.restoreFromTrash(recording, recordings: &recordings) else { return }
         saveRecordings()
-
-        // If restoring a layer recording, verify its base still exists
-        if recording.overdubRole == .layer,
-           let baseId = recording.overdubSourceBaseId,
-           !recordings.contains(where: { $0.id == baseId && !$0.isTrashed }) {
-            // Base recording is gone - clear overdub metadata
-            if let restoredIndex = recordings.firstIndex(where: { $0.id == recording.id }) {
-                recordings[restoredIndex].overdubGroupId = nil
-                recordings[restoredIndex].overdubRole = .none
-                recordings[restoredIndex].overdubIndex = nil
-                recordings[restoredIndex].overdubSourceBaseId = nil
-                saveRecordings()
-            }
-        }
-
-        // Trigger iCloud sync
-        triggerSyncForRecording(recordings[index])
+        triggerSyncForRecording(restored)
     }
 
     func permanentlyDelete(_ recording: RecordingItem) {
-        let recordingId = recording.id
-
-        // Clean up overdub group if this recording belongs to one
-        if let groupId = recording.overdubGroupId,
-           let group = overdubGroup(for: groupId) {
-            // If deleting the base recording, delete all layers too
-            if recording.overdubRole == .base {
-                for layerId in group.layerRecordingIds {
-                    if let layerRec = recordings.first(where: { $0.id == layerId }) {
-                        try? FileManager.default.removeItem(at: layerRec.fileURL)
-                    }
-                    recordings.removeAll { $0.id == layerId }
-                }
-                // Remove the overdub group
-                overdubGroups.removeAll { $0.id == groupId }
-            } else if recording.overdubRole == .layer {
-                // Just remove this layer from the group
-                if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
-                    overdubGroups[groupIndex].layerRecordingIds.removeAll { $0 == recording.id }
-                }
-            }
-            saveOverdubGroups()
+        let result = RecordingRepository.permanentlyDelete(
+            recording, recordings: &recordings, overdubGroups: &overdubGroups
+        )
+        for url in result.fileURLsToDelete {
+            try? FileManager.default.removeItem(at: url)
         }
-
-        // Original deletion logic
-        try? FileManager.default.removeItem(at: recording.fileURL)
-        recordings.removeAll { $0.id == recordingId }
         saveRecordings()
-
-        // Trigger iCloud sync for deletion
-        triggerSyncForDeletion(recordingId)
+        if result.overdubGroupsChanged { saveOverdubGroups() }
+        for id in result.removedRecordingIDs {
+            triggerSyncForDeletion(id)
+        }
     }
 
     func emptyTrash() {
-        let trashed = trashedRecordings
-
-        // Clean up overdub groups for trashed recordings
-        let trashedIds = Set(recordings.filter { $0.isTrashed }.map { $0.id })
-        for recording in recordings where recording.isTrashed {
-            if let groupId = recording.overdubGroupId,
-               recording.overdubRole == .base {
-                // Remove the entire group and its layers
-                if let group = overdubGroup(for: groupId) {
-                    for layerId in group.layerRecordingIds where !trashedIds.contains(layerId) {
-                        if let layerRec = recordings.first(where: { $0.id == layerId }) {
-                            try? FileManager.default.removeItem(at: layerRec.fileURL)
-                        }
-                        recordings.removeAll { $0.id == layerId }
-                    }
-                }
-                overdubGroups.removeAll { $0.id == groupId }
-            }
+        let result = RecordingRepository.emptyTrash(
+            recordings: &recordings, overdubGroups: &overdubGroups
+        )
+        for url in result.fileURLsToDelete {
+            try? FileManager.default.removeItem(at: url)
         }
-
-        for recording in trashed {
-            try? FileManager.default.removeItem(at: recording.fileURL)
-            triggerSyncForDeletion(recording.id)
-        }
-        recordings.removeAll { $0.isTrashed }
         saveRecordings()
-        saveOverdubGroups()
+        if result.overdubGroupsChanged { saveOverdubGroups() }
+        for id in result.removedRecordingIDs {
+            triggerSyncForDeletion(id)
+        }
     }
 
     private func purgeOldTrashedRecordings() {
-        let toDelete = recordings.filter { $0.shouldPurge }
-
-        // Clean up overdub groups for purged recordings
-        let purgeIds = Set(toDelete.map { $0.id })
-        for recording in toDelete {
-            if let groupId = recording.overdubGroupId,
-               recording.overdubRole == .base {
-                if let group = overdubGroup(for: groupId) {
-                    for layerId in group.layerRecordingIds where !purgeIds.contains(layerId) {
-                        if let layerRec = recordings.first(where: { $0.id == layerId }) {
-                            try? FileManager.default.removeItem(at: layerRec.fileURL)
-                        }
-                        recordings.removeAll { $0.id == layerId }
-                    }
-                }
-                overdubGroups.removeAll { $0.id == groupId }
-            }
+        let result = RecordingRepository.purgeOldTrashed(
+            recordings: &recordings, overdubGroups: &overdubGroups
+        )
+        guard !result.removedRecordingIDs.isEmpty else { return }
+        for url in result.fileURLsToDelete {
+            try? FileManager.default.removeItem(at: url)
         }
-
-        for recording in toDelete {
-            try? FileManager.default.removeItem(at: recording.fileURL)
-            triggerSyncForDeletion(recording.id)
-        }
-        recordings.removeAll { $0.shouldPurge }
-        if !toDelete.isEmpty {
-            saveRecordings()
-            saveOverdubGroups()
+        saveRecordings()
+        if result.overdubGroupsChanged { saveOverdubGroups() }
+        for id in result.removedRecordingIDs {
+            triggerSyncForDeletion(id)
         }
     }
 
@@ -659,137 +576,75 @@ final class AppState {
     // MARK: - Tag Helpers
 
     func tag(for id: UUID) -> Tag? {
-        tags.first { $0.id == id }
+        TagRepository.tag(for: id, in: tags)
     }
 
     func tags(for ids: [UUID]) -> [Tag] {
-        // Return in tag order
-        ids.compactMap { id in tags.first { $0.id == id } }
+        TagRepository.tags(for: ids, in: tags)
     }
 
     func tagUsageCount(_ tag: Tag) -> Int {
-        recordings.filter { $0.tagIDs.contains(tag.id) }.count
+        TagRepository.tagUsageCount(tag, in: recordings)
     }
 
     func tagExists(name: String, excludingID: UUID? = nil) -> Bool {
-        tags.contains { tag in
-            tag.name.lowercased() == name.lowercased() && tag.id != excludingID
-        }
+        TagRepository.tagExists(name: name, excludingID: excludingID, in: tags)
     }
 
     @discardableResult
     func createTag(name: String, colorHex: String) -> Tag? {
-        guard !tagExists(name: name) else { return nil }
-        let tag = Tag(name: name, colorHex: colorHex)
-        tags.append(tag)
+        guard let tag = TagRepository.createTag(name: name, colorHex: colorHex, tags: &tags) else {
+            return nil
+        }
         saveTags()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
-
         return tag
     }
 
     func updateTag(_ tag: Tag, name: String, colorHex: String) -> Bool {
-        guard let index = tags.firstIndex(where: { $0.id == tag.id }) else {
-            return false
-        }
-
-        // Protected tags cannot be renamed, only recolored
-        if tag.isProtected {
-            tags[index].colorHex = colorHex
+        let result = TagRepository.updateTag(tag, name: name, colorHex: colorHex, tags: &tags)
+        if result {
             saveTags()
-            triggerSyncForTagUpdate(tags[index])
-            return true
+            if let updated = self.tag(for: tag.id) {
+                triggerSyncForTagUpdate(updated)
+            }
         }
-
-        // Check for duplicate name (excluding current tag)
-        if tagExists(name: name, excludingID: tag.id) {
-            return false
-        }
-        tags[index].name = name
-        tags[index].colorHex = colorHex
-        saveTags()
-
-        // Trigger iCloud sync
-        triggerSyncForTagUpdate(tags[index])
-
-        return true
+        return result
     }
 
     func deleteTag(_ tag: Tag) -> Bool {
-        // Cannot delete protected tags
-        if tag.isProtected {
-            return false
-        }
         let tagId = tag.id
-        tags.removeAll { $0.id == tagId }
-        // Remove tag from all recordings
-        for i in recordings.indices {
-            let hadTag = recordings[i].tagIDs.contains(tagId)
-            recordings[i].tagIDs.removeAll { $0 == tagId }
-            if hadTag {
-                recordings[i].modifiedAt = Date()
-            }
+        let result = TagRepository.deleteTag(tag, tags: &tags, recordings: &recordings)
+        if result {
+            saveTags()
+            saveRecordings()
+            triggerSyncForTagDeletion(tagId)
         }
-        saveTags()
-        saveRecordings()
-
-        // Trigger iCloud sync for tag deletion
-        triggerSyncForTagDeletion(tagId)
-
-        return true
+        return result
     }
 
     func mergeTags(sourceTagIDs: Set<UUID>, destinationTagID: UUID) {
-        guard let _ = tag(for: destinationTagID) else { return }
-
-        // Update all recordings to use destination tag
-        for i in recordings.indices {
-            var newTagIDs = recordings[i].tagIDs
-
-            // Check if recording has any of the source tags
-            let hasSourceTag = newTagIDs.contains { sourceTagIDs.contains($0) }
-            if hasSourceTag {
-                // Remove all source tags
-                newTagIDs.removeAll { sourceTagIDs.contains($0) }
-                // Add destination tag if not already present
-                if !newTagIDs.contains(destinationTagID) {
-                    newTagIDs.append(destinationTagID)
-                }
-                recordings[i].tagIDs = newTagIDs
-                recordings[i].modifiedAt = Date()
-            }
-        }
-
-        // Delete merged tags (except destination)
-        for tagID in sourceTagIDs where tagID != destinationTagID {
-            if let tag = tag(for: tagID), !tag.isProtected {
-                tags.removeAll { $0.id == tagID }
-                // Trigger iCloud sync for tag deletion
-                triggerSyncForTagDeletion(tagID)
-            }
-        }
-
+        let deletedIDs = TagRepository.mergeTags(
+            sourceTagIDs: sourceTagIDs,
+            destinationTagID: destinationTagID,
+            tags: &tags,
+            recordings: &recordings
+        )
         saveTags()
         saveRecordings()
-
-        // Trigger iCloud sync for updated recordings
+        for tagID in deletedIDs {
+            triggerSyncForTagDeletion(tagID)
+        }
         triggerSyncForMetadata()
     }
 
     func moveTag(from source: IndexSet, to destination: Int) {
-        tags.move(fromOffsets: source, toOffset: destination)
+        TagRepository.moveTags(from: source, to: destination, tags: &tags)
         saveTags()
     }
 
     func toggleTag(_ tag: Tag, for recording: RecordingItem) -> RecordingItem {
-        var updated = recording
-        if updated.tagIDs.contains(tag.id) {
-            updated.tagIDs.removeAll { $0 == tag.id }
-        } else {
-            updated.tagIDs.append(tag.id)
-        }
+        let updated = TagRepository.toggleTag(tag, on: recording)
         updateRecording(updated)
         return updated
     }
@@ -802,7 +657,7 @@ final class AppState {
     }
 
     func isFavorite(_ recording: RecordingItem) -> Bool {
-        recording.tagIDs.contains(Tag.favoriteTagID)
+        TagRepository.isFavorite(recording)
     }
 
     /// Get the favorite tag ID (always exists as it's protected)
@@ -813,37 +668,22 @@ final class AppState {
     // MARK: - Album Helpers
 
     func album(for id: UUID?) -> Album? {
-        guard let id = id else { return nil }
-        return albums.first { $0.id == id }
+        AlbumRepository.album(for: id, in: albums)
     }
 
     @discardableResult
     func createAlbum(name: String) -> Album {
-        let album = Album(name: name)
-        albums.append(album)
+        let album = AlbumRepository.createAlbum(name: name, albums: &albums)
         saveAlbums()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
-
         return album
     }
 
     func deleteAlbum(_ album: Album) {
-        guard album.canDelete else { return }
         let albumId = album.id
-        albums.removeAll { $0.id == albumId }
-        // Move recordings to Drafts
-        for i in recordings.indices {
-            if recordings[i].albumID == albumId {
-                recordings[i].albumID = Album.draftsID
-                recordings[i].modifiedAt = Date()
-            }
-        }
+        guard AlbumRepository.deleteAlbum(album, albums: &albums, recordings: &recordings) else { return }
         saveAlbums()
         saveRecordings()
-
-        // Trigger iCloud sync for album deletion
         triggerSyncForAlbumDeletion(albumId)
     }
 
@@ -855,39 +695,16 @@ final class AppState {
     }
 
     private func ensureDraftsAlbum() {
-        if !albums.contains(where: { $0.id == Album.draftsID }) {
-            albums.insert(Album.drafts, at: 0)
-            saveAlbums()
-        }
-
-        // Deduplicate: merge any extra "Drafts" albums into the canonical one
-        let duplicateDrafts = albums.filter { $0.id != Album.draftsID && $0.name == "Drafts" }
-        if !duplicateDrafts.isEmpty {
-            for dup in duplicateDrafts {
-                // Re-assign recordings from duplicate to the canonical Drafts
-                for i in recordings.indices {
-                    if recordings[i].albumID == dup.id {
-                        recordings[i].albumID = Album.draftsID
-                    }
-                }
-                albums.removeAll { $0.id == dup.id }
-            }
-            saveAlbums()
-            saveRecordings()
-        }
+        let result = AlbumRepository.ensureDraftsAlbum(albums: &albums, recordings: &recordings)
+        if result.albumsChanged { saveAlbums() }
+        if result.recordingsChanged { saveRecordings() }
     }
 
     /// Ensure the Imports system album exists (called on first external import)
     func ensureImportsAlbum() {
-        if !albums.contains(where: { $0.id == Album.importsID }) {
-            // Insert after Drafts (at index 1) or at beginning if no Drafts
-            let insertIndex = albums.firstIndex(where: { $0.id == Album.draftsID }).map { $0 + 1 } ?? 0
-            albums.insert(Album.imports, at: insertIndex)
-            saveAlbums()
-
-            // Trigger iCloud sync for new album
-            triggerSyncForAlbum(Album.imports)
-        }
+        guard AlbumRepository.ensureImportsAlbum(albums: &albums) else { return }
+        saveAlbums()
+        triggerSyncForAlbum(Album.imports)
     }
 
     /// Check if Imports album exists
@@ -897,22 +714,9 @@ final class AppState {
 
     /// Ensure the Watch Recordings system album exists (called on first watch import)
     func ensureWatchRecordingsAlbum() {
-        if !albums.contains(where: { $0.id == Album.watchRecordingsID }) {
-            // Insert after Imports if it exists, otherwise after Drafts, otherwise at beginning
-            let insertIndex: Int
-            if let importsIdx = albums.firstIndex(where: { $0.id == Album.importsID }) {
-                insertIndex = importsIdx + 1
-            } else if let draftsIdx = albums.firstIndex(where: { $0.id == Album.draftsID }) {
-                insertIndex = draftsIdx + 1
-            } else {
-                insertIndex = 0
-            }
-            albums.insert(Album.watchRecordings, at: insertIndex)
-            saveAlbums()
-
-            // Trigger iCloud sync for new album
-            triggerSyncForAlbum(Album.watchRecordings)
-        }
+        guard AlbumRepository.ensureWatchRecordingsAlbum(albums: &albums) else { return }
+        saveAlbums()
+        triggerSyncForAlbum(Album.watchRecordings)
     }
 
     // MARK: - Shared Album Management
@@ -1287,15 +1091,7 @@ final class AppState {
         let didMigrate = UserDefaults.standard.bool(forKey: draftsMigrationKey)
         guard !didMigrate else { return }
 
-        var changed = false
-        for i in recordings.indices {
-            if recordings[i].albumID == nil {
-                recordings[i].albumID = Album.draftsID
-                changed = true
-            }
-        }
-
-        if changed {
+        if AlbumRepository.migrateRecordingsToDrafts(recordings: &recordings) {
             saveRecordings()
         }
         UserDefaults.standard.set(true, forKey: draftsMigrationKey)
@@ -1303,9 +1099,7 @@ final class AppState {
 
     /// Migrate existing "Inbox" album to "Drafts"
     private func migrateInboxToDrafts() {
-        // Find if there's an album with name "Inbox" and the system ID
-        if let index = albums.firstIndex(where: { $0.id == Album.draftsID && $0.name == "Inbox" }) {
-            albums[index].name = "Drafts"
+        if AlbumRepository.migrateInboxToDrafts(albums: &albums) {
             saveAlbums()
         }
     }
@@ -1313,17 +1107,15 @@ final class AppState {
     // MARK: - Album Search Helpers
 
     func recordings(in album: Album) -> [RecordingItem] {
-        activeRecordings.filter { $0.albumID == album.id }
+        AlbumRepository.recordings(in: album, from: recordings)
     }
 
     func recordingCount(in album: Album) -> Int {
-        activeRecordings.filter { $0.albumID == album.id }.count
+        AlbumRepository.recordingCount(in: album, from: recordings)
     }
 
     func searchAlbums(query: String) -> [Album] {
-        guard !query.isEmpty else { return albums }
-        let lowercasedQuery = query.lowercased()
-        return albums.filter { $0.name.lowercased().contains(lowercasedQuery) }
+        SearchService.searchAlbums(query: query, albums: albums)
     }
 
     // MARK: - Storage Size Helpers
@@ -1378,56 +1170,14 @@ final class AppState {
     // MARK: - Search
 
     func searchRecordings(query: String, filterTagIDs: Set<UUID> = []) -> [RecordingItem] {
-        var results = activeRecordings
-
-        // Filter by tags if any selected
-        if !filterTagIDs.isEmpty {
-            results = results.filter { recording in
-                !filterTagIDs.isDisjoint(with: Set(recording.tagIDs))
-            }
-        }
-
-        // Filter by search query
-        if !query.isEmpty {
-            let lowercasedQuery = query.lowercased()
-            results = results.filter { recording in
-                // Match title
-                if recording.title.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                // Match notes
-                if recording.notes.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                // Match location
-                if recording.locationLabel.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                // Match tag names
-                let recordingTags = tags(for: recording.tagIDs)
-                if recordingTags.contains(where: { $0.name.lowercased().contains(lowercasedQuery) }) {
-                    return true
-                }
-                // Match album name
-                if let album = album(for: recording.albumID),
-                   album.name.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                // Match transcript
-                if recording.transcript.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                // Match project title
-                if let projectId = recording.projectId,
-                   let project = project(for: projectId),
-                   project.title.lowercased().contains(lowercasedQuery) {
-                    return true
-                }
-                return false
-            }
-        }
-
-        return results
+        SearchService.searchRecordings(
+            query: query,
+            filterTagIDs: filterTagIDs,
+            recordings: activeRecordings,
+            tags: tags,
+            albums: albums,
+            projects: projects
+        )
     }
 
     // MARK: - Spot Computation (for Map)
@@ -1465,54 +1215,26 @@ final class AppState {
     // MARK: - Batch Operations
 
     func addTagToRecordings(_ tag: Tag, recordingIDs: Set<UUID>) {
-        for i in recordings.indices {
-            if recordingIDs.contains(recordings[i].id) && !recordings[i].tagIDs.contains(tag.id) {
-                recordings[i].tagIDs.append(tag.id)
-                recordings[i].modifiedAt = Date()
-            }
-        }
+        RecordingRepository.addTag(tag, recordingIDs: recordingIDs, recordings: &recordings)
         saveRecordings()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
     }
 
     func removeTagFromRecordings(_ tag: Tag, recordingIDs: Set<UUID>) {
-        for i in recordings.indices {
-            if recordingIDs.contains(recordings[i].id) {
-                recordings[i].tagIDs.removeAll { $0 == tag.id }
-                recordings[i].modifiedAt = Date()
-            }
-        }
+        RecordingRepository.removeTag(tag, recordingIDs: recordingIDs, recordings: &recordings)
         saveRecordings()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
     }
 
     func setAlbumForRecordings(_ album: Album?, recordingIDs: Set<UUID>) {
-        for i in recordings.indices {
-            if recordingIDs.contains(recordings[i].id) {
-                recordings[i].albumID = album?.id ?? Album.draftsID
-                recordings[i].modifiedAt = Date()
-            }
-        }
+        AlbumRepository.setAlbumForRecordings(album, recordingIDs: recordingIDs, recordings: &recordings)
         saveRecordings()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
     }
 
     func moveRecordingsToTrash(recordingIDs: Set<UUID>) {
-        for i in recordings.indices {
-            if recordingIDs.contains(recordings[i].id) {
-                recordings[i].trashedAt = Date()
-                recordings[i].modifiedAt = Date()
-            }
-        }
+        RecordingRepository.moveToTrash(recordingIDs: recordingIDs, recordings: &recordings)
         saveRecordings()
-
-        // Trigger iCloud sync
         triggerSyncForMetadata()
     }
 
@@ -1601,16 +1323,17 @@ final class AppState {
     }
 
     private func persistRecordings() {
+        // Primary: file-based with checksum and backup rotation
+        DataSafetyFileOps.saveSync(recordings, collection: .recordings)
+        // Fallback: keep UserDefaults in sync for one release cycle
         if let data = try? JSONEncoder().encode(recordings) {
             UserDefaults.standard.set(data, forKey: recordingsKey)
         }
     }
 
     private func loadRecordings() {
-        guard let data = UserDefaults.standard.data(forKey: recordingsKey),
-              let saved = try? JSONDecoder().decode([RecordingItem].self, from: data) else {
-            return
-        }
+        let saved = DataSafetyFileOps.load(RecordingItem.self, collection: .recordings)
+        guard !saved.isEmpty else { return }
         // Load all recordings immediately; prune missing files in the background
         recordings = saved
         Task { [weak self] in
@@ -1636,16 +1359,15 @@ final class AppState {
     }
 
     private func persistTags() {
+        DataSafetyFileOps.saveSync(tags, collection: .tags)
         if let data = try? JSONEncoder().encode(tags) {
             UserDefaults.standard.set(data, forKey: tagsKey)
         }
     }
 
     private func loadTags() {
-        guard let data = UserDefaults.standard.data(forKey: tagsKey),
-              let saved = try? JSONDecoder().decode([Tag].self, from: data) else {
-            return
-        }
+        let saved = DataSafetyFileOps.load(Tag.self, collection: .tags)
+        guard !saved.isEmpty else { return }
         tags = saved
     }
 
@@ -1659,16 +1381,15 @@ final class AppState {
     }
 
     private func persistAlbums() {
+        DataSafetyFileOps.saveSync(albums, collection: .albums)
         if let data = try? JSONEncoder().encode(albums) {
             UserDefaults.standard.set(data, forKey: albumsKey)
         }
     }
 
     private func loadAlbums() {
-        guard let data = UserDefaults.standard.data(forKey: albumsKey),
-              let saved = try? JSONDecoder().decode([Album].self, from: data) else {
-            return
-        }
+        let saved = DataSafetyFileOps.load(Album.self, collection: .albums)
+        guard !saved.isEmpty else { return }
         albums = saved
     }
 
@@ -1749,21 +1470,16 @@ final class AppState {
     }
 
     private func seedDefaultTagsIfNeeded() {
-        if tags.isEmpty {
-            tags = Tag.defaultTags
+        let didSeed = TagRepository.seedDefaultTagsIfNeeded(tags: &tags)
+        if didSeed || !tags.contains(where: { $0.id == Tag.favoriteTagID }) {
             saveTags()
-        } else {
-            // Ensure the protected favorite tag always exists
-            ensureFavoriteTagExists()
         }
     }
 
     private func ensureFavoriteTagExists() {
-        // Check if favorite tag exists by its stable ID
-        if !tags.contains(where: { $0.id == Tag.favoriteTagID }) {
-            // Recreate the favorite tag with default color
-            let favoriteTag = Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")
-            tags.insert(favoriteTag, at: 0)
+        let countBefore = tags.count
+        TagRepository.ensureFavoriteTagExists(tags: &tags)
+        if tags.count != countBefore {
             saveTags()
         }
     }
@@ -1771,18 +1487,8 @@ final class AppState {
     // MARK: - Album Rename
 
     func renameAlbum(_ album: Album, to newName: String) -> Bool {
-        // System albums cannot be renamed
-        guard album.canRename else { return false }
-
-        guard let index = albums.firstIndex(where: { $0.id == album.id }) else {
-            return false
-        }
-
-        let trimmedName = newName.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty else { return false }
-
-        let oldName = albums[index].name
-        albums[index].name = trimmedName
+        let oldName = album.name
+        guard AlbumRepository.renameAlbum(album, to: newName, albums: &albums) else { return false }
         saveAlbums()
 
         // Trigger iCloud sync for album update
@@ -1811,239 +1517,118 @@ final class AppState {
 
     /// Get a project by ID
     func project(for id: UUID?) -> Project? {
-        guard let id = id else { return nil }
-        return projects.first { $0.id == id }
+        ProjectRepository.project(for: id, in: projects)
     }
 
     /// Get all recordings (versions) belonging to a project, sorted by version index
     func recordings(in project: Project) -> [RecordingItem] {
-        activeRecordings
-            .filter { $0.projectId == project.id }
-            .sorted { $0.versionIndex < $1.versionIndex }
+        ProjectRepository.recordings(in: project, from: recordings)
     }
 
     /// Get recording count for a project
     func recordingCount(in project: Project) -> Int {
-        activeRecordings.filter { $0.projectId == project.id }.count
+        ProjectRepository.recordingCount(in: project, from: recordings)
     }
 
     /// Get the next version number for a project
     func nextVersionIndex(for project: Project) -> Int {
-        let versions = recordings(in: project)
-        return (versions.map { $0.versionIndex }.max() ?? 0) + 1
+        ProjectRepository.nextVersionIndex(for: project, recordings: recordings)
     }
 
     /// Get the best take recording for a project
     func bestTake(for project: Project) -> RecordingItem? {
-        guard let bestTakeId = project.bestTakeRecordingId else { return nil }
-        return recording(for: bestTakeId)
+        ProjectRepository.bestTake(for: project, recordings: recordings)
     }
 
     /// Create a new project from an existing recording (recording becomes V1)
     @discardableResult
     func createProject(from recording: RecordingItem, title: String? = nil) -> Project {
-        // Create the project
-        let project = Project(
-            title: title ?? recording.title,
-            createdAt: Date(),
-            updatedAt: Date()
+        let project = ProjectRepository.createProject(
+            from: recording, title: title, projects: &projects, recordings: &recordings
         )
-
-        // Update the recording to belong to this project as V1
-        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
-            recordings[index].projectId = project.id
-            recordings[index].parentRecordingId = nil
-            recordings[index].versionIndex = 1
-            recordings[index].modifiedAt = Date()
-        }
-
-        projects.insert(project, at: 0)
         saveProjects()
         saveRecordings()
-
-        // Trigger iCloud sync for new project
         triggerSyncForProject(project)
-
         return project
     }
 
     /// Create a new empty project
     @discardableResult
     func createProject(title: String) -> Project {
-        let project = Project(title: title)
-        projects.insert(project, at: 0)
+        let project = ProjectRepository.createProject(title: title, projects: &projects)
         saveProjects()
-
-        // Trigger iCloud sync for new project
         triggerSyncForProject(project)
-
         return project
     }
 
     /// Add a recording as a new version to an existing project
     func addVersion(recording: RecordingItem, to project: Project) {
-        let nextVersion = nextVersionIndex(for: project)
-
-        // Find the latest version to link as parent
-        let versions = recordings(in: project)
-        let latestVersion = versions.last
-
-        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
-            recordings[index].projectId = project.id
-            recordings[index].parentRecordingId = latestVersion?.id
-            recordings[index].versionIndex = nextVersion
-        }
-
-        // Update project's updatedAt
-        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
-            projects[projectIndex].updatedAt = Date()
-        }
-
+        ProjectRepository.addVersion(recording: recording, to: project, projects: &projects, recordings: &recordings)
         saveRecordings()
         saveProjects()
     }
 
     /// Remove a recording from its project (makes it standalone)
     func removeFromProject(recording: RecordingItem) {
-        guard let projectId = recording.projectId else { return }
-
-        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
-            recordings[index].projectId = nil
-            recordings[index].parentRecordingId = nil
-            recordings[index].versionIndex = 1
-        }
-
-        // Update project's updatedAt
-        if let projectIndex = projects.firstIndex(where: { $0.id == projectId }) {
-            projects[projectIndex].updatedAt = Date()
-
-            // If this was the best take, clear it
-            if projects[projectIndex].bestTakeRecordingId == recording.id {
-                projects[projectIndex].bestTakeRecordingId = nil
-            }
-        }
-
+        ProjectRepository.removeFromProject(recording: recording, projects: &projects, recordings: &recordings)
         saveRecordings()
         saveProjects()
     }
 
     /// Set the best take for a project
     func setBestTake(_ recording: RecordingItem, for project: Project) {
-        guard recording.projectId == project.id else { return }
-
-        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
-            projects[projectIndex].bestTakeRecordingId = recording.id
-            projects[projectIndex].updatedAt = Date()
-            saveProjects()
-
-            // Trigger iCloud sync for project update
-            triggerSyncForProjectUpdate(projects[projectIndex])
-        }
+        guard let updated = ProjectRepository.setBestTake(recording, for: project, projects: &projects) else { return }
+        saveProjects()
+        triggerSyncForProjectUpdate(updated)
     }
 
     /// Clear the best take for a project
     func clearBestTake(for project: Project) {
-        if let projectIndex = projects.firstIndex(where: { $0.id == project.id }) {
-            projects[projectIndex].bestTakeRecordingId = nil
-            projects[projectIndex].updatedAt = Date()
-            saveProjects()
-
-            // Trigger iCloud sync for project update
-            triggerSyncForProjectUpdate(projects[projectIndex])
-        }
+        guard let updated = ProjectRepository.clearBestTake(for: project, projects: &projects) else { return }
+        saveProjects()
+        triggerSyncForProjectUpdate(updated)
     }
 
     /// Update project properties
     func updateProject(_ project: Project) {
-        if let index = projects.firstIndex(where: { $0.id == project.id }) {
-            var updated = project
-            updated.updatedAt = Date()
-            projects[index] = updated
-            saveProjects()
-
-            // Trigger iCloud sync for project update
-            triggerSyncForProjectUpdate(updated)
-        }
+        guard let updated = ProjectRepository.updateProject(project, projects: &projects) else { return }
+        saveProjects()
+        triggerSyncForProjectUpdate(updated)
     }
 
     /// Toggle project pin status
     func toggleProjectPin(_ project: Project) {
-        if let index = projects.firstIndex(where: { $0.id == project.id }) {
-            projects[index].pinned.toggle()
-            projects[index].updatedAt = Date()
-            saveProjects()
-
-            // Trigger iCloud sync for project update
-            triggerSyncForProjectUpdate(projects[index])
-        }
+        guard let updated = ProjectRepository.toggleProjectPin(project, projects: &projects) else { return }
+        saveProjects()
+        triggerSyncForProjectUpdate(updated)
     }
 
     /// Delete a project (recordings become standalone)
     func deleteProject(_ project: Project) {
-        let projectId = project.id
-
-        // Remove project association from all recordings
-        for i in recordings.indices {
-            if recordings[i].projectId == projectId {
-                recordings[i].projectId = nil
-                recordings[i].parentRecordingId = nil
-                recordings[i].versionIndex = 1
-            }
-        }
-
-        projects.removeAll { $0.id == projectId }
+        let deletedId = ProjectRepository.deleteProject(project, projects: &projects, recordings: &recordings)
         saveProjects()
         saveRecordings()
-
-        // Trigger iCloud sync for project deletion
-        triggerSyncForProjectDeletion(projectId)
+        triggerSyncForProjectDeletion(deletedId)
     }
 
     /// Get project statistics
     func stats(for project: Project) -> ProjectStats {
-        let versions = recordings(in: project)
-        let totalDuration = versions.reduce(0) { $0 + $1.duration }
-        let dates = versions.map { $0.createdAt }
-
-        return ProjectStats(
-            versionCount: versions.count,
-            totalDuration: totalDuration,
-            oldestVersion: dates.min(),
-            newestVersion: dates.max(),
-            hasBestTake: project.bestTakeRecordingId != nil
-        )
+        ProjectRepository.stats(for: project, recordings: recordings)
     }
 
     /// Search projects by query
     func searchProjects(query: String) -> [Project] {
-        guard !query.isEmpty else { return projects }
-        let lowercasedQuery = query.lowercased()
-        return projects.filter { project in
-            // Match title
-            if project.title.lowercased().contains(lowercasedQuery) {
-                return true
-            }
-            // Match notes
-            if project.notes.lowercased().contains(lowercasedQuery) {
-                return true
-            }
-            return false
-        }
+        SearchService.searchProjects(query: query, projects: projects)
     }
 
     /// Get all projects sorted (pinned first, then by updatedAt)
     var sortedProjects: [Project] {
-        projects.sorted { a, b in
-            if a.pinned != b.pinned {
-                return a.pinned
-            }
-            return a.updatedAt > b.updatedAt
-        }
+        ProjectRepository.sortedProjects(projects)
     }
 
     /// Get recordings that are standalone (not part of any project)
     var standaloneRecordings: [RecordingItem] {
-        activeRecordings.filter { $0.projectId == nil }
+        ProjectRepository.standaloneRecordings(from: recordings)
     }
 
     // MARK: - Project Persistence
@@ -2058,16 +1643,15 @@ final class AppState {
     }
 
     private func persistProjects() {
+        DataSafetyFileOps.saveSync(projects, collection: .projects)
         if let data = try? JSONEncoder().encode(projects) {
             UserDefaults.standard.set(data, forKey: projectsKey)
         }
     }
 
     private func loadProjects() {
-        guard let data = UserDefaults.standard.data(forKey: projectsKey),
-              let saved = try? JSONDecoder().decode([Project].self, from: data) else {
-            return
-        }
+        let saved = DataSafetyFileOps.load(Project.self, collection: .projects)
+        guard !saved.isEmpty else { return }
         projects = saved
     }
 
@@ -2083,16 +1667,15 @@ final class AppState {
     }
 
     private func persistOverdubGroups() {
+        DataSafetyFileOps.saveSync(overdubGroups, collection: .overdubGroups)
         if let data = try? JSONEncoder().encode(overdubGroups) {
             UserDefaults.standard.set(data, forKey: overdubGroupsKey)
         }
     }
 
     private func loadOverdubGroups() {
-        guard let data = UserDefaults.standard.data(forKey: overdubGroupsKey),
-              let saved = try? JSONDecoder().decode([OverdubGroup].self, from: data) else {
-            return
-        }
+        let saved = DataSafetyFileOps.load(OverdubGroup.self, collection: .overdubGroups)
+        guard !saved.isEmpty else { return }
         overdubGroups = saved
     }
 
@@ -2155,49 +1738,36 @@ final class AppState {
 
     /// Get overdub group by ID
     func overdubGroup(for id: UUID) -> OverdubGroup? {
-        overdubGroups.first { $0.id == id }
+        OverdubRepository.overdubGroup(for: id, in: overdubGroups)
     }
 
     /// Get overdub group for a recording (if it belongs to one)
     func overdubGroup(for recording: RecordingItem) -> OverdubGroup? {
-        guard let groupId = recording.overdubGroupId else { return nil }
-        return overdubGroup(for: groupId)
+        OverdubRepository.overdubGroup(for: recording, in: overdubGroups)
     }
 
     /// Get all recordings in an overdub group
     func recordings(in group: OverdubGroup) -> [RecordingItem] {
-        let ids = Set(group.allRecordingIds)
-        return recordings.filter { ids.contains($0.id) }
+        OverdubRepository.recordings(in: group, from: recordings)
     }
 
     /// Get the base recording for an overdub group
     func baseRecording(for group: OverdubGroup) -> RecordingItem? {
-        recordings.first { $0.id == group.baseRecordingId }
+        OverdubRepository.baseRecording(for: group, from: recordings)
     }
 
     /// Get layer recordings for an overdub group (ordered by index)
     func layerRecordings(for group: OverdubGroup) -> [RecordingItem] {
-        let layerIds = Set(group.layerRecordingIds)
-        return recordings
-            .filter { layerIds.contains($0.id) }
-            .sorted { ($0.overdubIndex ?? 0) < ($1.overdubIndex ?? 0) }
+        OverdubRepository.layerRecordings(for: group, from: recordings)
     }
 
     /// Create a new overdub group with a base recording
     func createOverdubGroup(baseRecording: RecordingItem) -> OverdubGroup {
-        let group = OverdubGroup(baseRecordingId: baseRecording.id)
-
-        // Update the base recording
-        if let index = recordings.firstIndex(where: { $0.id == baseRecording.id }) {
-            recordings[index].overdubGroupId = group.id
-            recordings[index].overdubRole = .base
-            recordings[index].overdubIndex = 0
-        }
-
-        overdubGroups.append(group)
+        let group = OverdubRepository.createOverdubGroup(
+            baseRecording: baseRecording, groups: &overdubGroups, recordings: &recordings
+        )
         saveOverdubGroups()
         saveRecordings()
-
         return group
     }
 
@@ -2207,121 +1777,62 @@ final class AppState {
         layerRecording: RecordingItem,
         offsetSeconds: Double = 0
     ) {
-        guard var group = overdubGroup(for: groupId),
-              group.canAddLayer else { return }
-
-        let layerIndex = group.nextLayerIndex ?? 1
-
-        // Update the layer recording
-        if let index = recordings.firstIndex(where: { $0.id == layerRecording.id }) {
-            recordings[index].overdubGroupId = groupId
-            recordings[index].overdubRole = .layer
-            recordings[index].overdubIndex = layerIndex
-            recordings[index].overdubOffsetSeconds = offsetSeconds
-            recordings[index].overdubSourceBaseId = group.baseRecordingId
-        }
-
-        // Add to group
-        group.addLayer(recordingId: layerRecording.id)
-
-        // Update the group in storage
-        if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
-            overdubGroups[groupIndex] = group
-        }
-
+        OverdubRepository.addLayer(
+            groupId: groupId, layerRecording: layerRecording, offsetSeconds: offsetSeconds,
+            groups: &overdubGroups, recordings: &recordings
+        )
         saveOverdubGroups()
         saveRecordings()
     }
 
     /// Remove the last layer from an overdub group
     func removeLayerFromOverdubGroup(groupId: UUID) {
-        guard var group = overdubGroup(for: groupId),
-              let lastLayerId = group.layerRecordingIds.last else { return }
-
-        // Delete the layer's audio file
-        if let layerRec = recordings.first(where: { $0.id == lastLayerId }) {
-            try? FileManager.default.removeItem(at: layerRec.fileURL)
+        if let fileURL = OverdubRepository.removeLastLayer(
+            groupId: groupId, groups: &overdubGroups, recordings: &recordings
+        ) {
+            try? FileManager.default.removeItem(at: fileURL)
         }
-
-        // Remove layer recording from storage
-        recordings.removeAll { $0.id == lastLayerId }
-
-        // Remove from group
-        group.layerRecordingIds.removeLast()
-
-        // Update group in storage
-        if let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) {
-            overdubGroups[groupIndex] = group
-        }
-
-        // If no layers left, optionally keep the group or remove it
-        // Keep the group so user can add new layers
-
         saveOverdubGroups()
         saveRecordings()
     }
 
     /// Check if a recording can have overdub layers added
     func canAddOverdubLayer(to recording: RecordingItem) -> Bool {
-        // Overdub is a premium feature
         guard supportManager.canUseProFeatures else { return false }
-
-        // If not part of an overdub group yet, it can start one
-        guard let groupId = recording.overdubGroupId else { return true }
-
-        // If already in a group, check if group has room
-        guard let group = overdubGroup(for: groupId) else { return true }
-        return group.canAddLayer
+        return OverdubRepository.canAddLayer(to: recording, in: overdubGroups)
     }
 
     /// Get the number of existing layers for a recording
     func overdubLayerCount(for recording: RecordingItem) -> Int {
-        guard let groupId = recording.overdubGroupId,
-              let group = overdubGroup(for: groupId) else { return 0 }
-        return group.layerCount
+        OverdubRepository.overdubLayerCount(for: recording, in: overdubGroups)
     }
 
     /// Update layer offset for sync adjustment
     func updateLayerOffset(recordingId: UUID, offsetSeconds: Double) {
-        if let index = recordings.firstIndex(where: { $0.id == recordingId }) {
-            recordings[index].overdubOffsetSeconds = offsetSeconds
-            saveRecordings()
-        }
+        OverdubRepository.updateLayerOffset(recordingId: recordingId, offsetSeconds: offsetSeconds, recordings: &recordings)
+        saveRecordings()
     }
 
     /// Remove overdub groups whose base recording no longer exists
     private func validateOverdubGroupIntegrity() {
-        let recordingIds = Set(recordings.map { $0.id })
-        let invalidGroups = overdubGroups.filter { !recordingIds.contains($0.baseRecordingId) }
+        let groupCountBefore = overdubGroups.count
+        let layerCountsBefore = overdubGroups.map { $0.layerRecordingIds.count }
 
-        if !invalidGroups.isEmpty {
-            // Clean up layer recordings for invalid groups
-            for group in invalidGroups {
-                for layerId in group.layerRecordingIds {
-                    if let layerRec = recordings.first(where: { $0.id == layerId }) {
-                        try? FileManager.default.removeItem(at: layerRec.fileURL)
-                    }
-                    recordings.removeAll { $0.id == layerId }
-                }
-            }
+        let removedFileURLs = OverdubRepository.validateIntegrity(
+            groups: &overdubGroups, recordings: &recordings
+        )
+        for url in removedFileURLs {
+            try? FileManager.default.removeItem(at: url)
+        }
 
-            overdubGroups.removeAll { !recordingIds.contains($0.baseRecordingId) }
+        let groupsChanged = overdubGroups.count != groupCountBefore
+        let layersChanged = overdubGroups.map({ $0.layerRecordingIds.count }) != layerCountsBefore
+        if groupsChanged || layersChanged {
             saveOverdubGroups()
+            Self.logger.info("Cleaned up orphaned overdub groups or dangling layer references")
+        }
+        if !removedFileURLs.isEmpty {
             saveRecordings()
-            Self.logger.info("Cleaned up \(invalidGroups.count) orphaned overdub groups")
-        }
-
-        // Also clean up layer references that point to missing recordings
-        var needsSave = false
-        for i in overdubGroups.indices {
-            let originalCount = overdubGroups[i].layerRecordingIds.count
-            overdubGroups[i].layerRecordingIds.removeAll { !recordingIds.contains($0) }
-            if overdubGroups[i].layerRecordingIds.count != originalCount {
-                needsSave = true
-            }
-        }
-        if needsSave {
-            saveOverdubGroups()
         }
     }
 }

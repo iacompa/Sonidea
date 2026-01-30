@@ -169,8 +169,8 @@ final class AudioSessionManager {
         let requestedSampleRate = quality.sampleRate
         try? session.setPreferredSampleRate(requestedSampleRate)
 
-        // Force mono input
-        try? session.setPreferredInputNumberOfChannels(1)
+        // Set preferred input channel count from recording mode (mono or stereo)
+        try? session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -214,7 +214,8 @@ final class AudioSessionManager {
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
         try? session.setPreferredSampleRate(quality.sampleRate)
-        try? session.setPreferredInputNumberOfChannels(1)
+        // Set preferred input channel count from recording mode (mono or stereo)
+        try? session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         actualSampleRate = session.sampleRate
