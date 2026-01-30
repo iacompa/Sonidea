@@ -1491,8 +1491,12 @@ final class AppState {
         guard AlbumRepository.renameAlbum(album, to: newName, albums: &albums) else { return false }
         saveAlbums()
 
+        let trimmedName = newName.trimmingCharacters(in: .whitespaces)
+
         // Trigger iCloud sync for album update
-        triggerSyncForAlbumUpdate(albums[index])
+        if let index = albums.firstIndex(where: { $0.id == album.id }) {
+            triggerSyncForAlbumUpdate(albums[index])
+        }
 
         // Sync rename to CloudKit for shared albums
         if album.isShared {

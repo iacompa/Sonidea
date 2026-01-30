@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 /// Stateless repository for tag data operations.
 /// All methods take `inout` arrays and return results.

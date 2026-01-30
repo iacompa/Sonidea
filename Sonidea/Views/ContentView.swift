@@ -684,6 +684,11 @@ struct ContentView: View {
         case .idle:
             // Start new recording
             appState.recorder.startRecording()
+            // Show alert if recording couldn't start (e.g. insufficient disk space)
+            if let error = appState.recorder.recordingError {
+                saveErrorMessage = error
+                showSaveErrorAlert = true
+            }
         case .recording:
             // Stop and save immediately (Apple-like behavior)
             saveRecording()

@@ -46,7 +46,7 @@ final class PlaybackEngine {
     private var wasPlayingBeforeInterruption = false
 
     /// Interruption observer
-    private var interruptionObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
 
     init() {
         setupInterruptionHandling()

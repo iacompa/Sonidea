@@ -36,6 +36,9 @@ final class RecorderManager: NSObject {
     var metronome = MetronomeEngine()
     var monitorEffects = RecordingMonitorEffects()
 
+    /// User-facing error message (e.g. insufficient disk space). Views can observe this to show alerts.
+    private(set) var recordingError: String?
+
     // Reference to app settings (set by AppState)
     var appSettings: AppSettings = .default
 
@@ -269,10 +272,40 @@ final class RecorderManager: NSObject {
         }
     }
 
+    // MARK: - Disk Space Check
+
+    /// Minimum free disk space required to start recording (50 MB)
+    private static let minimumFreeDiskSpace: Int64 = 50 * 1024 * 1024
+
+    /// Returns true if there is sufficient disk space to begin recording.
+    private func hasSufficientDiskSpace() -> Bool {
+        do {
+            let attrs = try FileManager.default.attributesOfFileSystem(
+                forPath: NSHomeDirectory()
+            )
+            if let freeSize = attrs[.systemFreeSize] as? Int64 {
+                return freeSize >= Self.minimumFreeDiskSpace
+            }
+        } catch {
+            print("⚠️ [RecorderManager] Could not check disk space: \(error.localizedDescription)")
+        }
+        // If the check fails, allow recording to proceed rather than blocking
+        return true
+    }
+
     // MARK: - Recording Control
 
     func startRecording() {
         guard recordingState == .idle, !isPreparing else { return }
+
+        // Pre-flight: ensure enough disk space before starting
+        if !hasSufficientDiskSpace() {
+            let message = "Not enough storage to start recording. Please free up at least 50 MB and try again."
+            print("⚠️ [RecorderManager] \(message)")
+            recordingError = message
+            return
+        }
+        recordingError = nil
 
         isPreparing = true
 
