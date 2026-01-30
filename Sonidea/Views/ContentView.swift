@@ -3090,6 +3090,11 @@ struct SettingsSheetView: View {
                         }
                     }
                     .listRowBackground(palette.cardBackground)
+
+                    // Prevent Sleep
+                    Toggle("Prevent Sleep", isOn: $appState.appSettings.preventSleepWhileRecording)
+                        .tint(palette.accent)
+                        .listRowBackground(palette.cardBackground)
                 } header: {
                     HStack {
                         Text("Recording")
@@ -3108,6 +3113,9 @@ struct SettingsSheetView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(appState.appSettings.recordingQuality.description)
                         Text(appState.appSettings.recordingMode.description)
+                        if appState.appSettings.preventSleepWhileRecording {
+                            Text("Screen will stay on while recording.")
+                        }
                     }
                     .foregroundColor(palette.textSecondary)
                 }
@@ -3598,8 +3606,59 @@ struct SettingsSheetView: View {
                         Text("Sonidea")
                             .foregroundColor(palette.textPrimary)
                         Spacer()
-                        Text("1.0")
+                        Text("2.0")
                             .foregroundColor(palette.textSecondary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df")!) {
+                        HStack {
+                            Image(systemName: "hand.raised")
+                                .foregroundColor(palette.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Privacy Policy")
+                                    .foregroundColor(palette.textPrimary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://forms.gle/rmEQg3nXDaoHCGj5A")!) {
+                        HStack {
+                            Image(systemName: "ladybug")
+                                .foregroundColor(.red)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Report a Bug")
+                                    .foregroundColor(palette.textPrimary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://forms.gle/4Hf5DMDJBCD9gdir6")!) {
+                        HStack {
+                            Image(systemName: "lightbulb")
+                                .foregroundColor(.yellow)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("App Suggestions")
+                                    .foregroundColor(palette.textPrimary)
+                                Text("Tell us what you'd like to see in our app.")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
                     }
                     .listRowBackground(palette.cardBackground)
                 } header: {
@@ -3726,47 +3785,50 @@ struct SettingsSheetView: View {
             }
             .sheet(isPresented: $showResetStep2) {
                 NavigationStack {
-                    VStack(spacing: 24) {
-                        Spacer()
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            Spacer().frame(height: 40)
 
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 56))
-                            .foregroundColor(.red)
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 56))
+                                .foregroundColor(.red)
 
-                        Text("This Cannot Be Undone")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(palette.textPrimary)
+                            Text("This Cannot Be Undone")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(palette.textPrimary)
 
-                        Text("Type RESET below to confirm you want to erase all app data and return to factory settings.")
-                            .font(.subheadline)
-                            .foregroundColor(palette.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                            Text("Type RESET below to confirm you want to erase all app data and return to factory settings.")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal)
 
-                        TextField("Type RESET", text: $resetConfirmText)
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.characters)
+                            TextField("Type RESET", text: $resetConfirmText)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.characters)
+                                .padding(.horizontal, 40)
+
+                            Button(role: .destructive) {
+                                appState.factoryReset()
+                                showResetStep2 = false
+                                dismiss()
+                            } label: {
+                                Text("Erase Everything")
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(resetConfirmText == "RESET" ? Color.red : Color.gray.opacity(0.3))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            .disabled(resetConfirmText != "RESET")
                             .padding(.horizontal, 40)
 
-                        Button(role: .destructive) {
-                            appState.factoryReset()
-                            showResetStep2 = false
-                            dismiss()
-                        } label: {
-                            Text("Erase Everything")
-                                .fontWeight(.semibold)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(resetConfirmText == "RESET" ? Color.red : Color.gray.opacity(0.3))
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
+                            Spacer().frame(height: 40)
                         }
-                        .disabled(resetConfirmText != "RESET")
-                        .padding(.horizontal, 40)
-
-                        Spacer()
                     }
                     .background(palette.background)
                     .navigationTitle("Confirm Reset")

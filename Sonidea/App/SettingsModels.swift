@@ -371,6 +371,9 @@ struct AppSettings: Codable {
     // Auto icon detection (classify audio type post-save)
     var autoSelectIcon: Bool = true
 
+    // Prevent screen sleep while recording
+    var preventSleepWhileRecording: Bool = true
+
     // Auto-sync watch recordings to iPhone
     var watchSyncEnabled: Bool = false
 

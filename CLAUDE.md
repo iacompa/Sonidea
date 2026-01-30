@@ -26,7 +26,7 @@ Xcode project: `Sonidea.xcodeproj`
 - All models are `Codable` structs
 
 ## Key Features
-- Recording with live waveform, gain control (-6 to +6dB), limiter, pause/resume
+- Recording with live waveform, gain control (-6 to +6dB), limiter, pause/resume, prevent sleep option
 - Multi-track overdub (base track + up to 3 layers)
 - Waveform editing (trim, split) with zoom/pan
 - 4-band parametric EQ per recording
@@ -144,11 +144,23 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 - Widget: `com.iacompa.sonidea.SonideaRecordingWidget`
 
 ## Notes
-- Recording quality options: Standard (AAC 128kbps), High (AAC 256kbps), Lossless (ALAC), WAV (PCM 16-bit)
+- Recording quality options: Standard (AAC 128kbps), High (AAC 256kbps), Lossless (ALAC), WAV (PCM 16-bit) — all free
+- No MP3 support (Apple uses AAC as lossy codec; AAC is higher quality than MP3 at same bitrate)
 - All audio at 44.1kHz (standard) or 48kHz (high/lossless/wav)
 - Watch recordings: AAC mono 44.1kHz/128kbps (.m4a)
+- Prevent sleep while recording: `UIApplication.shared.isIdleTimerDisabled` toggled on/off in `RecorderManager` (setting defaults to on)
+- Transcription copy button: "Copy" in transcription section header copies full transcript to clipboard via `UIPasteboard`
 - Crash recovery saves in-progress recording state to UserDefaults
 - Offline support with retry queues for CloudKit operations
 - iPad uses `sizeClass == .regular` checks for adaptive layout (wider top padding, fullScreenCover for sheets)
 - Watch uses PBXFileSystemSynchronizedRootGroup — Xcode auto-syncs with filesystem
 - Watch app icon matches iOS app icon (Sonidea waveform logo)
+
+## Recent Changes (this session)
+- Removed Dual Mono and Spatial recording modes (were not functionally different from Stereo)
+- Added migration in `RecordingMode.init(from:)` so saved "dualMono"/"spatial" map to `.stereo`
+- Un-gated recording quality — all presets now free for all users
+- Added "Prevent Sleep" toggle in Recording settings (defaults on, uses `isIdleTimerDisabled`)
+- Added "Copy" button in transcription section to copy full transcript to clipboard
+- Watch recordings renamed from "Watch Rec X" to "⌚️ Recording X"
+- Updated `generateTitle()` in `WatchAppState` with backward compat for old "Watch Rec" prefix

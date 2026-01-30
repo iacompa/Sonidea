@@ -2264,6 +2264,14 @@ struct RecordingDetailView: View {
                     .textCase(.uppercase)
                 Spacer()
                 if !currentRecording.transcript.isEmpty {
+                    Button {
+                        UIPasteboard.general.string = currentRecording.transcript
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .font(.caption)
+                    .foregroundColor(palette.accent)
+
                     Button("Clear") {
                         currentRecording.transcript = ""
                         appState.updateTranscript("", for: currentRecording.id)

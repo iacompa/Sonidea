@@ -10,6 +10,7 @@ import AVFoundation
 import CoreLocation
 import Foundation
 import Observation
+import UIKit
 
 // MARK: - Recording State
 
@@ -269,6 +270,11 @@ final class RecorderManager: NSObject {
         guard recordingState == .idle, !isPreparing else { return }
 
         isPreparing = true
+
+        // Prevent screen sleep if enabled
+        if appSettings.preventSleepWhileRecording {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
 
         let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
 
@@ -909,6 +915,8 @@ final class RecorderManager: NSObject {
     /// Reset all recording state
     private func resetState() {
         recordingState = .idle
+        // Re-enable screen sleep
+        UIApplication.shared.isIdleTimerDisabled = false
         isPreparing = false
         currentDuration = 0
         accumulatedDuration = 0

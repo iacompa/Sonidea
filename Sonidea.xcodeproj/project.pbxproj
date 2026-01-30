@@ -19,6 +19,7 @@
 		D68C970252CAFBE3F8C39283 /* WatchPlaybackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18250A291BC22BCCF6FC5315 /* WatchPlaybackView.swift */; };
 		FE6883F27FFD4C68CE886860 /* WatchPlaybackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78798823F1F27756CB63A89B /* WatchPlaybackManager.swift */; };
 		WIDGET00212F22E34F001582DE /* SonideaRecordingWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		WATCH_ASSETS_BF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = WATCH_ASSETS_FR /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,6 +94,7 @@
 		D86A8D499C656F1B31ED2547 /* WatchContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchContentView.swift; sourceTree = "<group>"; };
 		E55118D3841396A5459A9465 /* WatchConnectivityService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConnectivityService.swift; sourceTree = "<group>"; };
 		WIDGET00012F22E34F001582DE /* SonideaRecordingWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SonideaRecordingWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		WATCH_ASSETS_FR /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -255,6 +257,7 @@
 				EE2E331A4C8C5C50DFDA37DA /* Managers */,
 				F25E7A64433B6CB1D1B9C3A2 /* Views */,
 				09A0972F4EE284EEB8F4EDA1 /* Services */,
+				WATCH_ASSETS_FR /* Assets.xcassets */,
 			);
 			path = "SonideaWatch Watch App";
 			sourceTree = "<group>";
@@ -459,6 +462,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				WATCH_ASSETS_BF /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -671,7 +675,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Sonidea/Sonidea.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -710,7 +714,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Sonidea/Sonidea.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -747,7 +751,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 6BZDC8A25X;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -769,7 +773,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 6BZDC8A25X;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -790,7 +794,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 6BZDC8A25X;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 2.0;
@@ -810,7 +814,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 6BZDC8A25X;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 2.0;
@@ -832,12 +836,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sonidea;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sonidea needs microphone access to record voice memos on your Apple Watch.";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.iacompa.sonidea;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -864,12 +869,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sonidea;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sonidea needs microphone access to record voice memos on your Apple Watch.";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.iacompa.sonidea;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -893,7 +899,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SonideaRecordingWidget/Info.plist;
@@ -920,7 +926,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = XW9D82VGDU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SonideaRecordingWidget/Info.plist;
