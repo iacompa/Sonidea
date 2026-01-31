@@ -256,7 +256,7 @@ struct ProWaveformEditor: View {
     }
 
     // Constants
-    private let timeRulerHeight: CGFloat = 36  // Reduced ~20% from 44
+    private let timeRulerHeight: CGFloat = 22  // Apple Voice Memos-style compact ruler
     private let handleWidth: CGFloat = 16
     private let handleHitArea: CGFloat = 44
 
@@ -302,10 +302,13 @@ struct ProWaveformEditor: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {  // Small gap between ruler and waveform
-            // Time ruler at top - labels and ticks are fully visible
-            TimeRulerBar(timeline: timeline, palette: palette)
-                .frame(height: timeRulerHeight)
+        VStack(spacing: 0) {  // No gap - ruler blends naturally into waveform
+            // Apple Voice Memos-style minimal time ruler at top
+            TimelineRulerView_Minimal(
+                timeline: timeline,
+                palette: palette,
+                rulerHeight: timeRulerHeight
+            )
 
             // Main waveform area
             GeometryReader { geometry in
@@ -511,9 +514,9 @@ struct ProWaveformEditor: View {
     @ViewBuilder
     private func handleTooltipOverlay(width: CGFloat) -> some View {
         // Tooltip y position: just above the waveform area
-        // VStack layout: ruler (36) + spacing (4) + waveform starts at 40
-        // We want tooltip ~14pt above waveform, so y = 40 - 14 = 26
-        let tooltipY: CGFloat = timeRulerHeight + 4 - 14
+        // VStack layout: ruler (22) + spacing (0) + waveform starts at 22
+        // We want tooltip ~14pt above waveform, so y = 22 - 14 = 8
+        let tooltipY: CGFloat = timeRulerHeight - 14
 
         ZStack {
             // Left handle tooltip
@@ -780,135 +783,9 @@ struct ProWaveformEditor: View {
     }
 }
 
-// MARK: - Time Ruler Bar
-
-struct TimeRulerBar: View {
-    let timeline: WaveformTimeline
-    let palette: ThemePalette
-
-    // Layout constants (adjusted for 36px total height)
-    private let labelAreaHeight: CGFloat = 18  // Top area for labels
-    private let tickAreaHeight: CGFloat = 18   // Bottom area for ticks
-
-    var body: some View {
-        GeometryReader { geometry in
-            Canvas { context, size in
-                // Use shared tick intervals from timeline (single source of truth)
-                let (majorInterval, minorInterval) = timeline.tickIntervals()
-
-                // Draw minor ticks (shorter, no labels)
-                drawTicks(context: context, size: size, interval: minorInterval, tickHeight: 5, showLabel: false)
-
-                // Draw major ticks with labels
-                drawTicks(context: context, size: size, interval: majorInterval, tickHeight: 10, showLabel: true)
-            }
-        }
-        .background(palette.inputBackground.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))  // Match waveform corners
-    }
-
-    private func drawTicks(context: GraphicsContext, size: CGSize, interval: TimeInterval, tickHeight: CGFloat, showLabel: Bool) {
-        let startTime = timeline.visibleStartTime
-        let endTime = timeline.visibleEndTime
-
-        let firstTick = ceil(startTime / interval) * interval
-
-        // Inset to prevent labels from being clipped at edges
-        let labelInset: CGFloat = 24
-
-        var time = firstTick
-        while time <= endTime {
-            // Use shared timeToX for exact alignment with waveform grid
-            let x = timeline.timeToX(time, width: size.width)
-
-            // Draw tick line from bottom of view
-            let tickPath = Path { path in
-                path.move(to: CGPoint(x: x, y: size.height - tickHeight))
-                path.addLine(to: CGPoint(x: x, y: size.height))
-            }
-            context.stroke(tickPath, with: .color(palette.textTertiary.opacity(0.6)), lineWidth: 1)
-
-            // Draw label in the upper area (well above ticks)
-            if showLabel {
-                let labelText = formatTime(time)
-                let text = Text(labelText)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(palette.textTertiary)
-                // Position label centered in the top label area
-                let labelY = (size.height - tickAreaHeight) / 2
-
-                // Determine anchor based on position to prevent clipping at edges:
-                // - Near left edge: use .leading anchor so label extends rightward
-                // - Near right edge: use .trailing anchor so label extends leftward
-                // - Middle: use .center anchor (default)
-                let anchor: UnitPoint
-                if x < labelInset {
-                    anchor = .leading
-                } else if x > size.width - labelInset {
-                    anchor = .trailing
-                } else {
-                    anchor = .center
-                }
-
-                context.draw(text, at: CGPoint(x: x, y: labelY), anchor: anchor)
-            }
-
-            time += interval
-        }
-    }
-
-    /// Compact tick label formatter — removes redundant leading zeros.
-    /// Rules:
-    ///   time == 0        → "0"
-    ///   time < 1s        → ".300" / ".020" (leading-dot milliseconds)
-    ///   1s ..< 60s       → "1" / "20" / "5.3" (seconds, with fraction when zoomed)
-    ///   60s ..< 3600s    → "1:05" (M:SS)
-    ///   >= 3600s         → "1:02:03" (H:MM:SS)
-    private func formatTime(_ time: TimeInterval) -> String {
-        // Snap near-zero to exactly 0
-        if abs(time) < 0.0005 { return "0" }
-
-        let totalSeconds = Int(time)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
-        let fraction = time.truncatingRemainder(dividingBy: 1)
-
-        // >= 1 hour
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-
-        // >= 1 minute
-        if minutes > 0 {
-            return String(format: "%d:%02d", minutes, seconds)
-        }
-
-        // Sub-second (no whole seconds)
-        if totalSeconds == 0 {
-            if timeline.visibleDuration < 0.2 {
-                return String(format: ".%03d", Int(fraction * 1000))
-            } else if timeline.visibleDuration < 1 {
-                return String(format: ".%02d", Int(fraction * 100))
-            } else {
-                return String(format: ".%d", Int(fraction * 10))
-            }
-        }
-
-        // 1s–59s: show whole seconds, add fraction when zoomed
-        if timeline.visibleDuration < 0.2 {
-            let ms = Int(fraction * 1000)
-            return ms > 0 ? String(format: "%d.%03d", seconds, ms) : "\(seconds)"
-        } else if timeline.visibleDuration < 1 {
-            let cs = Int(fraction * 100)
-            return cs > 0 ? String(format: "%d.%02d", seconds, cs) : "\(seconds)"
-        } else if timeline.visibleDuration < 5 {
-            let tenths = Int(fraction * 10)
-            return tenths > 0 ? String(format: "%d.%d", seconds, tenths) : "\(seconds)"
-        }
-        return "\(seconds)"
-    }
-}
+// MARK: - Time Ruler Bar (DEPRECATED - replaced by TimelineRulerView_Minimal)
+// The old TimeRulerBar has been replaced by TimelineRulerView_Minimal in TimelineRulerView.swift
+// for a sleeker Apple Voice Memos-style appearance.
 
 // MARK: - Waveform Bars View
 

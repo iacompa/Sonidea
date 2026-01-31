@@ -202,40 +202,55 @@ struct DetailsWaveformView: View {
         colorScheme == .dark ? ThemePalette.systemDark : ThemePalette.systemLight
     }
 
+    // Compact ruler height for Details view
+    private let detailsRulerHeight: CGFloat = 20
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let height = geometry.size.height
+            let totalHeight = geometry.size.height
+            // Reserve space for the minimal ruler at the top
+            let waveformHeight = max(0, totalHeight - detailsRulerHeight)
 
             if let timeline = timeline, waveformData != nil {
-                ZStack {
-                    // Use the SAME WaveformBarsView as Edit mode, but simplified for Details:
-                    // - No selection highlight
-                    // - No horizontal grid lines (cleaner look)
-                    WaveformBarsView(
-                        waveformData: waveformData,
+                VStack(spacing: 0) {
+                    // Apple Voice Memos-style minimal time ruler
+                    TimelineRulerView_Minimal(
                         timeline: timeline,
-                        selectionStart: 0,  // No selection in Details mode
-                        selectionEnd: 0,
-                        width: width,
-                        height: height,
                         palette: palette,
-                        colorScheme: colorScheme,
-                        showsSelectionHighlight: false,
-                        showsHorizontalGrid: false  // Cleaner look for Details
+                        rulerHeight: detailsRulerHeight
                     )
 
-                    // Playhead overlay (same style as Edit mode)
-                    DetailsPlayheadView(
-                        progress: progress,
-                        timeline: timeline,
-                        width: width,
-                        height: height,
-                        palette: palette,
-                        isPlaying: isPlaying
-                    )
+                    ZStack {
+                        // Use the SAME WaveformBarsView as Edit mode, but simplified for Details:
+                        // - No selection highlight
+                        // - No horizontal grid lines (cleaner look)
+                        WaveformBarsView(
+                            waveformData: waveformData,
+                            timeline: timeline,
+                            selectionStart: 0,  // No selection in Details mode
+                            selectionEnd: 0,
+                            width: width,
+                            height: waveformHeight,
+                            palette: palette,
+                            colorScheme: colorScheme,
+                            showsSelectionHighlight: false,
+                            showsHorizontalGrid: false  // Cleaner look for Details
+                        )
+
+                        // Playhead overlay (same style as Edit mode)
+                        DetailsPlayheadView(
+                            progress: progress,
+                            timeline: timeline,
+                            width: width,
+                            height: waveformHeight,
+                            palette: palette,
+                            isPlaying: isPlaying
+                        )
+                    }
+                    .frame(height: waveformHeight)
                 }
-                .frame(height: height)
+                .frame(height: totalHeight)
                 // Pinch to zoom (same as Edit mode)
                 .gesture(
                     MagnificationGesture()

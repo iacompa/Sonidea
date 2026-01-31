@@ -129,7 +129,7 @@ struct ZoomableWaveformEditor: View {
     // MARK: - Constants
 
     private var waveformHeight: CGFloat { sizeClass == .regular ? 220 : 160 }
-    private let timeRulerHeight: CGFloat = 24
+    private let timeRulerHeight: CGFloat = 22  // Apple Voice Memos-style compact ruler
     private let handleMinDistance: CGFloat = 10  // Increased from 1 to prevent accidental drags
 
     // Haptic generators
@@ -168,13 +168,13 @@ struct ZoomableWaveformEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Time ruler (shows tick marks and labels)
+            // Apple Voice Memos-style minimal time ruler
             if isEditing {
-                TimeRulerView(
+                TimelineRulerView_Minimal(
                     timelineState: timelineState,
-                    palette: palette
+                    palette: palette,
+                    rulerHeight: timeRulerHeight
                 )
-                .frame(height: timeRulerHeight)
             }
 
             // Zoomable waveform area
@@ -383,119 +383,9 @@ struct ZoomableWaveformEditor: View {
     }
 }
 
-// MARK: - Time Ruler View
-
-struct TimeRulerView: View {
-    let timelineState: TimelineState
-    let palette: ThemePalette
-
-    var body: some View {
-        GeometryReader { geometry in
-            Canvas { context, size in
-                let visibleDuration = timelineState.visibleDuration
-                let startTime = timelineState.visibleStartTime
-
-                // Determine tick interval based on zoom level
-                let (majorInterval, minorInterval) = tickIntervals(for: visibleDuration)
-
-                // Draw minor ticks
-                drawTicks(
-                    context: context,
-                    size: size,
-                    startTime: startTime,
-                    visibleDuration: visibleDuration,
-                    interval: minorInterval,
-                    height: 4,
-                    showLabel: false
-                )
-
-                // Draw major ticks with labels
-                drawTicks(
-                    context: context,
-                    size: size,
-                    startTime: startTime,
-                    visibleDuration: visibleDuration,
-                    interval: majorInterval,
-                    height: 8,
-                    showLabel: true
-                )
-            }
-        }
-    }
-
-    private func tickIntervals(for visibleDuration: TimeInterval) -> (major: TimeInterval, minor: TimeInterval) {
-        switch visibleDuration {
-        case 0..<3:      return (1.0, 0.1)     // 1s major, 0.1s minor
-        case 3..<10:     return (2.0, 0.5)     // 2s major, 0.5s minor
-        case 10..<30:    return (5.0, 1.0)     // 5s major, 1s minor
-        case 30..<60:    return (10.0, 2.0)    // 10s major, 2s minor
-        case 60..<180:   return (30.0, 5.0)    // 30s major, 5s minor
-        case 180..<600:  return (60.0, 10.0)   // 1m major, 10s minor
-        default:         return (120.0, 30.0)  // 2m major, 30s minor
-        }
-    }
-
-    private func drawTicks(
-        context: GraphicsContext,
-        size: CGSize,
-        startTime: TimeInterval,
-        visibleDuration: TimeInterval,
-        interval: TimeInterval,
-        height: CGFloat,
-        showLabel: Bool
-    ) {
-        let endTime = startTime + visibleDuration
-
-        // Find first tick >= startTime
-        let firstTick = ceil(startTime / interval) * interval
-
-        var time = firstTick
-        while time <= endTime {
-            let progress = (time - startTime) / visibleDuration
-            let x = CGFloat(progress) * size.width
-
-            // Draw tick line
-            let tickPath = Path { path in
-                path.move(to: CGPoint(x: x, y: size.height - height))
-                path.addLine(to: CGPoint(x: x, y: size.height))
-            }
-            context.stroke(tickPath, with: .color(palette.textTertiary), lineWidth: 1)
-
-            // Draw label for major ticks
-            if showLabel {
-                let labelText = formatTickTime(time)
-                let text = Text(labelText)
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(palette.textTertiary)
-
-                context.draw(text, at: CGPoint(x: x, y: size.height - height - 8), anchor: .bottom)
-            }
-
-            time += interval
-        }
-    }
-
-    private func formatTickTime(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        let fraction = time.truncatingRemainder(dividingBy: 1)
-
-        if fraction > 0.01 {
-            let tenths = Int(fraction * 10)
-            if minutes > 0 {
-                return String(format: "%d:%02d.%d", minutes, seconds, tenths)
-            } else {
-                return String(format: "%d.%d", seconds, tenths)
-            }
-        } else {
-            if minutes > 0 {
-                return String(format: "%d:%02d", minutes, seconds)
-            } else {
-                return String(format: "0:%02d", seconds)
-            }
-        }
-    }
-}
+// MARK: - Time Ruler View (DEPRECATED - replaced by TimelineRulerView_Minimal)
+// The old TimeRulerView has been replaced by TimelineRulerView_Minimal in TimelineRulerView.swift
+// for a sleeker Apple Voice Memos-style appearance.
 
 // MARK: - Zoomable Waveform Canvas
 
