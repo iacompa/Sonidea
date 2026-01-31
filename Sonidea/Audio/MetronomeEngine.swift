@@ -24,7 +24,11 @@ final class MetronomeEngine {
     var isEnabled: Bool = false
     var bpm: Double = 120 {
         didSet {
-            bpm = max(40, min(240, bpm))
+            let clamped = max(40.0, min(240.0, bpm))
+            if bpm != clamped {
+                bpm = clamped
+                return
+            }
             updateRenderParams()
         }
     }

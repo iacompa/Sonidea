@@ -374,6 +374,10 @@ struct AppSettings: Codable {
     // Prevent screen sleep while recording
     var preventSleepWhileRecording: Bool = true
 
+    // Metronome / click track
+    var metronomeEnabled: Bool = false
+    var metronomeBPM: Double = 120
+
     // Auto-sync watch recordings to iPhone
     var watchSyncEnabled: Bool = false
 

@@ -3231,6 +3231,40 @@ struct SettingsSheetView: View {
                     Toggle("Prevent Sleep", isOn: $appState.appSettings.preventSleepWhileRecording)
                         .tint(palette.accent)
                         .listRowBackground(palette.cardBackground)
+
+                    // Click Track
+                    Toggle("Click Track", isOn: $appState.appSettings.metronomeEnabled)
+                        .tint(palette.accent)
+                        .listRowBackground(palette.cardBackground)
+
+                    if appState.appSettings.metronomeEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("BPM")
+                                    .foregroundStyle(palette.textPrimary)
+                                Spacer()
+                                Text("\(Int(appState.appSettings.metronomeBPM))")
+                                    .foregroundStyle(palette.textSecondary)
+                                    .monospacedDigit()
+                            }
+                            Slider(value: $appState.appSettings.metronomeBPM, in: 40...240, step: 1)
+                                .tint(palette.accent)
+                            Button {
+                                appState.recorder.metronome.tapTempo()
+                                appState.appSettings.metronomeBPM = appState.recorder.metronome.bpm
+                            } label: {
+                                HStack {
+                                    Image(systemName: "hand.tap")
+                                    Text("Tap Tempo")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(palette.accent)
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    }
                 } header: {
                     HStack {
                         Text("Recording")
@@ -3251,6 +3285,9 @@ struct SettingsSheetView: View {
                         Text(appState.appSettings.recordingMode.description)
                         if appState.appSettings.preventSleepWhileRecording {
                             Text("Screen will stay on while recording.")
+                        }
+                        if appState.appSettings.metronomeEnabled {
+                            Text("Click track: \(Int(appState.appSettings.metronomeBPM)) BPM")
                         }
                     }
                     .foregroundColor(palette.textSecondary)

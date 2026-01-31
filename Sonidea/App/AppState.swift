@@ -51,6 +51,8 @@ final class AppState {
             // Apply settings to recorder
             recorder.qualityPreset = appSettings.recordingQuality
             recorder.appSettings = appSettings
+            recorder.metronome.isEnabled = appSettings.metronomeEnabled
+            recorder.metronome.bpm = appSettings.metronomeBPM
         }
     }
 
@@ -122,6 +124,8 @@ final class AppState {
         purgeOldTrashedRecordings()
         recorder.qualityPreset = appSettings.recordingQuality
         recorder.appSettings = appSettings
+        recorder.metronome.isEnabled = appSettings.metronomeEnabled
+        recorder.metronome.bpm = appSettings.metronomeBPM
         loadRecordButtonPosition()
 
         // Flush pending debounced saves when app backgrounds.
