@@ -13,12 +13,14 @@ struct MixerView: View {
 
     @Binding var mixSettings: MixSettings
     let layerCount: Int
+    let bounceTitle: String
     let onBounce: () -> Void
     var isBouncing: Bool = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Channel strips + Master fader
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         // Base channel
@@ -38,6 +40,9 @@ struct MixerView: View {
                                 )
                             }
                         }
+
+                        // Master vertical fader
+                        masterFaderView
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -45,22 +50,8 @@ struct MixerView: View {
 
                 Divider()
 
-                // Master volume + Bounce
+                // Bounce button
                 VStack(spacing: 12) {
-                    HStack {
-                        Text("Master")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(palette.textPrimary)
-                        Slider(value: $mixSettings.masterVolume, in: 0...1.5, step: 0.05)
-                            .tint(palette.accent)
-                        Text(String(format: "%.0f%%", mixSettings.masterVolume * 100))
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundColor(palette.textSecondary)
-                            .frame(width: 40, alignment: .trailing)
-                    }
-
                     Button {
                         onBounce()
                     } label: {
@@ -72,8 +63,15 @@ struct MixerView: View {
                             } else {
                                 Image(systemName: "waveform.badge.plus")
                             }
-                            Text(isBouncing ? "Bouncing..." : "Bounce Mix")
-                                .fontWeight(.semibold)
+                            VStack(spacing: 2) {
+                                Text(isBouncing ? "Bouncing..." : "Bounce Track As:")
+                                    .fontWeight(.semibold)
+                                if !isBouncing {
+                                    Text(bounceTitle)
+                                        .font(.caption)
+                                        .opacity(0.8)
+                                }
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -95,6 +93,62 @@ struct MixerView: View {
                 }
             }
         }
+    }
+
+    private var masterFaderView: some View {
+        VStack(spacing: 8) {
+            Text("Master")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(palette.textPrimary)
+                .lineLimit(1)
+
+            VStack(spacing: 2) {
+                Text(String(format: "%.0f%%", mixSettings.masterVolume * 100))
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textSecondary)
+
+                GeometryReader { geo in
+                    let height = geo.size.height
+                    let normalizedValue = CGFloat(mixSettings.masterVolume / 1.5)
+                    let fillHeight = normalizedValue * height
+
+                    ZStack(alignment: .bottom) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(palette.inputBackground)
+
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(palette.accent)
+                            .frame(height: fillHeight)
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let ratio = 1.0 - (value.location.y / height)
+                                mixSettings.masterVolume = Float(max(0, min(1.5, ratio * 1.5)))
+                            }
+                    )
+                }
+                .frame(width: 28, height: 150)
+            }
+
+            // Match channel strip height (pan area)
+            VStack(spacing: 2) {
+                Text("MST")
+                    .font(.system(size: 9))
+                    .foregroundColor(palette.textTertiary)
+                Color.clear.frame(width: 60, height: 28)
+            }
+
+            // Match channel strip height (M/S area)
+            Color.clear.frame(height: 22)
+        }
+        .frame(width: 80)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .background(palette.cardBackground)
+        .cornerRadius(8)
     }
 }
 
@@ -144,7 +198,7 @@ struct ChannelStripView: View {
                             }
                     )
                 }
-                .frame(width: 24, height: 100)
+                .frame(width: 28, height: 150)
             }
 
             // Pan knob (simplified as slider)
@@ -182,8 +236,20 @@ struct ChannelStripView: View {
                         .cornerRadius(4)
                 }
             }
+
+            // Loop toggle
+            Button {
+                channel.isLooped.toggle()
+            } label: {
+                Image(systemName: channel.isLooped ? "repeat.1" : "repeat")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(channel.isLooped ? .white : palette.textSecondary)
+                    .frame(width: 56, height: 22)
+                    .background(channel.isLooped ? Color.blue : palette.inputBackground)
+                    .cornerRadius(4)
+            }
         }
-        .frame(width: 72)
+        .frame(width: 80)
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
         .background(palette.cardBackground)

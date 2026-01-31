@@ -71,6 +71,11 @@ final class OverdubEngine {
     private var baseAudioFile: AVAudioFile?
     private var layerAudioFiles: [AVAudioFile] = []
     private var layerOffsets: [TimeInterval] = []
+    private var loopFlags: [Bool] = []  // index 0 = base, 1..N = layers
+
+    /// Pre-loaded PCM buffers for looped tracks (used with .loops scheduling)
+    private var baseLoopBuffer: AVAudioPCMBuffer?
+    private var layerLoopBuffers: [AVAudioPCMBuffer?] = []
 
     private var timer: Timer?
     private var recordingStartTime: Date?
@@ -90,6 +95,9 @@ final class OverdubEngine {
     /// Stored input sample rate for recording settings
     private var inputSampleRate: Double = 48000
 
+    /// Frame-accurate recording duration counter (incremented from the write queue)
+    private var writtenFrameCount: Int64 = 0
+
     /// Observer for audio session interruption notifications
     private var interruptionObserver: NSObjectProtocol?
 
@@ -108,11 +116,13 @@ final class OverdubEngine {
         baseDuration: TimeInterval,
         layerFileURLs: [URL] = [],
         layerOffsets: [TimeInterval] = [],
+        loopFlags: [Bool] = [],
         quality: RecordingQualityPreset,
         settings: AppSettings
     ) throws {
         // Reset any existing state (don't deactivate session since we're about to reconfigure it)
         stop(deactivateSession: false)
+        self.loopFlags = loopFlags
 
         // Configure audio session for overdub
         try AudioSessionManager.shared.configureForOverdub(quality: quality, settings: settings)
@@ -182,6 +192,21 @@ final class OverdubEngine {
             print("🎚️ [OverdubEngine] Auto headroom: \(sourceCount) sources, mixer gain = \(headroomGain)")
         }
 
+        // Pre-load PCM buffers for looped tracks (needed for .loops scheduling)
+        baseLoopBuffer = nil
+        layerLoopBuffers = Array(repeating: nil, count: layerAudioFiles.count)
+
+        let baseIsLooped = !loopFlags.isEmpty && loopFlags[0]
+        if baseIsLooped {
+            baseLoopBuffer = loadFullBuffer(from: baseFile)
+        }
+        for (i, layerFile) in layerAudioFiles.enumerated() {
+            let isLooped = (i + 1) < loopFlags.count && loopFlags[i + 1]
+            if isLooped {
+                layerLoopBuffers[i] = loadFullBuffer(from: layerFile)
+            }
+        }
+
         self.audioEngine = engine
         state = .idle
 
@@ -196,6 +221,7 @@ final class OverdubEngine {
         existingLayerOffsets: [TimeInterval],
         previewLayerURL: URL,
         previewLayerOffset: TimeInterval,
+        loopFlags: [Bool] = [],
         quality: RecordingQualityPreset,
         settings: AppSettings
     ) throws {
@@ -203,11 +229,19 @@ final class OverdubEngine {
         allURLs.append(previewLayerURL)
         var allOffsets = existingLayerOffsets
         allOffsets.append(previewLayerOffset)
+        // Preview layer (unsaved) is not looped — append false
+        var allFlags = loopFlags
+        if allFlags.count < allURLs.count + 1 {
+            while allFlags.count < allURLs.count + 1 {
+                allFlags.append(false)
+            }
+        }
         try prepare(
             baseFileURL: baseFileURL,
             baseDuration: baseDuration,
             layerFileURLs: allURLs,
             layerOffsets: allOffsets,
+            loopFlags: allFlags,
             quality: quality,
             settings: settings
         )
@@ -221,6 +255,12 @@ final class OverdubEngine {
             currentPlaybackTime = 0
             play()
         }
+    }
+
+    /// Update offset for a specific layer by index
+    func updateLayerOffset(at layerIndex: Int, offset: TimeInterval) {
+        guard layerIndex >= 0 && layerIndex < layerOffsets.count else { return }
+        layerOffsets[layerIndex] = offset
     }
 
     // MARK: - Playback Control
@@ -248,18 +288,24 @@ final class OverdubEngine {
 
             // Schedule base track from current position
             let sampleRate = baseFile.processingFormat.sampleRate
-            let startFrame = min(AVAudioFramePosition(currentPlaybackTime * sampleRate), baseFile.length)
+            let baseIsLooped = !loopFlags.isEmpty && loopFlags[0]
 
-            // Schedule from startFrame to end
-            let remaining = baseFile.length - startFrame
-            if remaining > 0 {
-                let framesToPlay = AVAudioFrameCount(remaining)
-                basePlayer.scheduleSegment(
-                    baseFile,
-                    startingFrame: startFrame,
-                    frameCount: framesToPlay,
-                    at: nil
-                )
+            if baseIsLooped, let buffer = baseLoopBuffer {
+                // For looped base at a seek position, schedule the full buffer with .loops
+                // AVAudioPlayerNode will start from the beginning of the buffer
+                basePlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+            } else {
+                let startFrame = min(AVAudioFramePosition(currentPlaybackTime * sampleRate), baseFile.length)
+                let remaining = baseFile.length - startFrame
+                if remaining > 0 {
+                    let framesToPlay = AVAudioFrameCount(remaining)
+                    basePlayer.scheduleSegment(
+                        baseFile,
+                        startingFrame: startFrame,
+                        frameCount: framesToPlay,
+                        at: nil
+                    )
+                }
             }
 
             // Schedule layers with their offsets
@@ -267,8 +313,22 @@ final class OverdubEngine {
                 guard index < layerAudioFiles.count else { continue }
                 let layerFile = layerAudioFiles[index]
                 let offset = index < layerOffsets.count ? layerOffsets[index] : 0
+                let isLooped = (index + 1) < loopFlags.count && loopFlags[index + 1]
 
-                if currentPlaybackTime < offset {
+                if isLooped, let buffer = (index < layerLoopBuffers.count ? layerLoopBuffers[index] : nil) {
+                    // Looped layer — schedule with .loops
+                    if currentPlaybackTime < offset {
+                        let delaySec = offset - currentPlaybackTime
+                        let delayHostTime = AVAudioTime.hostTime(forSeconds: delaySec)
+                        let startTime = AVAudioTime(hostTime: mach_absolute_time() + delayHostTime)
+                        layerPlayer.scheduleBuffer(buffer, at: startTime, options: .loops)
+                    } else {
+                        layerPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+                    }
+                    if monitorLayers {
+                        layerPlayer.play()
+                    }
+                } else if currentPlaybackTime < offset {
                     // Playback position is before this layer starts — schedule with a delay
                     let delaySec = offset - currentPlaybackTime
                     let delayHostTime = AVAudioTime.hostTime(forSeconds: delaySec)
@@ -538,6 +598,7 @@ final class OverdubEngine {
         self.recordingFileURL = finalURL
 
         // Install tap on input to record
+        writtenFrameCount = 0
         writeFailureCounter.reset()
         recordingError = nil
         let failureCounter = writeFailureCounter  // capture for closure (non-isolated)
@@ -554,10 +615,15 @@ final class OverdubEngine {
                 }
             }
 
-            writeQueue.async {
+            writeQueue.async { [weak self] in
                 do {
                     try file.write(from: copy)
                     failureCounter.markSuccess()
+                    // Track frames written for accurate duration
+                    let frames = Int64(copy.frameLength)
+                    Task { @MainActor in
+                        self?.writtenFrameCount += frames
+                    }
                 } catch {
                     if failureCounter.increment() {
                         Task { @MainActor in
@@ -610,10 +676,13 @@ final class OverdubEngine {
         print("🎙️ [OverdubEngine] Started recording to: \(finalURL.lastPathComponent)")
     }
 
-    /// Stop recording and return the recorded duration
+    /// Stop recording and return the recorded duration (frame-accurate)
     func stopRecording() -> TimeInterval {
-        let duration = recordingDuration
         stopRecordingInternal()
+        // Compute duration from actual written frames instead of wall-clock
+        let sampleRate = inputSampleRate > 0 ? inputSampleRate : 48000
+        let duration = Double(writtenFrameCount) / sampleRate
+        recordingDuration = duration
         return duration
     }
 
@@ -672,7 +741,14 @@ final class OverdubEngine {
         guard let basePlayer = basePlayerNode,
               let baseFile = baseAudioFile else { return }
 
-        basePlayer.scheduleFile(baseFile, at: nil)
+        let baseIsLooped = !loopFlags.isEmpty && loopFlags[0]
+
+        if baseIsLooped, let buffer = baseLoopBuffer {
+            basePlayer.scheduleBuffer(buffer, at: nil, options: .loops)
+        } else {
+            basePlayer.scheduleFile(baseFile, at: nil)
+        }
+
         basePlayer.volume = baseVolume
         basePlayer.play()
     }
@@ -689,36 +765,62 @@ final class OverdubEngine {
             guard index < layerAudioFiles.count else { continue }
             let layerFile = layerAudioFiles[index]
             let offset = index < layerOffsets.count ? layerOffsets[index] : 0
+            let isLooped = (index + 1) < loopFlags.count && loopFlags[index + 1]
 
-            // Schedule with offset
-            if offset > 0 {
-                // Positive offset: delay the layer start
-                let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
-                let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
-                layerPlayer.scheduleFile(layerFile, at: startTime)
-            } else if offset < 0 {
-                // Negative offset: skip into the layer (start playback from later in the file)
-                let skipSeconds = -offset
-                let sampleRate = layerFile.processingFormat.sampleRate
-                let skipFrames = AVAudioFramePosition(skipSeconds * sampleRate)
-                let remainingFrames = AVAudioFrameCount(layerFile.length - skipFrames)
-                if skipFrames < layerFile.length && remainingFrames > 0 {
-                    layerPlayer.scheduleSegment(
-                        layerFile,
-                        startingFrame: skipFrames,
-                        frameCount: remainingFrames,
-                        at: nil
-                    )
+            if isLooped, let buffer = (index < layerLoopBuffers.count ? layerLoopBuffers[index] : nil) {
+                // Looped layer — schedule buffer with .loops
+                if offset > 0 {
+                    let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
+                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
+                    layerPlayer.scheduleBuffer(buffer, at: startTime, options: .loops)
                 } else {
-                    // Offset exceeds layer length — skip this layer
-                    continue
+                    layerPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
                 }
             } else {
-                layerPlayer.scheduleFile(layerFile, at: nil)
+                // Non-looped layer — schedule with offset (existing behavior)
+                if offset > 0 {
+                    let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
+                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
+                    layerPlayer.scheduleFile(layerFile, at: startTime)
+                } else if offset < 0 {
+                    let skipSeconds = -offset
+                    let sampleRate = layerFile.processingFormat.sampleRate
+                    let skipFrames = AVAudioFramePosition(skipSeconds * sampleRate)
+                    let remainingFrames = AVAudioFrameCount(layerFile.length - skipFrames)
+                    if skipFrames < layerFile.length && remainingFrames > 0 {
+                        layerPlayer.scheduleSegment(
+                            layerFile,
+                            startingFrame: skipFrames,
+                            frameCount: remainingFrames,
+                            at: nil
+                        )
+                    } else {
+                        continue
+                    }
+                } else {
+                    layerPlayer.scheduleFile(layerFile, at: nil)
+                }
             }
 
             layerPlayer.volume = layerVolume
             layerPlayer.play()
+        }
+    }
+
+    /// Load an entire audio file into a PCM buffer for loop scheduling
+    private func loadFullBuffer(from file: AVAudioFile) -> AVAudioPCMBuffer? {
+        let frameCount = AVAudioFrameCount(file.length)
+        guard frameCount > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
+            return nil
+        }
+        file.framePosition = 0
+        do {
+            try file.read(into: buffer, frameCount: frameCount)
+            return buffer
+        } catch {
+            print("⚠️ [OverdubEngine] Failed to load loop buffer: \(error)")
+            return nil
         }
     }
 
@@ -825,6 +927,9 @@ final class OverdubEngine {
         baseAudioFile = nil
         layerAudioFiles = []
         recordingFile = nil
+        baseLoopBuffer = nil
+        layerLoopBuffers = []
+        loopFlags = []
     }
 }
 

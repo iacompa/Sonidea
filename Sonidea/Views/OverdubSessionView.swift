@@ -46,122 +46,64 @@ struct OverdubSessionView: View {
     @State private var offsetSliderValue: Double = 0 // For sync adjustment
     @State private var showOffsetSlider = false
     @State private var isPreviewing = false
+    @State private var bounceErrorMessage: String?
+    @State private var showBounceError = false
+    @State private var showTrackAlignment = false
+    @State private var expandedLayerSync: UUID? // which layer has its sync slider open
+    @State private var layerToDelete: RecordingItem?
+    @State private var showDeleteLayerConfirmation = false
+    @State private var bounceToastMessage: String?
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                palette.background.ignoresSafeArea()
+            overdubNavContent
+        }
+    }
 
-                VStack(spacing: 0) {
-                    // Status bar
-                    statusBar
-
-                    Divider()
-
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            // Base track section
-                            baseTrackSection
-
-                            // Layers section
-                            layersSection
-
-                            // Recording controls
-                            if !isRecording && recordedLayerURL == nil {
-                                recordingControlsSection
-                            }
-
-                            // Active recording section
-                            if isRecording {
-                                activeRecordingSection
-                            }
-
-                            // Post-recording section (save/discard)
-                            if recordedLayerURL != nil && !isRecording {
-                                postRecordingSection
-                            }
-
-                            // Mix controls
-                            mixControlsSection
-                        }
-                        .padding()
-                    }
-                }
-            }
+    private var overdubNavContent: some View {
+        mainContent
             .navigationTitle("Record Over Track")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        handleClose()
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        if appState.supportManager.canUseProFeatures {
-                            showMixer = true
+            .toolbar { overdubToolbar }
+            .sheet(isPresented: $showMixer) { mixerSheet }
+            .sheet(isPresented: $showTrackAlignment) {
+                TrackAlignmentView(
+                    baseRecording: baseRecording,
+                    layers: existingLayers,
+                    unsavedLayerURL: recordedLayerURL,
+                    unsavedLayerOffset: $offsetSliderValue,
+                    mixSettings: overdubGroup?.mixSettings ?? MixSettings(),
+                    onOffsetsChanged: { changes in
+                        for (id, offset) in changes {
+                            appState.updateLayerOffset(recordingId: id, offsetSeconds: offset)
                         }
-                    } label: {
-                        Image(systemName: "slider.vertical.3")
+                        // Reload layers and re-prepare engine
+                        if let groupId = baseRecording.overdubGroupId,
+                           let group = appState.overdubGroup(for: groupId) {
+                            self.overdubGroup = group
+                            self.existingLayers = appState.layerRecordings(for: group)
+                        }
+                        prepareEngine()
                     }
-                    .disabled(isRecording)
-                }
+                )
             }
-            .sheet(isPresented: $showMixer) {
-                if var group = overdubGroup {
-                    MixerView(
-                        mixSettings: Binding(
-                            get: { group.mixSettings },
-                            set: { newValue in
-                                group.mixSettings = newValue
-                                // Apply mix settings in real time
-                                engine.applyMixSettings(newValue)
-                                // Persist
-                                if let gIdx = appState.overdubGroups.firstIndex(where: { $0.id == group.id }) {
-                                    appState.overdubGroups[gIdx].mixSettings = newValue
-                                }
-                            }
-                        ),
-                        layerCount: existingLayers.count,
-                        onBounce: {
-                            bounceMix()
-                        },
-                        isBouncing: isBouncing
-                    )
-                    .presentationDetents([.medium, .large])
-                }
-            }
-            .alert("Headphones Required", isPresented: $showHeadphonesAlert) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they typically provide lower latency and more consistent timing. Bluetooth headphones will work but may introduce noticeable audio delay.")
-            }
-            .alert("Maximum Layers Reached", isPresented: $showMaxLayersAlert) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("You can record up to \(OverdubGroup.maxLayers) layers per overdub group.")
-            }
-            .confirmationDialog("Discard Recording?", isPresented: $showDiscardConfirmation) {
-                Button("Discard", role: .destructive) {
+            .modifier(OverdubAlertsModifier(
+                showHeadphonesAlert: $showHeadphonesAlert,
+                showMaxLayersAlert: $showMaxLayersAlert,
+                showDiscardConfirmation: $showDiscardConfirmation,
+                showErrorAlert: $showErrorAlert,
+                showBounceError: $showBounceError,
+                showRecordingCloseConfirmation: $showRecordingCloseConfirmation,
+                errorMessage: $errorMessage,
+                bounceErrorMessage: $bounceErrorMessage,
+                maxLayers: OverdubGroup.maxLayers,
+                onDiscard: {
                     discardRecording()
                     engine.cleanup()
                     dismiss()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will delete the layer you just recorded.")
-            }
-            .alert("Error", isPresented: $showErrorAlert) {
-                Button("OK", role: .cancel) {
-                    errorMessage = nil
-                }
-            } message: {
-                Text(errorMessage ?? "An unknown error occurred.")
-            }
-            .alert("Stop Recording?", isPresented: $showRecordingCloseConfirmation) {
-                Button("Stop & Close", role: .destructive) {
+                },
+                onStopAndClose: {
                     stopRecording()
-                    // Discard the partial recording
                     if let url = recordedLayerURL {
                         try? FileManager.default.removeItem(at: url)
                     }
@@ -170,9 +112,18 @@ struct OverdubSessionView: View {
                     engine.cleanup()
                     dismiss()
                 }
-                Button("Cancel", role: .cancel) {}
+            ))
+            .alert("Delete Layer?", isPresented: $showDeleteLayerConfirmation) {
+                Button("Delete", role: .destructive) {
+                    if let layer = layerToDelete {
+                        deleteLayer(layer)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    layerToDelete = nil
+                }
             } message: {
-                Text("Recording in progress. Stopping will discard the current layer.")
+                Text("This will permanently remove this layer from the overdub group.")
             }
             .onAppear {
                 setupSession()
@@ -204,6 +155,105 @@ struct OverdubSessionView: View {
                     prepareEngine()
                 }
             }
+    }
+
+    // MARK: - Extracted Body Parts
+
+    private var mainContent: some View {
+        ZStack(alignment: .bottom) {
+            palette.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                statusBar
+                Divider()
+                ScrollView {
+                    VStack(spacing: 24) {
+                        baseTrackSection
+                        layersSection
+                        if !isRecording && recordedLayerURL == nil {
+                            recordingControlsSection
+                        }
+                        if isRecording {
+                            activeRecordingSection
+                        }
+                        if recordedLayerURL != nil && !isRecording {
+                            postRecordingSection
+                        }
+                        mixControlsSection
+                    }
+                    .padding()
+                }
+            }
+
+            // Bounce success toast
+            if let toast = bounceToastMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text(toast)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule()
+                        .fill(Color.black.opacity(0.85))
+                )
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: bounceToastMessage)
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var overdubToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button("Close") {
+                handleClose()
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                if appState.supportManager.canUseProFeatures {
+                    showMixer = true
+                }
+            } label: {
+                Image(systemName: "slider.vertical.3")
+            }
+            .disabled(isRecording)
+        }
+    }
+
+    @ViewBuilder
+    private var mixerSheet: some View {
+        if overdubGroup != nil {
+            MixerView(
+                mixSettings: Binding(
+                    get: {
+                        var settings = overdubGroup?.mixSettings ?? MixSettings()
+                        settings.syncLayerCount(existingLayers.count)
+                        return settings
+                    },
+                    set: { newValue in
+                        overdubGroup?.mixSettings = newValue
+                        engine.applyMixSettings(newValue)
+                        if let groupId = overdubGroup?.id,
+                           let gIdx = appState.overdubGroups.firstIndex(where: { $0.id == groupId }) {
+                            appState.overdubGroups[gIdx].mixSettings = newValue
+                        }
+                    }
+                ),
+                layerCount: existingLayers.count,
+                bounceTitle: "\(baseRecording.title) - Mix",
+                onBounce: {
+                    bounceMix()
+                },
+                isBouncing: isBouncing
+            )
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -285,6 +335,21 @@ struct OverdubSessionView: View {
 
                 Spacer()
 
+                // Loop toggle for base track
+                Button {
+                    toggleLoopForBase()
+                } label: {
+                    Image(systemName: (overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? "repeat.1" : "repeat")
+                        .font(.system(size: 16))
+                        .foregroundColor((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? .white : palette.textTertiary)
+                        .frame(width: 34, height: 34)
+                        .background((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? Color.blue : palette.inputBackground)
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRecording)
+                .accessibilityLabel("Toggle loop for base track")
+
                 // Play/Pause base
                 Button {
                     toggleBasePlayback()
@@ -327,6 +392,28 @@ struct OverdubSessionView: View {
                     layerRow(at: index)
                 }
             }
+
+            // Align Tracks (always visible when layers exist)
+            if !existingLayers.isEmpty {
+                Button {
+                    showTrackAlignment = true
+                } label: {
+                    HStack {
+                        Image(systemName: "timeline.selection")
+                        Text("Align Tracks")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                    }
+                    .foregroundColor(palette.accent)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(palette.surface)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -338,41 +425,122 @@ struct OverdubSessionView: View {
             // Existing layer
             let layer = existingLayers[index]
 
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(palette.accent.opacity(0.2))
-                        .frame(width: 36, height: 36)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(palette.accent.opacity(0.2))
+                            .frame(width: 36, height: 36)
 
-                    Text("\(layerNumber)")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(palette.accent)
-                }
+                        Text("\(layerNumber)")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(palette.accent)
+                    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(layer.title)
-                        .font(.subheadline)
-                        .foregroundColor(palette.textPrimary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(layer.title)
+                            .font(.subheadline)
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
 
-                    Text(formatDuration(layer.duration))
-                        .font(.caption)
-                        .foregroundColor(palette.textSecondary)
-                }
+                        Text(formatDuration(layer.duration))
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                    }
 
-                Spacer()
+                    Spacer()
 
-                // Offset indicator if non-zero
-                if layer.overdubOffsetSeconds != 0 {
+                    // Offset indicator
                     Text(formatOffset(layer.overdubOffsetSeconds))
                         .font(.caption2)
-                        .foregroundColor(palette.textTertiary)
+                        .foregroundColor(layer.overdubOffsetSeconds == 0 ? palette.textTertiary : palette.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(palette.surface))
+                        .background(Capsule().fill(palette.inputBackground))
+
+                    // Loop toggle for layer
+                    Button {
+                        toggleLoopForLayer(at: index)
+                    } label: {
+                        let isLooped = layerIsLooped(at: index)
+                        Image(systemName: isLooped ? "repeat.1" : "repeat")
+                            .font(.system(size: 12))
+                            .foregroundColor(isLooped ? .white : palette.textTertiary)
+                            .frame(width: 28, height: 28)
+                            .background(isLooped ? Color.blue : palette.inputBackground)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+
+                    // Sync adjust toggle
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            expandedLayerSync = expandedLayerSync == layer.id ? nil : layer.id
+                        }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 14))
+                            .foregroundColor(expandedLayerSync == layer.id ? palette.accent : palette.textSecondary)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+
+                    // Delete layer
+                    Button {
+                        layerToDelete = layer
+                        showDeleteLayerConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 13))
+                            .foregroundColor(.red.opacity(0.7))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding()
+
+                // Per-layer sync adjustment (expandable)
+                if expandedLayerSync == layer.id {
+                    VStack(spacing: 6) {
+                        Slider(
+                            value: Binding(
+                                get: { layer.overdubOffsetSeconds },
+                                set: { newVal in
+                                    appState.updateLayerOffset(recordingId: layer.id, offsetSeconds: newVal)
+                                    // Update local copy
+                                    if let idx = existingLayers.firstIndex(where: { $0.id == layer.id }) {
+                                        existingLayers[idx].overdubOffsetSeconds = newVal
+                                    }
+                                    if isPreviewing {
+                                        if let layerIdx = existingLayers.firstIndex(where: { $0.id == layer.id }) {
+                                            engine.updateLayerOffset(at: layerIdx, offset: newVal)
+                                        }
+                                    }
+                                }
+                            ),
+                            in: -1.5...1.5,
+                            step: 0.001
+                        )
+                        .tint(palette.accent)
+
+                        HStack {
+                            Text("-1500ms")
+                                .font(.caption2)
+                            Spacer()
+                            Text(formatOffset(layer.overdubOffsetSeconds))
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundColor(palette.accent)
+                            Spacer()
+                            Text("+1500ms")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(palette.textTertiary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding()
             .background(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(palette.surface)
@@ -527,7 +695,7 @@ struct OverdubSessionView: View {
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(palette.textPrimary)
+                        .fill(palette.recordButton)
                 )
             }
             .buttonStyle(.plain)
@@ -580,7 +748,7 @@ struct OverdubSessionView: View {
 
                 if showOffsetSlider {
                     VStack(spacing: 8) {
-                        Slider(value: $offsetSliderValue, in: -0.5...0.5, step: 0.01)
+                        Slider(value: $offsetSliderValue, in: -1.5...1.5, step: 0.001)
                             .tint(palette.accent)
                             .onChange(of: offsetSliderValue) {
                                 if isPreviewing {
@@ -589,10 +757,10 @@ struct OverdubSessionView: View {
                             }
 
                         HStack {
-                            Text("-500ms")
+                            Text("-1500ms")
                                 .font(.caption2)
                             Spacer()
-                            Text("+500ms")
+                            Text("+1500ms")
                                 .font(.caption2)
                         }
                         .foregroundColor(palette.textTertiary)
@@ -728,6 +896,30 @@ struct OverdubSessionView: View {
 
     // MARK: - Actions
 
+    private func deleteLayer(_ layer: RecordingItem) {
+        // Stop preview if running
+        if isPreviewing { stopPreview() }
+
+        // Close any expanded sync slider for this layer
+        if expandedLayerSync == layer.id { expandedLayerSync = nil }
+
+        // Remove from overdub group and move to trash
+        appState.removeOverdubLayer(layer)
+
+        // Reload layers from appState
+        if let groupId = baseRecording.overdubGroupId,
+           let group = appState.overdubGroup(for: groupId) {
+            self.overdubGroup = group
+            self.existingLayers = appState.layerRecordings(for: group)
+        } else {
+            existingLayers = []
+        }
+
+        // Re-prepare engine with updated layers
+        prepareEngine()
+        layerToDelete = nil
+    }
+
     private func setupSession() {
         // Guard against concurrent recording
         if appState.recorder.isRecording {
@@ -763,6 +955,14 @@ struct OverdubSessionView: View {
         let layerURLs = existingLayers.map { $0.fileURL }
         let layerOffsets = existingLayers.map { $0.overdubOffsetSeconds }
 
+        // Build loop flags from mix settings: [base, layer0, layer1, ...]
+        var settings = overdubGroup?.mixSettings ?? MixSettings()
+        settings.syncLayerCount(existingLayers.count)
+        var flags = [settings.baseChannel.isLooped]
+        for ch in settings.layerChannels {
+            flags.append(ch.isLooped)
+        }
+
         print("🎙️ [OverdubSessionView] Preparing engine with base: \(baseRecording.fileURL.lastPathComponent)")
         print("🎙️ [OverdubSessionView] Base file exists: \(FileManager.default.fileExists(atPath: baseRecording.fileURL.path))")
 
@@ -772,6 +972,7 @@ struct OverdubSessionView: View {
                 baseDuration: baseRecording.duration,
                 layerFileURLs: layerURLs,
                 layerOffsets: layerOffsets,
+                loopFlags: flags,
                 quality: appState.appSettings.recordingQuality,
                 settings: appState.appSettings
             )
@@ -790,6 +991,39 @@ struct OverdubSessionView: View {
             showErrorAlert = true
             print("❌ [OverdubSessionView] Engine preparation failed: \(error)")
         }
+    }
+
+    // MARK: - Loop Toggle Actions
+
+    private func toggleLoopForBase() {
+        guard overdubGroup != nil else { return }
+        overdubGroup?.mixSettings.baseChannel.isLooped.toggle()
+        persistMixSettings()
+        prepareEngine()
+    }
+
+    private func toggleLoopForLayer(at index: Int) {
+        guard overdubGroup != nil else { return }
+        var settings = overdubGroup!.mixSettings
+        settings.syncLayerCount(existingLayers.count)
+        guard index < settings.layerChannels.count else { return }
+        settings.layerChannels[index].isLooped.toggle()
+        overdubGroup?.mixSettings = settings
+        persistMixSettings()
+        prepareEngine()
+    }
+
+    private func layerIsLooped(at index: Int) -> Bool {
+        guard let group = overdubGroup else { return false }
+        guard index < group.mixSettings.layerChannels.count else { return false }
+        return group.mixSettings.layerChannels[index].isLooped
+    }
+
+    private func persistMixSettings() {
+        guard let groupId = overdubGroup?.id,
+              let newSettings = overdubGroup?.mixSettings,
+              let gIdx = appState.overdubGroups.firstIndex(where: { $0.id == groupId }) else { return }
+        appState.overdubGroups[gIdx].mixSettings = newSettings
     }
 
     private func toggleBasePlayback() {
@@ -863,6 +1097,15 @@ struct OverdubSessionView: View {
 
     private func startPreview() {
         guard let layerURL = recordedLayerURL else { return }
+
+        // Build loop flags for preview
+        var settings = overdubGroup?.mixSettings ?? MixSettings()
+        settings.syncLayerCount(existingLayers.count)
+        var flags = [settings.baseChannel.isLooped]
+        for ch in settings.layerChannels {
+            flags.append(ch.isLooped)
+        }
+
         do {
             try engine.prepareForPreview(
                 baseFileURL: baseRecording.fileURL,
@@ -871,6 +1114,7 @@ struct OverdubSessionView: View {
                 existingLayerOffsets: existingLayers.map { $0.overdubOffsetSeconds },
                 previewLayerURL: layerURL,
                 previewLayerOffset: offsetSliderValue,
+                loopFlags: flags,
                 quality: appState.appSettings.recordingQuality,
                 settings: appState.appSettings
             )
@@ -978,18 +1222,18 @@ struct OverdubSessionView: View {
 
         let baseURL = baseRecording.fileURL
         let layerURLs = existingLayers.map { $0.fileURL }
-        // Layer offsets: use overdubIndex-based ordering, offset 0 for simplicity
-        let offsets = existingLayers.map { _ in TimeInterval(0) }
+        let offsets = existingLayers.map { $0.overdubOffsetSeconds }
         var settings = group.mixSettings
         settings.syncLayerCount(existingLayers.count)
 
+        let bounceTitle = "\(baseRecording.title) - Mix"
         let outputDir = FileManager.default.temporaryDirectory.appendingPathComponent("SonideaBounce", isDirectory: true)
         try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        let outputURL = outputDir.appendingPathComponent("\(baseRecording.title) - Mix.wav")
+        let outputURL = outputDir.appendingPathComponent("\(bounceTitle).wav")
 
         Task {
-            let engine = MixdownEngine()
-            let result = await engine.bounce(
+            let mixEngine = MixdownEngine()
+            let result = await mixEngine.bounce(
                 baseFileURL: baseURL,
                 layerFileURLs: layerURLs,
                 layerOffsets: offsets,
@@ -999,14 +1243,27 @@ struct OverdubSessionView: View {
             await MainActor.run {
                 isBouncing = false
                 if result.success {
-                    // Import the bounced file as a new recording
-                    try? appState.importRecording(
-                        from: result.outputURL,
-                        duration: result.duration,
-                        title: "\(baseRecording.title) - Mix",
-                        albumID: baseRecording.albumID ?? Album.draftsID
-                    )
-                    showMixer = false
+                    do {
+                        try appState.importRecording(
+                            from: result.outputURL,
+                            duration: result.duration,
+                            title: bounceTitle,
+                            albumID: baseRecording.albumID ?? Album.draftsID
+                        )
+                        showMixer = false
+                        bounceToastMessage = "Bounced: \(bounceTitle)"
+                        // Auto-dismiss toast after 3 seconds
+                        Task {
+                            try? await Task.sleep(for: .seconds(3))
+                            await MainActor.run { bounceToastMessage = nil }
+                        }
+                    } catch {
+                        bounceErrorMessage = "Import failed: \(error.localizedDescription)"
+                        showBounceError = true
+                    }
+                } else {
+                    bounceErrorMessage = result.error?.localizedDescription ?? "Bounce failed"
+                    showBounceError = true
                 }
             }
         }
@@ -1079,5 +1336,57 @@ struct OverdubSessionView: View {
         } else {
             return "\(ms)ms"
         }
+    }
+}
+
+// MARK: - Alerts Modifier (extracted to reduce body complexity)
+
+private struct OverdubAlertsModifier: ViewModifier {
+    @Binding var showHeadphonesAlert: Bool
+    @Binding var showMaxLayersAlert: Bool
+    @Binding var showDiscardConfirmation: Bool
+    @Binding var showErrorAlert: Bool
+    @Binding var showBounceError: Bool
+    @Binding var showRecordingCloseConfirmation: Bool
+    @Binding var errorMessage: String?
+    @Binding var bounceErrorMessage: String?
+    let maxLayers: Int
+    let onDiscard: () -> Void
+    let onStopAndClose: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Headphones Required", isPresented: $showHeadphonesAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they typically provide lower latency and more consistent timing. Bluetooth headphones will work but may introduce noticeable audio delay.")
+            }
+            .alert("Maximum Layers Reached", isPresented: $showMaxLayersAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("You can record up to \(maxLayers) layers per overdub group.")
+            }
+            .confirmationDialog("Discard Recording?", isPresented: $showDiscardConfirmation) {
+                Button("Discard", role: .destructive) { onDiscard() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will delete the layer you just recorded.")
+            }
+            .alert("Error", isPresented: $showErrorAlert) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "An unknown error occurred.")
+            }
+            .alert("Bounce Error", isPresented: $showBounceError) {
+                Button("OK", role: .cancel) { bounceErrorMessage = nil }
+            } message: {
+                Text(bounceErrorMessage ?? "Bounce failed")
+            }
+            .alert("Stop Recording?", isPresented: $showRecordingCloseConfirmation) {
+                Button("Stop & Close", role: .destructive) { onStopAndClose() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Recording in progress. Stopping will discard the current layer.")
+            }
     }
 }

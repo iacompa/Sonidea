@@ -12,8 +12,27 @@ struct ChannelMixSettings: Codable, Equatable {
     var pan: Float = 0.0      // -1 (L) ... +1 (R)
     var isMuted: Bool = false
     var isSolo: Bool = false
+    var isLooped: Bool = false // When true, track repeats to fill total mix duration
 
     static let `default` = ChannelMixSettings()
+
+    // Custom decoder for backward compatibility — older data lacks isLooped
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        volume = try container.decodeIfPresent(Float.self, forKey: .volume) ?? 1.0
+        pan = try container.decodeIfPresent(Float.self, forKey: .pan) ?? 0.0
+        isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        isSolo = try container.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
+        isLooped = try container.decodeIfPresent(Bool.self, forKey: .isLooped) ?? false
+    }
+
+    init(volume: Float = 1.0, pan: Float = 0.0, isMuted: Bool = false, isSolo: Bool = false, isLooped: Bool = false) {
+        self.volume = volume
+        self.pan = pan
+        self.isMuted = isMuted
+        self.isSolo = isSolo
+        self.isLooped = isLooped
+    }
 }
 
 struct MixSettings: Codable, Equatable {

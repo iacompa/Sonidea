@@ -116,7 +116,7 @@ final class WaveformSampler {
                 let length = Int(buffer.frameLength)
 
                 // Downsample to ~500 samples for storage efficiency
-                let storageSampleCount = min(500, length)
+                let storageSampleCount = min(1000, length)
                 let samplesPerBucket = max(1, length / storageSampleCount)
 
                 var samples: [Float] = []
@@ -182,7 +182,7 @@ final class WaveformSampler {
                 let length = Int(buffer.frameLength)
 
                 // Downsample to ~500 sample pairs for storage efficiency
-                let storageSampleCount = min(500, length)
+                let storageSampleCount = min(1000, length)
                 let samplesPerBucket = max(1, length / storageSampleCount)
 
                 var samples: [WaveformSamplePair] = []

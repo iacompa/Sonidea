@@ -49,7 +49,7 @@ final class MixdownEngine {
         }
     }
 
-    private func performBounce(
+    nonisolated private func performBounce(
         baseFileURL: URL,
         layerFileURLs: [URL],
         layerOffsets: [TimeInterval],
@@ -64,13 +64,35 @@ final class MixdownEngine {
 
             let layerFiles = try layerFileURLs.map { try AVAudioFile(forReading: $0) }
 
-            // Compute total duration (max of base + any offset layer)
-            var maxFrames = baseFile.length
-            for (i, file) in layerFiles.enumerated() {
-                let offset = i < layerOffsets.count ? layerOffsets[i] : 0
-                let endFrame = AVAudioFramePosition(offset * sampleRate) + file.length
-                maxFrames = max(maxFrames, endFrame)
+            // Loop flags from mix settings
+            let baseIsLooped = mixSettings.baseChannel.isLooped
+            let layerLoopFlags: [Bool] = (0..<layerFiles.count).map { i in
+                i < mixSettings.layerChannels.count && mixSettings.layerChannels[i].isLooped
             }
+
+            // Compute total duration — non-looped tracks define the mix length.
+            // Looped tracks repeat to fill that length.
+            var maxNonLoopedFrames: AVAudioFramePosition = 0
+            if !baseIsLooped {
+                maxNonLoopedFrames = max(maxNonLoopedFrames, baseFile.length)
+            }
+            for (i, file) in layerFiles.enumerated() {
+                if !layerLoopFlags[i] {
+                    let offset = i < layerOffsets.count ? layerOffsets[i] : 0
+                    let endFrame = AVAudioFramePosition(offset * sampleRate) + file.length
+                    maxNonLoopedFrames = max(maxNonLoopedFrames, endFrame)
+                }
+            }
+
+            // If ALL tracks are looped, use one full cycle of the longest track
+            if maxNonLoopedFrames == 0 {
+                maxNonLoopedFrames = baseFile.length
+                for file in layerFiles {
+                    maxNonLoopedFrames = max(maxNonLoopedFrames, file.length)
+                }
+            }
+
+            let maxFrames = maxNonLoopedFrames
 
             // Create stereo output format
             guard let outputFormat = AVAudioFormat(
@@ -134,52 +156,89 @@ final class MixdownEngine {
                     outRight[i] = 0
                 }
 
-                // Mix base track
-                if position < baseFile.length {
-                    let baseFrames = min(framesToProcess, AVAudioFrameCount(baseFile.length - position))
-                    baseFile.framePosition = position
-                    baseBuffer.frameLength = baseFrames
-                    try baseFile.read(into: baseBuffer, frameCount: baseFrames)
+                // Mix base track (with loop support)
+                let baseLength = baseFile.length
+                if baseIsLooped || position < baseLength {
+                    let vol = volumes.base
+                    let pan = mixSettings.baseChannel.pan
+                    let panAngle = (pan + 1.0) / 2.0 * (.pi / 2.0)
+                    let leftGain = vol * cos(panAngle)
+                    let rightGain = vol * sin(panAngle)
 
-                    if let baseData = baseBuffer.floatChannelData {
-                        let vol = volumes.base
-                        let pan = mixSettings.baseChannel.pan
-                        let leftGain = vol * (1.0 - max(0, pan))
-                        let rightGain = vol * (1.0 + min(0, pan))
+                    var outOffset = 0
+                    var remaining = Int(framesToProcess)
+                    while remaining > 0 {
+                        let globalPos = position + AVAudioFramePosition(outOffset)
+                        let effectivePos = baseIsLooped ? (globalPos % baseLength) : globalPos
+                        if !baseIsLooped && effectivePos >= baseLength { break }
 
-                        for i in 0..<Int(baseFrames) {
-                            let sample = baseData[0][i]
-                            outLeft[i] += sample * leftGain
-                            outRight[i] += sample * rightGain
+                        let framesUntilEnd = Int(baseLength - effectivePos)
+                        let readable = min(remaining, framesUntilEnd)
+                        guard readable > 0 else { break }
+
+                        baseFile.framePosition = effectivePos
+                        baseBuffer.frameLength = AVAudioFrameCount(readable)
+                        try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
+
+                        if let baseData = baseBuffer.floatChannelData {
+                            for i in 0..<readable {
+                                let sample = baseData[0][i]
+                                outLeft[outOffset + i] += sample * leftGain
+                                outRight[outOffset + i] += sample * rightGain
+                            }
                         }
+                        outOffset += readable
+                        remaining -= readable
                     }
                 }
 
-                // Mix each layer
+                // Mix each layer (with loop support)
                 for (layerIdx, layerFile) in layerFiles.enumerated() {
                     let offset = layerIdx < layerOffsets.count ? layerOffsets[layerIdx] : 0
                     let offsetFrames = AVAudioFramePosition(offset * sampleRate)
-                    let layerStart = position - offsetFrames
+                    let isLooped = layerLoopFlags[layerIdx]
+                    let layerLength = layerFile.length
 
-                    guard layerStart >= 0, layerStart < layerFile.length,
-                          let layerBuf = layerBuffers[layerIdx] else { continue }
+                    guard let layerBuf = layerBuffers[layerIdx] else { continue }
 
-                    let layerFrames = min(framesToProcess, AVAudioFrameCount(layerFile.length - layerStart))
-                    layerFile.framePosition = layerStart
-                    layerBuf.frameLength = layerFrames
-                    try layerFile.read(into: layerBuf, frameCount: layerFrames)
+                    let vol = layerIdx < volumes.layers.count ? volumes.layers[layerIdx] : 1.0
+                    let pan = layerIdx < mixSettings.layerChannels.count ? mixSettings.layerChannels[layerIdx].pan : 0.0
+                    let panAngle = (pan + 1.0) / 2.0 * (.pi / 2.0)
+                    let leftGain = vol * cos(panAngle)
+                    let rightGain = vol * sin(panAngle)
 
-                    if let layerData = layerBuf.floatChannelData {
-                        let vol = layerIdx < volumes.layers.count ? volumes.layers[layerIdx] : 1.0
-                        let pan = layerIdx < mixSettings.layerChannels.count ? mixSettings.layerChannels[layerIdx].pan : 0.0
-                        let leftGain = vol * (1.0 - max(0, pan))
-                        let rightGain = vol * (1.0 + min(0, pan))
-
-                        for i in 0..<Int(layerFrames) {
-                            let sample = layerData[0][i]
-                            outLeft[i] += sample * leftGain
-                            outRight[i] += sample * rightGain
+                    var outOffset = 0
+                    var remaining = Int(framesToProcess)
+                    while remaining > 0 {
+                        let globalPos = position + AVAudioFramePosition(outOffset)
+                        let layerPos = globalPos - offsetFrames
+                        guard layerPos >= 0 else {
+                            // Haven't reached this layer's start yet — skip one frame
+                            outOffset += 1
+                            remaining -= 1
+                            continue
                         }
+
+                        let effectivePos = isLooped ? (layerPos % layerLength) : layerPos
+                        if !isLooped && effectivePos >= layerLength { break }
+
+                        let framesUntilEnd = Int(layerLength - effectivePos)
+                        let readable = min(remaining, framesUntilEnd)
+                        guard readable > 0 else { break }
+
+                        layerFile.framePosition = effectivePos
+                        layerBuf.frameLength = AVAudioFrameCount(readable)
+                        try layerFile.read(into: layerBuf, frameCount: AVAudioFrameCount(readable))
+
+                        if let layerData = layerBuf.floatChannelData {
+                            for i in 0..<readable {
+                                let sample = layerData[0][i]
+                                outLeft[outOffset + i] += sample * leftGain
+                                outRight[outOffset + i] += sample * rightGain
+                            }
+                        }
+                        outOffset += readable
+                        remaining -= readable
                     }
                 }
 
