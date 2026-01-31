@@ -5,6 +5,7 @@
 //  Created by Claude on 1/25/26.
 //
 
+import Accelerate
 import AVFoundation
 import Foundation
 import Observation
@@ -82,6 +83,9 @@ final class OverdubEngine {
     private var playbackStartHostTime: UInt64 = 0
     private var playbackTimeOffset: TimeInterval = 0
     private(set) var failedLayerIndices: [Int] = []
+
+    /// User-visible warning when some layers fail to load
+    private(set) var layerWarning: String?
 
     /// Thread-safe write failure counter (accessed from audio tap thread)
     private let writeFailureCounter = WriteFailureCounter()
@@ -182,6 +186,15 @@ final class OverdubEngine {
                 print("⚠️ [OverdubEngine] Failed to load layer \(index): \(error)")
                 failedLayerIndices.append(index + 1)
             }
+        }
+
+        // Surface failed layers as a warning
+        if !failedLayerIndices.isEmpty {
+            let layerNames = failedLayerIndices.map { "Layer \($0)" }.joined(separator: ", ")
+            layerWarning = "\(layerNames) could not be loaded and won't play during monitoring."
+            print("⚠️ [OverdubEngine] Failed to load: \(layerNames)")
+        } else {
+            layerWarning = nil
         }
 
         // Auto-reduce mixer gain to prevent clipping with multiple sources
@@ -898,12 +911,8 @@ final class OverdubEngine {
         let frameLength = Int(buffer.frameLength)
         guard frameLength > 0 else { return }
 
-        var sum: Float = 0
-        for i in 0..<frameLength {
-            let sample = channelData[0][i]
-            sum += sample * sample
-        }
-        let rms = sqrt(sum / Float(frameLength))
+        var rms: Float = 0
+        vDSP_rmsqv(channelData[0], 1, &rms, vDSP_Length(frameLength))
 
         // Convert to normalized level (0...1)
         let dB = 20 * log10(max(rms, 0.000001))

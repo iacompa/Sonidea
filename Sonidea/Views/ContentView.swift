@@ -172,8 +172,17 @@ struct ContentView: View {
                 showRecoveryAlert = true
             }
             // Wire up Live Activity stop callback
-            appState.recorder.onStopAndSaveRequested = { [self] in
-                saveRecording()
+            // Capture appState (a reference type) instead of self (a struct value)
+            // to avoid stale closure over a copy of ContentView
+            let state = appState
+            appState.recorder.onStopAndSaveRequested = {
+                guard let rawData = state.recorder.stopRecording() else {
+                    return
+                }
+                let result = state.addRecording(from: rawData)
+                if case .success = result {
+                    state.onRecordingSaved()
+                }
             }
             // Check if we should show the move hint
             checkAndShowMoveHint()
@@ -1235,36 +1244,44 @@ struct LevelMeterBar: View {
 
     @Environment(\.themePalette) private var palette
 
-    // dB scale marks placed evenly across the bar at 25%, 50%, 75%, 100%
+    // dB scale marks at perceptually balanced positions
     private let scaleMarks: [(db: String, normalized: CGFloat)] = [
-        ("-6", 0.25),
-        ("-3", 0.50),
-        ("0",  0.75),
-        ("+3", 1.0),
+        ("-24", 0.20),
+        ("-12", 0.50),
+        ("-3",  0.75),
+        ("0",   0.90),
     ]
 
     private let clipThreshold: Float = 0.97  // ~-1.5 dB input level
 
     @State private var displayLevel: CGFloat = 0
     @State private var isClipping = false
-    @State private var clipTimer: Timer?
+    @State private var clipTask: Task<Void, Never>?
 
     /// Convert normalized level (0-1, representing -50 to 0 dB) to display position.
-    /// Piecewise mapping so dB marks are evenly spaced:
-    ///   below -6 dB → 0% to 25%  (compressed)
-    ///   -6 to -3 dB → 25% to 50%
-    ///   -3 to  0 dB → 50% to 75%
-    ///    0 to +3 dB → 75% to 100% (clipping zone)
+    /// Perceptually balanced piecewise mapping:
+    ///   -50 to -24 dB → 0% to 20%  (noise floor)
+    ///   -24 to -12 dB → 20% to 50% (normal speech)
+    ///   -12 to  -3 dB → 50% to 75% (loud speech/instruments)
+    ///    -3 to   0 dB → 75% to 90% (near clip)
+    ///     0 to  +3 dB → 90% to 100% (clipping)
     private func levelToPosition(_ level: Float) -> CGFloat {
-        let dB = level * 50 - 50
-        if dB <= -6 {
-            return CGFloat(max(0, (dB + 50) / 44.0 * 0.25))
+        let dB = level * 50 - 50  // normalized 0-1 to -50..0 dB range
+        if dB <= -24 {
+            // -50 to -24 dB → 0% to 20% (noise floor, 26 dB range)
+            return CGFloat(max(0, (dB + 50) / 26.0 * 0.20))
+        } else if dB <= -12 {
+            // -24 to -12 dB → 20% to 50% (normal speech, 12 dB range)
+            return CGFloat(0.20 + (dB + 24) / 12.0 * 0.30)
         } else if dB <= -3 {
-            return CGFloat(0.25 + (dB + 6) / 3.0 * 0.25)
+            // -12 to -3 dB → 50% to 75% (loud speech/instruments, 9 dB range)
+            return CGFloat(0.50 + (dB + 12) / 9.0 * 0.25)
         } else if dB <= 0 {
-            return CGFloat(0.50 + (dB + 3) / 3.0 * 0.25)
+            // -3 to 0 dB → 75% to 90% (near clip, 3 dB range)
+            return CGFloat(0.75 + (dB + 3) / 3.0 * 0.15)
         } else {
-            return CGFloat(min(1.0, 0.75 + dB / 3.0 * 0.25))
+            // 0 to +3 dB → 90% to 100% (clipping)
+            return CGFloat(min(1.0, 0.90 + dB / 3.0 * 0.10))
         }
     }
 
@@ -1285,10 +1302,10 @@ struct LevelMeterBar: View {
                             LinearGradient(
                                 stops: [
                                     .init(color: .green, location: 0),
-                                    .init(color: .green, location: 0.40),
-                                    .init(color: .yellow, location: 0.55),
-                                    .init(color: .orange, location: 0.70),
-                                    .init(color: .red, location: 0.85),
+                                    .init(color: .green, location: 0.50),
+                                    .init(color: .yellow, location: 0.60),
+                                    .init(color: .orange, location: 0.75),
+                                    .init(color: .red, location: 1.0),
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
@@ -1341,9 +1358,11 @@ struct LevelMeterBar: View {
             // Hold clip indicator for 500ms after clipping
             if newLevel >= clipThreshold && !isPaused {
                 isClipping = true
-                clipTimer?.invalidate()
-                clipTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                    Task { @MainActor in isClipping = false }
+                clipTask?.cancel()
+                clipTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    isClipping = false
                 }
             }
         }
@@ -1900,7 +1919,7 @@ struct SearchCalendarView: View {
 
     private var daysOfWeekHeader: some View {
         HStack(spacing: 0) {
-            ForEach(daysOfWeek, id: \.self) { day in
+            ForEach(Array(daysOfWeek.enumerated()), id: \.offset) { _, day in
                 Text(day)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(palette.textSecondary)

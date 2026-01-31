@@ -53,6 +53,7 @@ struct OverdubSessionView: View {
     @State private var layerToDelete: RecordingItem?
     @State private var showDeleteLayerConfirmation = false
     @State private var bounceToastMessage: String?
+    @State private var showBounceConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -124,6 +125,14 @@ struct OverdubSessionView: View {
                 }
             } message: {
                 Text("This will permanently remove this layer from the overdub group.")
+            }
+            .alert("Overwrite Existing Mix?", isPresented: $showBounceConfirmation) {
+                Button("Overwrite", role: .destructive) {
+                    bounceMix()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("A bounced mix already exists for this recording. This will replace it.")
             }
             .onAppear {
                 setupSession()
@@ -217,7 +226,7 @@ struct OverdubSessionView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
-                if appState.supportManager.canUseProFeatures {
+                if appState.supportManager.canUseProFeatures || ProFeatureContext.mixer.isFree || ProFeatureContext.recordOverTrack.isFree {
                     showMixer = true
                 }
             } label: {
@@ -233,9 +242,7 @@ struct OverdubSessionView: View {
             MixerView(
                 mixSettings: Binding(
                     get: {
-                        var settings = overdubGroup?.mixSettings ?? MixSettings()
-                        settings.syncLayerCount(existingLayers.count)
-                        return settings
+                        overdubGroup?.mixSettings ?? MixSettings()
                     },
                     set: { newValue in
                         overdubGroup?.mixSettings = newValue
@@ -249,11 +256,14 @@ struct OverdubSessionView: View {
                 layerCount: existingLayers.count,
                 bounceTitle: "\(baseRecording.title) - Mix",
                 onBounce: {
-                    bounceMix()
+                    requestBounce()
                 },
                 isBouncing: isBouncing
             )
             .presentationDetents([.medium, .large])
+            .onAppear {
+                overdubGroup?.mixSettings.syncLayerCount(existingLayers.count)
+            }
         }
     }
 
@@ -310,59 +320,74 @@ struct OverdubSessionView: View {
                 .fontWeight(.semibold)
                 .foregroundColor(palette.textSecondary)
 
-            HStack(spacing: 16) {
-                // Icon
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(palette.surface)
-                        .frame(width: 50, height: 50)
+            VStack(spacing: 0) {
+                HStack(spacing: 16) {
+                    // Icon
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(palette.surface)
+                            .frame(width: 50, height: 50)
 
-                    Image(systemName: "waveform")
-                        .font(.system(size: 20))
-                        .foregroundColor(palette.accent)
+                        Image(systemName: "waveform")
+                            .font(.system(size: 20))
+                            .foregroundColor(palette.accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(baseRecording.title)
+                            .font(.headline)
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+
+                        Text(formatDuration(baseRecording.duration))
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                    }
+
+                    Spacer()
+
+                    // Loop toggle for base track
+                    Button {
+                        toggleLoopForBase()
+                    } label: {
+                        Image(systemName: (overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? "repeat.1" : "repeat")
+                            .font(.system(size: 16))
+                            .foregroundColor((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? .white : palette.textTertiary)
+                            .frame(width: 34, height: 34)
+                            .background((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? Color.blue : palette.inputBackground)
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isRecording)
+                    .accessibilityLabel("Toggle loop for base track")
+
+                    // Play/Pause base
+                    Button {
+                        toggleBasePlayback()
+                    } label: {
+                        Image(systemName: engine.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 36))
+                            .foregroundColor(palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isRecording)
+                    .accessibilityLabel(engine.state == .playing ? "Pause base track" : "Play base track")
                 }
+                .padding()
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(baseRecording.title)
-                        .font(.headline)
-                        .foregroundColor(palette.textPrimary)
-                        .lineLimit(1)
-
-                    Text(formatDuration(baseRecording.duration))
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
+                // Playback position bar
+                if engine.state == .playing || engine.state == .recording {
+                    TrackPlaybackIndicator(
+                        currentTime: engine.currentPlaybackTime,
+                        trackDuration: baseRecording.duration,
+                        trackOffset: 0,
+                        isLooped: overdubGroup?.mixSettings.baseChannel.isLooped ?? false,
+                        tintColor: palette.accent
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
                 }
-
-                Spacer()
-
-                // Loop toggle for base track
-                Button {
-                    toggleLoopForBase()
-                } label: {
-                    Image(systemName: (overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? "repeat.1" : "repeat")
-                        .font(.system(size: 16))
-                        .foregroundColor((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? .white : palette.textTertiary)
-                        .frame(width: 34, height: 34)
-                        .background((overdubGroup?.mixSettings.baseChannel.isLooped ?? false) ? Color.blue : palette.inputBackground)
-                        .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                .disabled(isRecording)
-                .accessibilityLabel("Toggle loop for base track")
-
-                // Play/Pause base
-                Button {
-                    toggleBasePlayback()
-                } label: {
-                    Image(systemName: engine.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 36))
-                        .foregroundColor(palette.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(isRecording)
-                .accessibilityLabel(engine.state == .playing ? "Pause base track" : "Play base track")
             }
-            .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(palette.surface)
@@ -498,6 +523,19 @@ struct OverdubSessionView: View {
                     .buttonStyle(.plain)
                 }
                 .padding()
+
+                // Playback position bar for layer
+                if engine.state == .playing || engine.state == .recording {
+                    TrackPlaybackIndicator(
+                        currentTime: engine.currentPlaybackTime,
+                        trackDuration: layer.duration,
+                        trackOffset: layer.overdubOffsetSeconds,
+                        isLooped: layerIsLooped(at: index),
+                        tintColor: palette.accent
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                }
 
                 // Per-layer sync adjustment (expandable)
                 if expandedLayerSync == layer.id {
@@ -661,8 +699,7 @@ struct OverdubSessionView: View {
 
                 Spacer()
 
-                Text(formatDuration(engine.recordingDuration))
-                    .font(.system(size: 24, weight: .medium, design: .monospaced))
+                RecordingTimerDisplay(duration: engine.recordingDuration)
                     .foregroundColor(palette.liveRecordingAccent)
             }
             .padding()
@@ -897,6 +934,7 @@ struct OverdubSessionView: View {
     // MARK: - Actions
 
     private func deleteLayer(_ layer: RecordingItem) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         // Stop preview if running
         if isPreviewing { stopPreview() }
 
@@ -996,6 +1034,7 @@ struct OverdubSessionView: View {
     // MARK: - Loop Toggle Actions
 
     private func toggleLoopForBase() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         guard overdubGroup != nil else { return }
         overdubGroup?.mixSettings.baseChannel.isLooped.toggle()
         persistMixSettings()
@@ -1003,6 +1042,7 @@ struct OverdubSessionView: View {
     }
 
     private func toggleLoopForLayer(at index: Int) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         guard overdubGroup != nil else { return }
         var settings = overdubGroup!.mixSettings
         settings.syncLayerCount(existingLayers.count)
@@ -1035,6 +1075,7 @@ struct OverdubSessionView: View {
     }
 
     private func startRecording() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         guard !isStartingRecording && !isRecording else { return }
 
         // Check max layers
@@ -1077,6 +1118,7 @@ struct OverdubSessionView: View {
     }
 
     private func stopRecording() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         // Set isRecording = false BEFORE engine state changes,
         // so the onChange(of: engine.state) handler knows this was a manual stop.
         isRecording = false
@@ -1216,6 +1258,16 @@ struct OverdubSessionView: View {
         showOffsetSlider = false
     }
 
+    private func requestBounce() {
+        let bounceTitle = "\(baseRecording.title) - Mix"
+        let exists = appState.recordings.contains { $0.title == bounceTitle }
+        if exists {
+            showBounceConfirmation = true
+        } else {
+            bounceMix()
+        }
+    }
+
     private func bounceMix() {
         guard let group = overdubGroup else { return }
         isBouncing = true
@@ -1251,6 +1303,7 @@ struct OverdubSessionView: View {
                             albumID: baseRecording.albumID ?? Album.draftsID
                         )
                         showMixer = false
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
                         bounceToastMessage = "Bounced: \(bounceTitle)"
                         // Auto-dismiss toast after 3 seconds
                         Task {
@@ -1339,6 +1392,71 @@ struct OverdubSessionView: View {
     }
 }
 
+// MARK: - Track Playback Position Indicator
+
+/// Shows a thin progress bar with a playhead dot indicating current playback position within a track.
+/// For looped tracks, the position wraps around (currentTime % trackDuration).
+private struct TrackPlaybackIndicator: View {
+    let currentTime: TimeInterval
+    let trackDuration: TimeInterval
+    let trackOffset: TimeInterval
+    let isLooped: Bool
+    let tintColor: Color
+
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        GeometryReader { geo in
+            let progress = clampedProgress
+            let dotX = progress * geo.size.width
+
+            ZStack(alignment: .leading) {
+                // Track bar background
+                Capsule()
+                    .fill(palette.inputBackground)
+                    .frame(height: 3)
+
+                // Filled portion
+                Capsule()
+                    .fill(tintColor.opacity(0.5))
+                    .frame(width: max(0, dotX), height: 3)
+
+                // Playhead dot
+                Circle()
+                    .fill(tintColor)
+                    .frame(width: 8, height: 8)
+                    .offset(x: dotX - 4)
+
+                // Loop icon at the end for looped tracks
+                if isLooped {
+                    Image(systemName: "repeat")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(tintColor.opacity(0.6))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+        }
+        .frame(height: 8)
+    }
+
+    private var clampedProgress: CGFloat {
+        guard trackDuration > 0 else { return 0 }
+
+        // Effective time within this track (accounting for offset)
+        let effectiveTime = currentTime - trackOffset
+
+        guard effectiveTime >= 0 else { return 0 }
+
+        if isLooped {
+            // Wrap around for looped tracks
+            let posInLoop = effectiveTime.truncatingRemainder(dividingBy: trackDuration)
+            return CGFloat(posInLoop / trackDuration)
+        } else {
+            return CGFloat(min(effectiveTime / trackDuration, 1.0))
+        }
+    }
+}
+
 // MARK: - Alerts Modifier (extracted to reduce body complexity)
 
 private struct OverdubAlertsModifier: ViewModifier {
@@ -1388,5 +1506,27 @@ private struct OverdubAlertsModifier: ViewModifier {
             } message: {
                 Text("Recording in progress. Stopping will discard the current layer.")
             }
+    }
+}
+
+// MARK: - Recording Timer Display (Isolated for high-frequency updates)
+
+/// Isolated subview for the recording timer so that high-frequency duration updates
+/// (~20Hz during recording) only recompute this minimal view, not the entire OverdubSessionView body.
+private struct RecordingTimerDisplay: View {
+    let duration: TimeInterval
+
+    var body: some View {
+        Text(formatted)
+            .font(.system(size: 24, weight: .medium, design: .monospaced))
+    }
+
+    private var formatted: String {
+        let clamped = max(0, duration)
+        let totalSeconds = Int(clamped)
+        let mins = totalSeconds / 60
+        let secs = totalSeconds % 60
+        let tenths = Int((clamped.truncatingRemainder(dividingBy: 1)) * 10)
+        return String(format: "%d:%02d.%d", mins, secs, tenths)
     }
 }

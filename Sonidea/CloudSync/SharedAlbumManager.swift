@@ -602,7 +602,8 @@ final class SharedAlbumManager {
                 }
             }
             do {
-                try await privateDatabase.save(share)
+                let (shareDb, _) = try await databaseAndZone(for: album)
+                try await shareDb.save(share)
                 logger.info("Updated CKShare participant permission")
             } catch {
                 logger.error("Failed to update CKShare permission: \(error.localizedDescription)")

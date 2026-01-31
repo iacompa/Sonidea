@@ -22,11 +22,16 @@ final class MetronomeEngine {
     // MARK: - Settings
 
     var isEnabled: Bool = false
-    var bpm: Double = 120 { didSet { bpm = max(40, min(240, bpm)) } }
-    var beatsPerBar: Int = 4
+    var bpm: Double = 120 {
+        didSet {
+            bpm = max(40, min(240, bpm))
+            updateRenderParams()
+        }
+    }
+    var beatsPerBar: Int = 4 { didSet { updateRenderParams() } }
     var beatUnit: Int = 4  // 4=quarter, 8=eighth
     var countInBars: Int = 0  // 0=no count-in, 1, or 2
-    var volume: Float = 0.7
+    var volume: Float = 0.7 { didSet { updateRenderParams() } }
 
     // MARK: - Runtime State
 
@@ -47,6 +52,31 @@ final class MetronomeEngine {
     private let downbeatDuration: Float = 0.015  // 15ms
     private let upbeatDuration: Float = 0.010    // 10ms
 
+    // MARK: - Thread-Safe Render Parameters
+
+    /// Snapshot of parameters read by the audio render callback.
+    private struct MetronomeParams {
+        var bpm: Double
+        var volume: Float
+        var clickActive: Bool
+        var beatsPerBar: Int
+        var sampleRate: Double
+    }
+
+    private let paramsLock = NSLock()
+    private var renderParams = MetronomeParams(bpm: 120, volume: 0.7, clickActive: false, beatsPerBar: 4, sampleRate: 44100)
+
+    /// Copy current MainActor properties into the lock-protected renderParams.
+    private func updateRenderParams() {
+        paramsLock.lock()
+        renderParams.bpm = bpm
+        renderParams.volume = volume
+        renderParams.clickActive = clickActive
+        renderParams.beatsPerBar = beatsPerBar
+        renderParams.sampleRate = sampleRate
+        paramsLock.unlock()
+    }
+
     // MARK: - Source Node Factory
 
     /// Creates an AVAudioSourceNode for the click track.
@@ -54,19 +84,33 @@ final class MetronomeEngine {
     func createSourceNode(sampleRate: Double) -> AVAudioSourceNode {
         self.sampleRate = sampleRate
         self.sampleIndex = 0
+        updateRenderParams()
+
+        let paramsLock = self.paramsLock
+        let downbeatFreq = self.downbeatFrequency
+        let upbeatFreq = self.upbeatFrequency
+        let downbeatDur = self.downbeatDuration
+        let upbeatDur = self.upbeatDuration
+
+        // sampleIndex is only mutated inside the render callback (single-writer)
+        var renderSampleIndex: UInt64 = 0
 
         let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
-            guard let self else { return noErr }
-
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let frames = Int(frameCount)
-            let sr = self.sampleRate
-            let currentBPM = self.bpm
-            let vol = self.volume
-            let clickActive = self.clickActive
-            let beatsPerBar = self.beatsPerBar
 
-            guard clickActive, sr > 0, currentBPM > 0 else {
+            // Read params under lock
+            paramsLock.lock()
+            let params = self?.renderParams ?? MetronomeParams(bpm: 120, volume: 0.7, clickActive: false, beatsPerBar: 4, sampleRate: 44100)
+            paramsLock.unlock()
+
+            let sr = params.sampleRate
+            let currentBPM = params.bpm
+            let vol = params.volume
+            let active = params.clickActive
+            let beatsPerBar = params.beatsPerBar
+
+            guard active, sr > 0, currentBPM > 0 else {
                 // Output silence
                 for buffer in ablPointer {
                     guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
@@ -80,12 +124,12 @@ final class MetronomeEngine {
             for buffer in ablPointer {
                 guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
                 for i in 0..<frames {
-                    let sampleInBeat = Double(self.sampleIndex + UInt64(i)).truncatingRemainder(dividingBy: samplesPerBeat)
-                    let beatIndex = Int(Double(self.sampleIndex + UInt64(i)) / samplesPerBeat) % beatsPerBar
+                    let sampleInBeat = Double(renderSampleIndex + UInt64(i)).truncatingRemainder(dividingBy: samplesPerBeat)
+                    let beatIndex = Int(Double(renderSampleIndex + UInt64(i)) / samplesPerBeat) % beatsPerBar
 
                     let isDownbeat = beatIndex == 0
-                    let freq: Float = isDownbeat ? self.downbeatFrequency : self.upbeatFrequency
-                    let dur: Float = isDownbeat ? self.downbeatDuration : self.upbeatDuration
+                    let freq: Float = isDownbeat ? downbeatFreq : upbeatFreq
+                    let dur: Float = isDownbeat ? downbeatDur : upbeatDur
                     let durSamples = Double(dur) * sr
 
                     if sampleInBeat < durSamples {
@@ -100,7 +144,7 @@ final class MetronomeEngine {
                 }
             }
 
-            self.sampleIndex += UInt64(frames)
+            renderSampleIndex += UInt64(frames)
             return noErr
         }
 
@@ -114,6 +158,7 @@ final class MetronomeEngine {
         sampleIndex = 0
         clickActive = true
         isPlaying = true
+        updateRenderParams()
     }
 
     func stop() {
@@ -121,6 +166,7 @@ final class MetronomeEngine {
         isPlaying = false
         isCountingIn = false
         sampleIndex = 0
+        updateRenderParams()
     }
 
     /// Count in for N bars, then call completion when count-in finishes.

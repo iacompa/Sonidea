@@ -191,8 +191,14 @@ final class PlaybackEngine {
         // Update current time first to capture accurate position
         updateCurrentTime()
 
-        // Save current position to seekFrame so play() resumes from here
-        seekFrame = AVAudioFramePosition(currentTime * audioSampleRate)
+        // Compute seekFrame directly from the player node's sample time to avoid
+        // float rounding errors when round-tripping through currentTime * sampleRate
+        if let nodeTime = playerNode?.lastRenderTime,
+           let playerTime = playerNode?.playerTime(forNodeTime: nodeTime) {
+            seekFrame = seekFrame + playerTime.sampleTime
+        } else {
+            seekFrame = AVAudioFramePosition(currentTime * audioSampleRate)
+        }
 
         playerNode?.pause()
         isPlaying = false

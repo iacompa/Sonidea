@@ -132,6 +132,37 @@ struct RecordingDetailView: View {
     @State private var isExporting = false
     @State private var showExportFormatPicker = false
     @State private var showAudioEditTools = false
+    @State private var showToolsPanel = false
+    @State private var selectedEditTool: EditToolType = .fade
+
+    // Tool settings state (persists across panel open/close while editing)
+    @State private var appliedFadeIn: TimeInterval = 0
+    @State private var appliedFadeOut: TimeInterval = 0
+    @State private var appliedFadeCurve: FadeCurve = .sCurve
+    @State private var hasFadeApplied = false
+
+    @State private var appliedPeakTarget: Float = -0.3
+    @State private var hasPeakApplied = false
+
+    @State private var appliedGateThreshold: Float = -40
+    @State private var hasGateApplied = false
+
+    @State private var appliedCompressGain: Float = 0
+    @State private var appliedCompressPeakReduction: Float = 0
+    @State private var hasCompressApplied = false
+
+    @State private var appliedReverbRoomSize: Float = 1.0
+    @State private var appliedReverbPreDelay: Float = 20
+    @State private var appliedReverbDecay: Float = 2.0
+    @State private var appliedReverbDamping: Float = 0.5
+    @State private var appliedReverbWetDry: Float = 0.3
+    @State private var hasReverbApplied = false
+
+    @State private var appliedEchoDelay: Float = 0.25
+    @State private var appliedEchoFeedback: Float = 0.3
+    @State private var appliedEchoDamping: Float = 0.3
+    @State private var appliedEchoWetDry: Float = 0.3
+    @State private var hasEchoApplied = false
 
     @State private var editedIconColor: Color
     // Track if icon color was explicitly modified by user (to avoid lossy round-trip conversion)
@@ -370,10 +401,10 @@ struct RecordingDetailView: View {
                         } label: {
                             Circle()
                                 .fill(editedIconColor)
-                                .frame(width: 20, height: 20)
+                                .frame(width: 22, height: 22)
                                 .overlay(
                                     Circle()
-                                        .strokeBorder(palette.textPrimary.opacity(0.2), lineWidth: 1.5)
+                                        .strokeBorder(palette.textPrimary.opacity(0.4), lineWidth: 1.5)
                                 )
                         }
                     }
@@ -500,21 +531,6 @@ struct RecordingDetailView: View {
                 ExportFormatPicker { format in
                     shareRecording(format: format)
                 }
-                .presentationDetents([.medium])
-            }
-            .sheet(isPresented: $showAudioEditTools) {
-                AudioEditToolsPanel(
-                    isProcessing: $isProcessingEdit,
-                    onFade: { fadeIn, fadeOut, curve in
-                        applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
-                    },
-                    onNormalize: { targetDb in
-                        applyNormalize(targetDb: targetDb)
-                    },
-                    onNoiseGate: { threshold in
-                        applyNoiseGate(threshold: threshold)
-                    }
-                )
                 .presentationDetents([.medium])
             }
             .sheet(isPresented: $showProjectSheet) {
@@ -785,9 +801,33 @@ struct RecordingDetailView: View {
                                 playback.pause()
                                 isPrecisionMode = false
                                 silenceMode = .idle  // Clear any highlighted silence
+                                // Reset tool active states
+                                hasFadeApplied = false
+                                hasPeakApplied = false
+                                hasGateApplied = false
+                                hasCompressApplied = false
+                                hasReverbApplied = false
+                                hasEchoApplied = false
+                                appliedFadeIn = 0
+                                appliedFadeOut = 0
+                                appliedFadeCurve = .sCurve
+                                appliedPeakTarget = -0.3
+                                appliedGateThreshold = -40
+                                appliedCompressGain = 0
+                                appliedCompressPeakReduction = 0
+                                appliedReverbRoomSize = 1.0
+                                appliedReverbPreDelay = 20
+                                appliedReverbDecay = 2.0
+                                appliedReverbDamping = 0.5
+                                appliedReverbWetDry = 0.3
+                                appliedEchoDelay = 0.25
+                                appliedEchoFeedback = 0.3
+                                appliedEchoDamping = 0.3
+                                appliedEchoWetDry = 0.3
+                                showToolsPanel = false
                                 isEditingWaveform = false
                             } else {
-                                guard appState.supportManager.canUseProFeatures else {
+                                guard appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree else {
                                     proUpgradeContext = .editMode
                                     return
                                 }
@@ -888,6 +928,20 @@ struct RecordingDetailView: View {
                         },
                         onResetAll: nil
                     )
+                    // Fade curve overlay (covers waveform area only, not the time ruler)
+                    .overlay(alignment: .bottom) {
+                        if (hasFadeApplied || (showToolsPanel && selectedEditTool == .fade)) && (appliedFadeIn > 0 || appliedFadeOut > 0) {
+                            FadeCurveOverlay(
+                                fadeInDuration: appliedFadeIn,
+                                fadeOutDuration: appliedFadeOut,
+                                curve: appliedFadeCurve,
+                                totalDuration: editorDuration
+                            )
+                            .frame(height: expandedWaveformHeight)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .allowsHitTesting(false)
+                        }
+                    }
                     // Force fresh @State when duration changes to fix stale WaveformTimeline.duration
                     // WaveformTimeline.duration is a `let` constant, so @State must be recreated
                     // Use playback.duration directly in ID to ensure recreation when actual duration is known
@@ -910,6 +964,89 @@ struct RecordingDetailView: View {
             // Edit mode: Selection info and actions
             if isEditingWaveform {
                 VStack(spacing: 4) {
+                    // Slide-up tools panel (appears between waveform and IN/OUT controls)
+                    if showToolsPanel {
+                        EditToolsSlidePanel(
+                            selectedTool: $selectedEditTool,
+                            isProcessing: $isProcessingEdit,
+                            fadeIn: $appliedFadeIn,
+                            fadeOut: $appliedFadeOut,
+                            fadeCurve: $appliedFadeCurve,
+                            fadeDuration: effectiveEditDuration,
+                            hasFadeApplied: hasFadeApplied,
+                            onApplyFade: { fadeIn, fadeOut, curve in
+                                appliedFadeIn = fadeIn
+                                appliedFadeOut = fadeOut
+                                appliedFadeCurve = curve
+                                hasFadeApplied = true
+                                applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
+                            },
+                            onRemoveFade: { removeFade() },
+                            peakTarget: $appliedPeakTarget,
+                            hasPeakApplied: hasPeakApplied,
+                            onApplyPeak: { target in
+                                appliedPeakTarget = target
+                                hasPeakApplied = true
+                                applyNormalize(targetDb: target)
+                            },
+                            onRemovePeak: { removePeak() },
+                            gateThreshold: $appliedGateThreshold,
+                            hasGateApplied: hasGateApplied,
+                            onApplyGate: { threshold in
+                                appliedGateThreshold = threshold
+                                hasGateApplied = true
+                                applyNoiseGate(threshold: threshold)
+                            },
+                            onRemoveGate: { removeGate() },
+                            compGain: $appliedCompressGain,
+                            compReduction: $appliedCompressPeakReduction,
+                            hasCompressApplied: hasCompressApplied,
+                            onApplyCompress: { gain, reduction in
+                                appliedCompressGain = gain
+                                appliedCompressPeakReduction = reduction
+                                hasCompressApplied = true
+                                applyCompression(gain: gain, peakReduction: reduction)
+                            },
+                            onRemoveCompress: { removeCompression() },
+                            reverbRoomSize: $appliedReverbRoomSize,
+                            reverbPreDelay: $appliedReverbPreDelay,
+                            reverbDecay: $appliedReverbDecay,
+                            reverbDamping: $appliedReverbDamping,
+                            reverbWetDry: $appliedReverbWetDry,
+                            hasReverbApplied: hasReverbApplied,
+                            onApplyReverb: { room, preDelay, decay, damping, wetDry in
+                                appliedReverbRoomSize = room
+                                appliedReverbPreDelay = preDelay
+                                appliedReverbDecay = decay
+                                appliedReverbDamping = damping
+                                appliedReverbWetDry = wetDry
+                                hasReverbApplied = true
+                                applyReverb(roomSize: room, preDelay: preDelay, decay: decay, damping: damping, wetDry: wetDry)
+                            },
+                            onRemoveReverb: { removeReverb() },
+                            echoDelay: $appliedEchoDelay,
+                            echoFeedback: $appliedEchoFeedback,
+                            echoDamping: $appliedEchoDamping,
+                            echoWetDry: $appliedEchoWetDry,
+                            hasEchoApplied: hasEchoApplied,
+                            onApplyEcho: { delay, feedback, damping, wetDry in
+                                appliedEchoDelay = delay
+                                appliedEchoFeedback = feedback
+                                appliedEchoDamping = damping
+                                appliedEchoWetDry = wetDry
+                                hasEchoApplied = true
+                                applyEcho(delay: delay, feedback: feedback, damping: damping, wetDry: wetDry)
+                            },
+                            onRemoveEcho: { removeEcho() },
+                            onClose: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    showToolsPanel = false
+                                }
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
                     // Silence debug strip (only when highlighting silence)
                     if case .highlighted = silenceMode {
                         SilenceDebugStrip(
@@ -929,39 +1066,26 @@ struct RecordingDetailView: View {
                         playheadPosition: editPlayheadPosition
                     )
 
-                    // Edit actions: Trim, Cut, Skip Silence, Marker, Precision (Undo/Redo now in top bar)
-                    WaveformEditActionsView(
+                    // Edit actions: Trim, Cut, Mark, Precision + More Tools
+                    EditActionsRow(
                         canTrim: canPerformTrim,
                         canCut: canPerformCut,
                         isProcessing: isProcessingEdit,
                         isPrecisionMode: $isPrecisionMode,
+                        showToolsPanel: $showToolsPanel,
                         onTrim: performTrim,
                         onCut: performCut,
-                        onAddMarker: addMarkerAtPlayhead
+                        onAddMarker: addMarkerAtPlayhead,
+                        onMoreTapped: {
+                            if appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    showToolsPanel.toggle()
+                                }
+                            } else {
+                                proUpgradeContext = .editMode
+                            }
+                        }
                     )
-
-                    // Audio tools: Fade, Normalize, Noise Gate
-                    Button {
-                        if appState.supportManager.canUseProFeatures {
-                            showAudioEditTools = true
-                        } else {
-                            proUpgradeContext = .editMode
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 12))
-                            Text("More Tools")
-                                .font(.caption2)
-                                .fontWeight(.medium)
-                        }
-                        .foregroundColor(palette.accent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(palette.accent.opacity(0.12))
-                        .cornerRadius(6)
-                    }
-                    .disabled(isProcessingEdit)
 
                     // Processing indicator
                     if isProcessingEdit {
@@ -1511,6 +1635,174 @@ struct RecordingDetailView: View {
 
     // MARK: - Audio Edit Tools (Fade, Normalize, Noise Gate)
 
+    private func undoLastEdit() {
+        if editHistory.canUndo, let snapshot = editHistory.popUndo() {
+            pendingAudioEdit = snapshot.audioFileURL
+            pendingDuration = snapshot.duration
+            hasAudioEdits = true
+            reloadWaveformForPendingEdit()
+            selectionStart = 0
+            selectionEnd = snapshot.duration
+            playback.load(url: snapshot.audioFileURL)
+        }
+    }
+
+    private func removeFade() {
+        undoLastEdit()
+        hasFadeApplied = false
+        appliedFadeIn = 0
+        appliedFadeOut = 0
+        appliedFadeCurve = .sCurve
+        skipSilenceResultMessage = "Fade removed"
+        showSkipSilenceResult = true
+    }
+
+    private func removePeak() {
+        undoLastEdit()
+        hasPeakApplied = false
+        appliedPeakTarget = -0.3
+        skipSilenceResultMessage = "Normalize removed"
+        showSkipSilenceResult = true
+    }
+
+    private func removeGate() {
+        undoLastEdit()
+        hasGateApplied = false
+        appliedGateThreshold = -40
+        skipSilenceResultMessage = "Gate removed"
+        showSkipSilenceResult = true
+    }
+
+    private func removeCompression() {
+        undoLastEdit()
+        hasCompressApplied = false
+        appliedCompressGain = 0
+        appliedCompressPeakReduction = 0
+        skipSilenceResultMessage = "Compression removed"
+        showSkipSilenceResult = true
+    }
+
+    private func removeReverb() {
+        undoLastEdit()
+        hasReverbApplied = false
+        appliedReverbRoomSize = 1.0
+        appliedReverbPreDelay = 20
+        appliedReverbDecay = 2.0
+        appliedReverbDamping = 0.5
+        appliedReverbWetDry = 0.3
+        skipSilenceResultMessage = "Reverb removed"
+        showSkipSilenceResult = true
+    }
+
+    private func removeEcho() {
+        undoLastEdit()
+        hasEchoApplied = false
+        appliedEchoDelay = 0.25
+        appliedEchoFeedback = 0.3
+        appliedEchoDamping = 0.3
+        appliedEchoWetDry = 0.3
+        skipSilenceResultMessage = "Echo removed"
+        showSkipSilenceResult = true
+    }
+
+    private func applyReverb(roomSize: Float, preDelay: Float, decay: Float, damping: Float, wetDry: Float) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Reverb")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.reverb(
+                sourceURL: sourceURL,
+                roomSize: roomSize,
+                preDelayMs: preDelay,
+                decay: decay,
+                damping: damping,
+                wetDry: wetDry
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Reverb applied"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func applyEcho(delay: Float, feedback: Float, damping: Float, wetDry: Float) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Echo")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.echo(
+                sourceURL: sourceURL,
+                delayTime: delay,
+                feedback: feedback,
+                damping: damping,
+                wetDry: wetDry
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Echo applied"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
+    private func applyCompression(gain: Float, peakReduction: Float) {
+        silenceMode = .idle
+        let undoSnapshot = createUndoSnapshot(description: "Compress")
+        editHistory.pushUndo(undoSnapshot)
+
+        isProcessingEdit = true
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+
+        Task {
+            let result = await AudioEditor.shared.compressor(
+                sourceURL: sourceURL,
+                makeupGainDb: gain,
+                peakReduction: peakReduction
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = result.newDuration
+                    playback.load(url: result.outputURL)
+                    skipSilenceResultMessage = "Compression applied"
+                    showSkipSilenceResult = true
+                }
+                isProcessingEdit = false
+            }
+        }
+    }
+
     private func applyFade(fadeIn: TimeInterval, fadeOut: TimeInterval, curve: FadeCurve) {
         silenceMode = .idle
         let undoSnapshot = createUndoSnapshot(description: "Fade")
@@ -1677,7 +1969,7 @@ struct RecordingDetailView: View {
 
             // Record Over Track button
             Button {
-                if appState.supportManager.canUseProFeatures {
+                if appState.supportManager.canUseProFeatures || ProFeatureContext.recordOverTrack.isFree {
                     handleRecordOverTrack()
                 } else {
                     proUpgradeContext = .recordOverTrack
@@ -1851,11 +2143,13 @@ struct RecordingDetailView: View {
             targetProject = appState.createProject(from: currentRecording, title: nil)
         }
 
-        // Add the new recording using the standard method
-        appState.addRecording(from: rawData)
-
-        // The newly added recording is at index 0
-        guard let newRecording = appState.recordings.first else {
+        // Add the new recording using the standard method and check the result
+        let result = appState.addRecording(from: rawData)
+        let newRecording: RecordingItem
+        switch result {
+        case .success(let recording):
+            newRecording = recording
+        case .failure:
             return
         }
 
@@ -2914,6 +3208,9 @@ struct RecordingDetailView: View {
     @State private var showDownloadNotAllowedAlert = false
 
     private func shareRecording(format: ExportFormat = .wav) {
+        // Clear any stale exported file URL from a previous share action
+        exportedURL = nil
+
         // Check download permission for shared album recordings
         if let album = appState.album(for: currentRecording.albumID), album.isShared {
             let sharedInfo = appState.sharedRecordingInfoCache[currentRecording.id]
@@ -3568,21 +3865,69 @@ struct TopBarSuggestedIcons: View {
     }
 }
 
-/// Individual icon item in the top bar strip - plain tintable SF Symbol
+/// Individual icon item in the top bar strip - SF Symbol in a contrasting chip for visibility on all themes.
+/// Always displays the actual tint color; the chip background adapts to ensure contrast.
 private struct TopBarIconItem: View {
     let symbol: String
     let isMain: Bool
     let tintColor: Color
 
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
     /// Icon size: main icon slightly larger
     private var iconSize: CGFloat {
-        isMain ? 20 : 17
+        isMain ? 16 : 14
+    }
+
+    /// Chip size
+    private var chipSize: CGFloat {
+        isMain ? 32 : 28
+    }
+
+    /// Background that always contrasts with the icon's tint color
+    private var chipBackground: Color {
+        let uiColor = UIColor(tintColor)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+        if colorScheme == .dark {
+            // On dark themes, use a lighter chip so dark icons stand out
+            return luminance < 0.4 ? Color.white.opacity(0.15) : tintColor.opacity(0.15)
+        } else {
+            // On light themes, use a darker chip so light icons stand out
+            return luminance > 0.7 ? Color.black.opacity(0.1) : tintColor.opacity(0.15)
+        }
+    }
+
+    private var chipBorder: Color {
+        let uiColor = UIColor(tintColor)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+        if colorScheme == .dark && luminance < 0.4 {
+            return Color.white.opacity(0.2)
+        } else if colorScheme == .light && luminance > 0.7 {
+            return Color.black.opacity(0.15)
+        }
+        return tintColor.opacity(0.3)
     }
 
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: iconSize, weight: isMain ? .semibold : .regular))
             .foregroundColor(tintColor)
+            .frame(width: chipSize, height: chipSize)
+            .background(
+                Circle()
+                    .fill(chipBackground)
+            )
+            .overlay(
+                Circle()
+                    .strokeBorder(chipBorder, lineWidth: 1)
+            )
     }
 }
 

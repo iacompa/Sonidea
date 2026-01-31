@@ -22,15 +22,20 @@ struct RecordingsListView: View {
     @State private var exportedURL: URL?
     @State private var showDeleteConfirmation = false
 
+    // Export format selection for single share
+    @State private var recordingToShare: RecordingItem?
+    @State private var showExportFormatPicker = false
+
     // Single recording actions
     @State private var recordingToMove: RecordingItem?
-    @State private var showMoveToAlbumSheet = false
     @State private var recordingToTag: RecordingItem?
-    @State private var showSingleTagSheet = false
 
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext? = nil
     @State private var showTipJar = false
+
+    // Cached grouped recordings to avoid expensive Calendar operations on every render
+    @State private var cachedGroupedRecordings: [(date: Date, displayTitle: String, recordings: [RecordingItem])] = []
 
     // Animation configuration
     private var menuAnimation: Animation {
@@ -45,7 +50,7 @@ struct RecordingsListView: View {
 
     // MARK: - Date-Grouped Recordings
 
-    private var groupedRecordings: [(date: Date, displayTitle: String, recordings: [RecordingItem])] {
+    private func computeGroupedRecordings() -> [(date: Date, displayTitle: String, recordings: [RecordingItem])] {
         let calendar = Calendar.current
         let now = Date()
         let grouped = Dictionary(grouping: appState.activeRecordings) { recording in
@@ -107,20 +112,23 @@ struct RecordingsListView: View {
                 clearSelection()
             }
         }
+        .sheet(isPresented: $showExportFormatPicker) {
+            ExportFormatPicker { format in
+                if let recording = recordingToShare {
+                    exportAndShare(recording, format: format)
+                }
+            }
+        }
         .sheet(isPresented: $showShareSheet) {
             if let url = exportedURL {
                 ShareSheet(items: [url])
             }
         }
-        .iPadSheet(isPresented: $showMoveToAlbumSheet) {
-            if let recording = recordingToMove {
-                MoveToAlbumSheet(recording: recording)
-            }
+        .iPadSheet(item: $recordingToMove) { recording in
+            MoveToAlbumSheet(recording: recording)
         }
-        .iPadSheet(isPresented: $showSingleTagSheet) {
-            if let recording = recordingToTag {
-                SingleRecordingTagSheet(recording: recording)
-            }
+        .iPadSheet(item: $recordingToTag) { recording in
+            SingleRecordingTagSheet(recording: recording)
         }
         .alert("Delete Recordings", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -150,6 +158,12 @@ struct RecordingsListView: View {
             TipJarView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
+        }
+        .onAppear {
+            cachedGroupedRecordings = computeGroupedRecordings()
+        }
+        .onChange(of: appState.activeRecordings.count) { _, _ in
+            cachedGroupedRecordings = computeGroupedRecordings()
         }
     }
 
@@ -302,7 +316,7 @@ struct RecordingsListView: View {
 
     private var recordingsList: some View {
         List {
-            ForEach(groupedRecordings, id: \.date) { group in
+            ForEach(cachedGroupedRecordings, id: \.date) { group in
                 Section {
                     ForEach(group.recordings) { recording in
                         RecordingRow(
@@ -347,7 +361,6 @@ struct RecordingsListView: View {
                                     return
                                 }
                                 recordingToTag = recording
-                                showSingleTagSheet = true
                             } label: {
                                 Label("Tags", systemImage: "tag")
                             }
@@ -355,7 +368,6 @@ struct RecordingsListView: View {
 
                             Button {
                                 recordingToMove = recording
-                                showMoveToAlbumSheet = true
                             } label: {
                                 Label("Album", systemImage: "square.stack")
                             }
@@ -413,10 +425,15 @@ struct RecordingsListView: View {
     }
 
     private func shareRecording(_ recording: RecordingItem) {
+        recordingToShare = recording
+        showExportFormatPicker = true
+    }
+
+    private func exportAndShare(_ recording: RecordingItem, format: ExportFormat) {
         Task {
             do {
-                let wavURL = try await AudioExporter.shared.exportToWAV(recording: recording)
-                exportedURL = wavURL
+                let url = try await AudioExporter.shared.export(recording: recording, format: format)
+                exportedURL = url
                 showShareSheet = true
             } catch {
                 print("Export failed: \(error)")
@@ -572,6 +589,11 @@ struct RecordingRow: View {
                     // Overdub badge
                     if recording.isPartOfOverdub {
                         overdubBadge
+                    }
+
+                    // Shared album badge — always visible
+                    if let album = album, album.isShared {
+                        SharedAlbumBadge()
                     }
                 }
 

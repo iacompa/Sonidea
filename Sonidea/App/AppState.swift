@@ -183,27 +183,29 @@ final class AppState {
     /// This prevents users from exploiting features after trial/subscription ends.
     func enforceFreeTierSettings() {
         var settingsChanged = false
+        var settings = appSettings
 
         // Auto-select icon is a Pro feature
-        if appSettings.autoSelectIcon {
-            appSettings.autoSelectIcon = false
+        if settings.autoSelectIcon {
+            settings.autoSelectIcon = false
             settingsChanged = true
         }
 
         // iCloud sync is a Pro feature
-        if appSettings.iCloudSyncEnabled {
-            appSettings.iCloudSyncEnabled = false
+        if settings.iCloudSyncEnabled {
+            settings.iCloudSyncEnabled = false
             settingsChanged = true
         }
 
         // Watch sync is a Pro feature
-        if appSettings.watchSyncEnabled {
-            appSettings.watchSyncEnabled = false
+        if settings.watchSyncEnabled {
+            settings.watchSyncEnabled = false
             settingsChanged = true
         }
 
+        // Assign once to trigger a single didSet
         if settingsChanged {
-            saveAppSettings()
+            appSettings = settings
         }
     }
 
@@ -391,7 +393,17 @@ final class AppState {
         )
 
         recordings.insert(recording, at: 0)
-        saveRecordings()
+
+        // Persist asynchronously — recording is already in memory for instant UI update.
+        // Use short delay to avoid blocking main thread with JSON encode + file I/O.
+        Task.detached(priority: .userInitiated) { [recordings] in
+            DataSafetyFileOps.saveSync(recordings, collection: .recordings)
+            if let data = try? JSONEncoder().encode(recordings) {
+                await MainActor.run {
+                    UserDefaults.standard.set(data, forKey: "savedRecordings")
+                }
+            }
+        }
 
         Self.logger.info("Recording added successfully: \(title, privacy: .public)")
 
@@ -521,8 +533,8 @@ final class AppState {
         for url in result.fileURLsToDelete {
             try? FileManager.default.removeItem(at: url)
         }
-        saveRecordings()
-        if result.overdubGroupsChanged { saveOverdubGroups() }
+        persistRecordings()
+        if result.overdubGroupsChanged { persistOverdubGroups() }
         for id in result.removedRecordingIDs {
             triggerSyncForDeletion(id)
         }
@@ -535,8 +547,8 @@ final class AppState {
         for url in result.fileURLsToDelete {
             try? FileManager.default.removeItem(at: url)
         }
-        saveRecordings()
-        if result.overdubGroupsChanged { saveOverdubGroups() }
+        persistRecordings()
+        if result.overdubGroupsChanged { persistOverdubGroups() }
         for id in result.removedRecordingIDs {
             triggerSyncForDeletion(id)
         }
@@ -1270,7 +1282,7 @@ final class AppState {
         )
 
         recordings.insert(recording, at: 0)
-        saveRecordings()
+        persistRecordings()
 
         // Trigger iCloud sync for imported recording
         triggerSyncForNewRecording(recording)
@@ -1293,15 +1305,43 @@ final class AppState {
             return
         }
 
-        // Check if "favorite" already exists
-        let favoriteExists = tags.contains { $0.name.lowercased() == "favorite" }
+        let oldFavTag = tags[favIndex]
+        let oldFavID = oldFavTag.id
 
-        if favoriteExists {
-            // Don't create duplicate, just mark migration done
+        // Check if "favorite" with the correct stable ID already exists
+        let favoriteExists = tags.contains { $0.id == Tag.favoriteTagID }
+
+        if !favoriteExists {
+            // Create a new tag with the stable favoriteTagID, preserving the old tag's color
+            let newFavoriteTag = Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: oldFavTag.colorHex)
+
+            // Update all recordings that reference the old fav tag UUID
+            if oldFavID != Tag.favoriteTagID {
+                for i in recordings.indices {
+                    if let tagIndex = recordings[i].tagIDs.firstIndex(of: oldFavID) {
+                        recordings[i].tagIDs[tagIndex] = Tag.favoriteTagID
+                    }
+                }
+                persistRecordings()
+            }
+
+            // Remove the old "fav" tag and insert the new one
+            tags.remove(at: favIndex)
+            tags.insert(newFavoriteTag, at: favIndex)
+            persistTags()
         } else {
-            // Rename "fav" to "favorite"
-            tags[favIndex].name = "favorite"
-            saveTags()
+            // Favorite tag with correct ID already exists — just migrate recording references
+            if oldFavID != Tag.favoriteTagID {
+                for i in recordings.indices {
+                    if let tagIndex = recordings[i].tagIDs.firstIndex(of: oldFavID) {
+                        recordings[i].tagIDs[tagIndex] = Tag.favoriteTagID
+                    }
+                }
+                // Remove the old "fav" tag (duplicate)
+                tags.remove(at: favIndex)
+                persistRecordings()
+                persistTags()
+            }
         }
 
         UserDefaults.standard.set(true, forKey: tagMigrationKey)
@@ -1341,8 +1381,12 @@ final class AppState {
                 Set(saved.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }.map(\.id))
             }.value
             guard let self else { return }
+            // Only remove recordings from the original snapshot — never touch recordings added after load
+            let savedIDs = Set(saved.map(\.id))
+            let invalidIDs = savedIDs.subtracting(validURLs)
+            guard !invalidIDs.isEmpty else { return }
             let beforeCount = self.recordings.count
-            self.recordings.removeAll { !validURLs.contains($0.id) }
+            self.recordings.removeAll { invalidIDs.contains($0.id) }
             if self.recordings.count < beforeCount {
                 self.persistRecordings()
             }
@@ -1726,16 +1770,31 @@ final class AppState {
             UserDefaults.standard.removeObject(forKey: key)
         }
 
+        // Clear CloudKit-related keys from UserDefaults
+        let cloudKitKeys = [
+            "cloudkit.changeToken", "cloudkit.tombstones", "cloudkit.lastSync",
+            "cloudkit.zoneCreated", "cloudkit.subscriptionCreated",
+            "cloudkit.lastSyncedDates",
+            "dataSafetyMigrationComplete"
+        ]
+        for key in cloudKitKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+
+        // Delete the Application Support SonideaData directory
+        let sonideaDataDir = DataSafetyFileOps.dataDirectory()
+        try? FileManager.default.removeItem(at: sonideaDataDir)
+
         // Re-create default system items
         ensureDraftsAlbum()
         ensureFavoriteTagExists()
 
-        // Save clean state
-        saveRecordings()
-        saveAlbums()
-        saveTags()
-        saveProjects()
-        saveOverdubGroups()
+        // Persist clean state directly (not debounced) to ensure write completes
+        persistRecordings()
+        persistAlbums()
+        persistTags()
+        persistProjects()
+        persistOverdubGroups()
     }
 
     // MARK: - Overdub Group Management
@@ -1787,6 +1846,15 @@ final class AppState {
         )
         saveOverdubGroups()
         saveRecordings()
+    }
+
+    /// Remove a specific layer from its overdub group and move to trash
+    func removeOverdubLayer(_ layer: RecordingItem) {
+        guard let groupId = layer.overdubGroupId,
+              let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) else { return }
+        overdubGroups[groupIndex].layerRecordingIds.removeAll { $0 == layer.id }
+        saveOverdubGroups()
+        moveToTrash(layer)
     }
 
     /// Remove the last layer from an overdub group

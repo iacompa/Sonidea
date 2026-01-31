@@ -129,6 +129,15 @@ struct MixerView: View {
                                 mixSettings.masterVolume = Float(max(0, min(1.5, ratio * 1.5)))
                             }
                     )
+                    .accessibilityLabel("Master volume")
+                    .accessibilityValue("\(Int(mixSettings.masterVolume * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction {
+                        case .increment: mixSettings.masterVolume = min(1.5, mixSettings.masterVolume + 0.05)
+                        case .decrement: mixSettings.masterVolume = max(0, mixSettings.masterVolume - 0.05)
+                        @unknown default: break
+                        }
+                    }
                 }
                 .frame(width: 28, height: 150)
             }
@@ -197,6 +206,15 @@ struct ChannelStripView: View {
                                 channel.volume = Float(max(0, min(1.5, ratio * 1.5)))
                             }
                     )
+                    .accessibilityLabel("\(label) volume")
+                    .accessibilityValue("\(Int(channel.volume * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction {
+                        case .increment: channel.volume = min(1.5, channel.volume + 0.05)
+                        case .decrement: channel.volume = max(0, channel.volume - 0.05)
+                        @unknown default: break
+                        }
+                    }
                 }
                 .frame(width: 28, height: 150)
             }
@@ -210,11 +228,14 @@ struct ChannelStripView: View {
                 Slider(value: $channel.pan, in: -1...1, step: 0.1)
                     .tint(palette.accent)
                     .frame(width: 60)
+                    .accessibilityLabel("\(label) pan")
+                    .accessibilityValue(panLabel)
             }
 
             // Mute / Solo buttons
             HStack(spacing: 4) {
                 Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     channel.isMuted.toggle()
                 } label: {
                     Text("M")
@@ -223,9 +244,13 @@ struct ChannelStripView: View {
                         .frame(width: 26, height: 22)
                         .background(channel.isMuted ? Color.red : palette.inputBackground)
                         .cornerRadius(4)
+                        .animation(.easeInOut(duration: 0.15), value: channel.isMuted)
                 }
+                .accessibilityLabel("\(label) mute")
+                .accessibilityValue(channel.isMuted ? "on" : "off")
 
                 Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     channel.isSolo.toggle()
                 } label: {
                     Text("S")
@@ -234,11 +259,15 @@ struct ChannelStripView: View {
                         .frame(width: 26, height: 22)
                         .background(channel.isSolo ? Color.yellow : palette.inputBackground)
                         .cornerRadius(4)
+                        .animation(.easeInOut(duration: 0.15), value: channel.isSolo)
                 }
+                .accessibilityLabel("\(label) solo")
+                .accessibilityValue(channel.isSolo ? "on" : "off")
             }
 
             // Loop toggle
             Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 channel.isLooped.toggle()
             } label: {
                 Image(systemName: channel.isLooped ? "repeat.1" : "repeat")
@@ -247,7 +276,10 @@ struct ChannelStripView: View {
                     .frame(width: 56, height: 22)
                     .background(channel.isLooped ? Color.blue : palette.inputBackground)
                     .cornerRadius(4)
+                    .animation(.easeInOut(duration: 0.15), value: channel.isLooped)
             }
+            .accessibilityLabel("\(label) loop")
+            .accessibilityValue(channel.isLooped ? "on" : "off")
         }
         .frame(width: 80)
         .padding(.vertical, 8)

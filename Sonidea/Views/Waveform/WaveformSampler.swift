@@ -23,9 +23,26 @@ final class WaveformSampler {
     private var minMaxCache: [URL: [WaveformSamplePair]] = [:]
     private let cacheKey = "waveformCache"
     private let minMaxCacheKey = "waveformMinMaxCache"
+    private let maxCacheEntries = 20
+    private var accessOrder: [URL] = []
 
     private init() {
         loadCache()
+    }
+
+    // MARK: - LRU Helpers
+
+    private func touchCache(_ url: URL) {
+        accessOrder.removeAll { $0 == url }
+        accessOrder.append(url)
+    }
+
+    private func evictIfNeeded() {
+        while cache.count > maxCacheEntries, let oldest = accessOrder.first {
+            accessOrder.removeFirst()
+            cache.removeValue(forKey: oldest)
+            minMaxCache.removeValue(forKey: oldest)
+        }
     }
 
     // MARK: - Public API
@@ -33,6 +50,7 @@ final class WaveformSampler {
     func samples(for url: URL, targetSampleCount: Int = 200) async -> [Float] {
         // Check memory cache first
         if let cached = cache[url] {
+            touchCache(url)
             return resample(cached, to: targetSampleCount)
         }
 
@@ -43,7 +61,9 @@ final class WaveformSampler {
 
         // Cache in memory
         cache[url] = samples
-        saveCache()
+        touchCache(url)
+        evictIfNeeded()
+        saveCache() // TODO: debounce cache persistence
 
         return resample(samples, to: targetSampleCount)
     }
@@ -52,6 +72,7 @@ final class WaveformSampler {
     func minMaxSamples(for url: URL, targetSampleCount: Int = 200) async -> [WaveformSamplePair] {
         // Check memory cache first
         if let cached = minMaxCache[url] {
+            touchCache(url)
             return resampleMinMax(cached, to: targetSampleCount)
         }
 
@@ -62,7 +83,9 @@ final class WaveformSampler {
 
         // Cache in memory
         minMaxCache[url] = samples
-        saveMinMaxCache()
+        touchCache(url)
+        evictIfNeeded()
+        saveMinMaxCache() // TODO: debounce cache persistence
 
         return resampleMinMax(samples, to: targetSampleCount)
     }

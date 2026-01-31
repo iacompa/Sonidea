@@ -102,6 +102,8 @@ struct ParametricEQView: View {
                             colorScheme: colorScheme
                         )
                         .position(x: x, y: y)
+                        .accessibilityLabel("EQ band \(index + 1)")
+                        .accessibilityValue("Frequency \(Int(band.frequency)) Hz, Gain \(String(format: "%.1f", band.gain)) dB")
                         .gesture(
                             DragGesture()
                                 .onChanged { value in

@@ -89,7 +89,9 @@ final class RecordingMonitorEffects {
         let au = comp.audioUnit
         if compressorEnabled {
             AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, compressorThreshold, 0)
-            AudioUnitSetParameter(au, kDynamicsProcessorParam_CompressionAmount, kAudioUnitScope_Global, 0, compressorRatio, 0)
+            // Map ratio to headroom: ratio 1 = headroom 40 (no compression), ratio 20 = headroom 1 (heavy)
+            let headroom = Float(40.0 / max(compressorRatio, 1.0))
+            AudioUnitSetParameter(au, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, headroom, 0)
             // Attack 10ms, release 100ms
             AudioUnitSetParameter(au, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.01, 0)
             AudioUnitSetParameter(au, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.1, 0)

@@ -398,6 +398,14 @@ struct RecordingCardView: View {
         CardGradientGenerator.gradient(for: recording.id)
     }
 
+    private var album: Album? {
+        appState.album(for: recording.albumID)
+    }
+
+    private var isInSharedAlbum: Bool {
+        album?.isShared == true
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let cardHeight = geometry.size.width / CardGridStyle.cardAspectRatio
@@ -444,6 +452,9 @@ struct RecordingCardView: View {
             VStack {
                 HStack {
                     micBadge
+                    if isInSharedAlbum {
+                        SharedAlbumBadge()
+                    }
                     Spacer()
                     menuButton
                 }

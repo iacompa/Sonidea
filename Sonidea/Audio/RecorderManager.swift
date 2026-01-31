@@ -714,24 +714,9 @@ final class RecorderManager: NSObject {
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
         }
 
-        // Get actual duration from the audio file, not wall clock time
-        // Wall clock accumulation can differ from actual audio frames due to buffer latency
-        // Fall back to wall clock if file reports 0 (e.g. simulator with no mic input)
-        let duration: TimeInterval
-        if fileVerified {
-            do {
-                let audioFile = try AVAudioFile(forReading: fileURL)
-                let actualDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
-                print("✅ [RecorderManager] Actual file duration: \(actualDuration)s (wall clock was: \(accumulatedDuration)s)")
-                // Use file duration if valid, otherwise fall back to wall clock
-                duration = actualDuration > 0.1 ? actualDuration : accumulatedDuration
-            } catch {
-                print("⚠️ [RecorderManager] Could not read file for duration, using wall clock: \(error.localizedDescription)")
-                duration = accumulatedDuration
-            }
-        } else {
-            duration = accumulatedDuration
-        }
+        // Use wall clock duration for instant stop response.
+        // Wall clock is what the user sees during recording and is accurate enough.
+        let duration: TimeInterval = accumulatedDuration
         let createdAt = Date()
 
         // Capture location data
@@ -748,11 +733,12 @@ final class RecorderManager: NSObject {
         // Deactivate audio session when recording is done
         AudioSessionManager.shared.deactivateRecording()
 
-        // Log final file info for debugging
-        AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - final")
-
-        // Protect audio file: set file protection and ensure iCloud backup inclusion
-        Self.protectAudioFile(at: fileURL)
+        // Move non-critical I/O to background to keep stop instant
+        let capturedURL = fileURL
+        DispatchQueue.global(qos: .utility).async {
+            AudioDebug.logFileInfo(url: capturedURL, context: "RecorderManager.stopRecording - final")
+            Self.protectAudioFile(at: capturedURL)
+        }
 
         return RawRecordingData(
             fileURL: fileURL,
@@ -935,12 +921,26 @@ final class RecorderManager: NSObject {
             engine.disconnectNodeInput(gainMixer)
             engine.connect(inputNode, to: gainMixer, format: inputFormat)
 
-            // Reinstall tap on limiter
+            // Reinstall tap on limiter — dispatch file write off the real-time thread
+            let writeQueue = self.fileWriteQueue
             limiter.installTap(onBus: 0, bufferSize: 4096, format: newOutputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
-                do {
-                    try activeFile.write(from: buffer)
-                } catch {
-                    print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                // Copy buffer for off-thread writing (tap may reuse the buffer)
+                guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+                copy.frameLength = buffer.frameLength
+                if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+                    let channelCount = Int(buffer.format.channelCount)
+                    let frameCount = Int(buffer.frameLength)
+                    for ch in 0..<channelCount {
+                        memcpy(dst[ch], src[ch], frameCount * MemoryLayout<Float>.size)
+                    }
+                }
+
+                writeQueue.async {
+                    do {
+                        try activeFile.write(from: copy)
+                    } catch {
+                        print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                    }
                 }
 
                 Task { @MainActor in

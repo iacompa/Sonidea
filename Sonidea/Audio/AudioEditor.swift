@@ -34,15 +34,21 @@ enum FadeCurve: String, CaseIterable, Identifiable {
 
     /// Apply curve to a normalized t value (0...1).
     func apply(_ t: Float) -> Float {
+        let clamped = min(max(t, 0), 1)
         switch self {
         case .linear:
-            return t
+            return clamped
         case .sCurve:
-            // Smoothstep: 3t² - 2t³
-            return t * t * (3.0 - 2.0 * t)
+            // Perlin smootherstep: 6t⁵ - 15t⁴ + 10t³ — much more dramatic S than basic smoothstep
+            let t3 = clamped * clamped * clamped
+            let t4 = t3 * clamped
+            let t5 = t4 * clamped
+            return 6.0 * t5 - 15.0 * t4 + 10.0 * t3
         case .exponential:
-            // Exponential rise/fall
-            return t * t
+            // True exponential: (e^(4t) - 1) / (e^4 - 1)
+            // Stays near zero for most of the range, then rises sharply at the end
+            let k: Float = 4.0
+            return (exp(k * clamped) - 1.0) / (exp(k) - 1.0)
         }
     }
 }
@@ -413,6 +419,8 @@ final class AudioEditor {
         }
     }
 
+    private let chunkFrameCount: AVAudioFrameCount = 65536
+
     private func performFade(
         sourceURL: URL,
         fadeInDuration: TimeInterval,
@@ -426,49 +434,61 @@ final class AudioEditor {
             let totalFrames = sourceFile.length
             let channelCount = Int(format.channelCount)
 
-            let fadeInFrames = AVAudioFrameCount(fadeInDuration * sampleRate)
-            let fadeOutFrames = AVAudioFrameCount(fadeOutDuration * sampleRate)
-
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
-                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
-            }
-            sourceFile.framePosition = 0
-            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
-
-            guard let floatData = buffer.floatChannelData else {
-                throw AudioEditorError.editFailed("Cannot access float channel data")
-            }
-
-            let frameCount = Int(buffer.frameLength)
-
-            // Apply fade in
-            if fadeInFrames > 0 {
-                let fadeLen = min(Int(fadeInFrames), frameCount)
-                for frame in 0..<fadeLen {
-                    let t = Float(frame) / Float(fadeLen)
-                    let gain = curve.apply(t)
-                    for ch in 0..<channelCount {
-                        floatData[ch][frame] *= gain
-                    }
-                }
-            }
-
-            // Apply fade out
-            if fadeOutFrames > 0 {
-                let fadeLen = min(Int(fadeOutFrames), frameCount)
-                let fadeStart = frameCount - fadeLen
-                for frame in 0..<fadeLen {
-                    let t = Float(frame) / Float(fadeLen)
-                    let gain = curve.apply(1.0 - t) // Reverse: 1 -> 0
-                    for ch in 0..<channelCount {
-                        floatData[ch][fadeStart + frame] *= gain
-                    }
-                }
-            }
+            let fadeInFrames = Int(fadeInDuration * sampleRate)
+            let fadeOutFrames = Int(fadeOutDuration * sampleRate)
+            let totalFrameCount = Int(totalFrames)
+            let fadeInLen = min(fadeInFrames, totalFrameCount)
+            let fadeOutLen = min(fadeOutFrames, totalFrameCount)
+            let fadeOutStart = totalFrameCount - fadeOutLen
 
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
-            try outputFile.write(from: buffer)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+
+            sourceFile.framePosition = 0
+            var position = 0
+
+            while position < totalFrameCount {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(totalFrameCount - position))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                let chunkLen = Int(buffer.frameLength)
+
+                for frame in 0..<chunkLen {
+                    let globalFrame = position + frame
+                    var gain: Float = 1.0
+
+                    // Fade in region
+                    if fadeInLen > 0 && globalFrame < fadeInLen {
+                        let t = Float(globalFrame) / Float(fadeInLen)
+                        gain *= curve.apply(t)
+                    }
+
+                    // Fade out region
+                    if fadeOutLen > 0 && globalFrame >= fadeOutStart {
+                        let localFrame = globalFrame - fadeOutStart
+                        let t = Float(localFrame) / Float(fadeOutLen)
+                        gain *= curve.apply(1.0 - t)
+                    }
+
+                    if gain < 1.0 {
+                        for ch in 0..<channelCount {
+                            floatData[ch][frame] *= gain
+                        }
+                    }
+                }
+
+                try outputFile.write(from: buffer)
+                position += chunkLen
+            }
 
             let newDuration = Double(totalFrames) / sampleRate
             return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
@@ -505,26 +525,34 @@ final class AudioEditor {
             let sampleRate = format.sampleRate
             let totalFrames = sourceFile.length
             let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
 
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
                 throw AudioEditorError.editFailed("Failed to allocate audio buffer")
             }
-            sourceFile.framePosition = 0
-            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
 
-            guard let floatData = buffer.floatChannelData else {
-                throw AudioEditorError.editFailed("Cannot access float channel data")
-            }
-
-            let frameCount = Int(buffer.frameLength)
-
-            // Pass 1: find peak absolute value across all channels
+            // Pass 1: scan peak in chunks
             var peak: Float = 0
-            for ch in 0..<channelCount {
-                for frame in 0..<frameCount {
-                    let abs = Swift.abs(floatData[ch][frame])
-                    if abs > peak { peak = abs }
+            sourceFile.framePosition = 0
+            var remaining = totalFrameCount
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
                 }
+
+                let chunkLen = Int(buffer.frameLength)
+                for ch in 0..<channelCount {
+                    for frame in 0..<chunkLen {
+                        let abs = Swift.abs(floatData[ch][frame])
+                        if abs > peak { peak = abs }
+                    }
+                }
+                remaining -= chunkLen
             }
 
             guard peak > 0 else {
@@ -532,19 +560,35 @@ final class AudioEditor {
                 return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
             }
 
-            // Pass 2: apply uniform gain
+            // Pass 2: apply uniform gain in chunks
             let targetLinear = powf(10.0, targetPeakDb / 20.0)
             let gain = targetLinear / peak
 
-            for ch in 0..<channelCount {
-                for frame in 0..<frameCount {
-                    floatData[ch][frame] *= gain
-                }
-            }
-
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
-            try outputFile.write(from: buffer)
+
+            sourceFile.framePosition = 0
+            remaining = totalFrameCount
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                let chunkLen = Int(buffer.frameLength)
+                for ch in 0..<channelCount {
+                    for frame in 0..<chunkLen {
+                        floatData[ch][frame] *= gain
+                    }
+                }
+
+                try outputFile.write(from: buffer)
+                remaining -= chunkLen
+            }
 
             let newDuration = Double(totalFrames) / sampleRate
             return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
@@ -590,68 +634,514 @@ final class AudioEditor {
             let sampleRate = format.sampleRate
             let totalFrames = sourceFile.length
             let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
 
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
-                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
-            }
-            sourceFile.framePosition = 0
-            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(totalFrames))
-
-            guard let floatData = buffer.floatChannelData else {
-                throw AudioEditorError.editFailed("Cannot access float channel data")
-            }
-
-            let frameCount = Int(buffer.frameLength)
             let thresholdLinear = powf(10.0, thresholdDb / 20.0)
             let attackSamples = Int(attackMs * Float(sampleRate) / 1000.0)
             let releaseSamples = Int(releaseMs * Float(sampleRate) / 1000.0)
             let holdSamples = Int(holdMs * Float(sampleRate) / 1000.0)
 
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+
+            // Gate state carried across chunk boundaries
             var gateOpen = false
             var holdCounter = 0
             var envelope: Float = 0
 
-            for frame in 0..<frameCount {
-                // Linked-stereo: use loudest channel
-                var maxAbs: Float = 0
-                for ch in 0..<channelCount {
-                    let abs = Swift.abs(floatData[ch][frame])
-                    if abs > maxAbs { maxAbs = abs }
+            sourceFile.framePosition = 0
+            var remaining = totalFrameCount
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
                 }
 
-                let aboveThreshold = maxAbs >= thresholdLinear
+                let chunkLen = Int(buffer.frameLength)
 
-                if aboveThreshold {
-                    gateOpen = true
-                    holdCounter = holdSamples
-                } else if holdCounter > 0 {
-                    holdCounter -= 1
-                } else {
-                    gateOpen = false
+                for frame in 0..<chunkLen {
+                    // Linked-stereo: use loudest channel
+                    var maxAbs: Float = 0
+                    for ch in 0..<channelCount {
+                        let abs = Swift.abs(floatData[ch][frame])
+                        if abs > maxAbs { maxAbs = abs }
+                    }
+
+                    let aboveThreshold = maxAbs >= thresholdLinear
+
+                    if aboveThreshold {
+                        gateOpen = true
+                        holdCounter = holdSamples
+                    } else if holdCounter > 0 {
+                        holdCounter -= 1
+                    } else {
+                        gateOpen = false
+                    }
+
+                    // Smooth envelope
+                    let target: Float = gateOpen ? 1.0 : 0.0
+                    if target > envelope {
+                        // Attack
+                        let coeff = attackSamples > 0 ? 1.0 / Float(attackSamples) : 1.0
+                        envelope = min(1.0, envelope + coeff)
+                    } else {
+                        // Release
+                        let coeff = releaseSamples > 0 ? 1.0 / Float(releaseSamples) : 1.0
+                        envelope = max(0.0, envelope - coeff)
+                    }
+
+                    for ch in 0..<channelCount {
+                        floatData[ch][frame] *= envelope
+                    }
                 }
 
-                // Smooth envelope
-                let target: Float = gateOpen ? 1.0 : 0.0
-                if target > envelope {
-                    // Attack
-                    let coeff = attackSamples > 0 ? 1.0 / Float(attackSamples) : 1.0
-                    envelope = min(1.0, envelope + coeff)
-                } else {
-                    // Release
-                    let coeff = releaseSamples > 0 ? 1.0 / Float(releaseSamples) : 1.0
-                    envelope = max(0.0, envelope - coeff)
-                }
-
-                for ch in 0..<channelCount {
-                    floatData[ch][frame] *= envelope
-                }
+                try outputFile.write(from: buffer)
+                remaining -= chunkLen
             }
+
+            let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Compressor
+
+    /// Apply compression with makeup gain and peak reduction.
+    /// - Parameters:
+    ///   - sourceURL: Source audio file
+    ///   - makeupGainDb: Output gain boost (0–10 dB)
+    ///   - peakReduction: How aggressively peaks are reduced (0–10 scale).
+    ///     Maps to threshold: 0 = no compression, 10 = heavy (-30 dB threshold).
+    func compressor(
+        sourceURL: URL,
+        makeupGainDb: Float = 0,
+        peakReduction: Float = 0
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performCompressor(
+                    sourceURL: sourceURL,
+                    makeupGainDb: makeupGainDb,
+                    peakReduction: peakReduction
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performCompressor(
+        sourceURL: URL,
+        makeupGainDb: Float,
+        peakReduction: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
+
+            // Map peakReduction (0–10) to compressor parameters
+            // 0 = no compression, 10 = heavy compression
+            let thresholdDb: Float = -3.0 * peakReduction  // 0 → 0 dB, 10 → -30 dB
+            let ratio: Float = 1.0 + peakReduction * 0.7   // 0 → 1:1 (bypass), 10 → 8:1
+
+            let thresholdLinear = powf(10.0, thresholdDb / 20.0)
+            let attackMs: Float = 10
+            let releaseMs: Float = 100
+            let attackCoeff = 1.0 / max(1.0, Float(sampleRate) * attackMs / 1000.0)
+            let releaseCoeff = 1.0 / max(1.0, Float(sampleRate) * releaseMs / 1000.0)
+            let makeupGainLinear = powf(10.0, makeupGainDb / 20.0)
 
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
-            try outputFile.write(from: buffer)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+
+            // Envelope state (carried across chunks)
+            var envelope: Float = 1.0  // Current gain (1.0 = no reduction)
+
+            sourceFile.framePosition = 0
+            var remaining = totalFrameCount
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                let chunkLen = Int(buffer.frameLength)
+
+                for frame in 0..<chunkLen {
+                    // Linked-stereo level detection
+                    var maxAbs: Float = 0
+                    for ch in 0..<channelCount {
+                        let absVal = Swift.abs(floatData[ch][frame])
+                        if absVal > maxAbs { maxAbs = absVal }
+                    }
+
+                    // Calculate target gain for this sample
+                    var targetGain: Float = 1.0
+                    if maxAbs > thresholdLinear && thresholdLinear > 0 {
+                        // dB above threshold
+                        let inputDb = 20.0 * log10f(maxAbs)
+                        let threshDb = 20.0 * log10f(thresholdLinear)
+                        let excessDb = inputDb - threshDb
+                        // Compressed excess: only allow excess/ratio through
+                        let reducedExcessDb = excessDb / ratio
+                        let reductionDb = excessDb - reducedExcessDb
+                        targetGain = powf(10.0, -reductionDb / 20.0)
+                    }
+
+                    // Smooth envelope with attack/release
+                    if targetGain < envelope {
+                        // Signal above threshold → reduce gain (attack)
+                        envelope += (targetGain - envelope) * attackCoeff
+                    } else {
+                        // Signal below threshold → release gain back to 1.0
+                        envelope += (targetGain - envelope) * releaseCoeff
+                    }
+                    envelope = max(0.0, min(1.0, envelope))
+
+                    // Apply compression gain + makeup gain
+                    let finalGain = envelope * makeupGainLinear
+                    for ch in 0..<channelCount {
+                        floatData[ch][frame] *= finalGain
+                        // Soft clip to prevent overs from makeup gain
+                        let val = floatData[ch][frame]
+                        if val > 1.0 {
+                            floatData[ch][frame] = 1.0 - 1.0 / (1.0 + val - 1.0)
+                        } else if val < -1.0 {
+                            floatData[ch][frame] = -(1.0 - 1.0 / (1.0 + (-val) - 1.0))
+                        }
+                    }
+                }
+
+                try outputFile.write(from: buffer)
+                remaining -= chunkLen
+            }
 
             let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Reverb (Freeverb Algorithm)
+
+    /// Apply reverb effect using a Freeverb-style algorithm.
+    /// - Parameters:
+    ///   - roomSize: Scales delay line lengths (0.3–3.0). 0.5 = small room, 1.0 = medium, 2.0+ = hall/cathedral.
+    ///   - preDelayMs: Milliseconds of silence before reverb tail begins (0–200ms).
+    ///   - decay: RT60 decay time in seconds (0.1–10.0). How long the reverb rings.
+    ///   - damping: High-frequency absorption in feedback (0.0–1.0). 0 = bright, 1 = dark.
+    ///   - wetDry: Mix balance (0.0 = all dry, 1.0 = all wet).
+    func reverb(
+        sourceURL: URL,
+        roomSize: Float = 1.0,
+        preDelayMs: Float = 20,
+        decay: Float = 2.0,
+        damping: Float = 0.5,
+        wetDry: Float = 0.3
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performReverb(
+                    sourceURL: sourceURL,
+                    roomSize: roomSize,
+                    preDelayMs: preDelayMs,
+                    decay: decay,
+                    damping: damping,
+                    wetDry: wetDry
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performReverb(
+        sourceURL: URL,
+        roomSize: Float,
+        preDelayMs: Float,
+        decay: Float,
+        damping: Float,
+        wetDry: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
+
+            // Freeverb comb filter tuning (calibrated for 44.1kHz, Jezar at Dreampoint)
+            let baseCombDelays = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
+            let baseAllpassDelays = [556, 441, 341, 225]
+
+            // Scale delay times for sample rate and room size
+            let srScale = Float(sampleRate) / 44100.0
+            let roomScale = max(0.3, min(3.0, roomSize))
+            let combDelays = baseCombDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
+            let allpassDelays = baseAllpassDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
+
+            // Feedback coefficient from desired RT60 decay time
+            // RT60 = time for reverb to decay by 60dB
+            let maxCombSec = Float(combDelays.max()!) / Float(sampleRate)
+            let rt60 = max(0.1, decay)
+            let feedback = min(0.99, max(0.3, powf(10.0, -3.0 * maxCombSec / rt60)))
+
+            // Damping: one-pole lowpass in comb feedback path
+            let damp1 = min(1.0, max(0.0, damping)) * 0.4
+            let damp2: Float = 1.0 - damp1
+            let allpassFeedback: Float = 0.5
+
+            // Pre-delay circular buffer
+            let preDelaySamples = max(1, Int(preDelayMs / 1000.0 * Float(sampleRate)))
+            var preDelayBuf = [Float](repeating: 0, count: preDelaySamples)
+            var preDelayIdx = 0
+
+            // 8 comb filter state
+            var combBufs = combDelays.map { [Float](repeating: 0, count: $0) }
+            var combIdx = [Int](repeating: 0, count: 8)
+            var combLPF = [Float](repeating: 0, count: 8)
+
+            // 4 allpass filter state
+            var apBufs = allpassDelays.map { [Float](repeating: 0, count: $0) }
+            var apIdx = [Int](repeating: 0, count: 4)
+
+            // Mix
+            let wet = min(1.0, max(0.0, wetDry))
+            let dry: Float = 1.0 - wet
+            let fixedGain: Float = 0.015  // Scales sum of 8 comb outputs
+
+            // Reverb tail extends output beyond source
+            let tailSeconds = min(10.0, Double(rt60) + 1.0)
+            let tailFrames = Int(tailSeconds * sampleRate)
+            let totalOutputFrames = totalFrameCount + tailFrames
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+
+            guard let inBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount),
+                  let outBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffers")
+            }
+
+            sourceFile.framePosition = 0
+            var outWritten = 0
+            var inRead = 0
+
+            while outWritten < totalOutputFrames {
+                let chunkSize = min(Int(chunkFrameCount), totalOutputFrames - outWritten)
+
+                // Read available input
+                let inAvailable = max(0, totalFrameCount - inRead)
+                let toRead = AVAudioFrameCount(min(chunkSize, inAvailable))
+                inBuf.frameLength = 0
+                if toRead > 0 {
+                    try sourceFile.read(into: inBuf, frameCount: toRead)
+                    inRead += Int(inBuf.frameLength)
+                }
+                let actualIn = Int(inBuf.frameLength)
+
+                outBuf.frameLength = AVAudioFrameCount(chunkSize)
+                guard let inData = inBuf.floatChannelData,
+                      let outData = outBuf.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                for frame in 0..<chunkSize {
+                    // Sum to mono for reverb input
+                    var mono: Float = 0
+                    if frame < actualIn {
+                        for ch in 0..<channelCount { mono += inData[ch][frame] }
+                        mono /= Float(channelCount)
+                    }
+
+                    // Pre-delay
+                    let preDelayed = preDelayBuf[preDelayIdx]
+                    preDelayBuf[preDelayIdx] = mono
+                    preDelayIdx = (preDelayIdx + 1) % preDelaySamples
+
+                    // 8 parallel comb filters with damped feedback
+                    var reverbSum: Float = 0
+                    for i in 0..<8 {
+                        let combOut = combBufs[i][combIdx[i]]
+                        // One-pole lowpass in feedback
+                        combLPF[i] = combOut * damp2 + combLPF[i] * damp1
+                        combBufs[i][combIdx[i]] = preDelayed + combLPF[i] * feedback
+                        combIdx[i] = (combIdx[i] + 1) % combDelays[i]
+                        reverbSum += combOut
+                    }
+
+                    // 4 series allpass filters for diffusion
+                    var ap = reverbSum
+                    for i in 0..<4 {
+                        let buffered = apBufs[i][apIdx[i]]
+                        let apOut = -ap + buffered
+                        apBufs[i][apIdx[i]] = ap + buffered * allpassFeedback
+                        apIdx[i] = (apIdx[i] + 1) % allpassDelays[i]
+                        ap = apOut
+                    }
+
+                    let reverbOut = ap * fixedGain
+
+                    // Mix wet/dry to all output channels
+                    for ch in 0..<channelCount {
+                        let dryVal: Float = frame < actualIn ? inData[ch][frame] : 0
+                        outData[ch][frame] = dryVal * dry + reverbOut * wet
+                    }
+                }
+
+                try outputFile.write(from: outBuf)
+                outWritten += chunkSize
+            }
+
+            let newDuration = Double(totalOutputFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Echo / Delay
+
+    /// Apply echo/delay effect to audio file.
+    /// - Parameters:
+    ///   - delayTime: Seconds between repeats (0.05–2.0).
+    ///   - feedback: How much signal feeds back into the delay (0.0–0.9). Higher = more repeats.
+    ///   - damping: High-frequency roll-off per repeat (0.0–1.0). 0 = bright, 1 = dark.
+    ///   - wetDry: Mix balance (0.0 = all dry, 1.0 = all wet).
+    func echo(
+        sourceURL: URL,
+        delayTime: Float = 0.25,
+        feedback: Float = 0.3,
+        damping: Float = 0.3,
+        wetDry: Float = 0.3
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performEcho(
+                    sourceURL: sourceURL,
+                    delayTime: delayTime,
+                    feedback: feedback,
+                    damping: damping,
+                    wetDry: wetDry
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performEcho(
+        sourceURL: URL,
+        delayTime: Float,
+        feedback: Float,
+        damping: Float,
+        wetDry: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
+
+            let clampedFB = min(0.9, max(0.0, feedback))
+            let clampedDamp = min(1.0, max(0.0, damping))
+
+            // Per-channel delay line
+            let delaySamples = max(1, Int(delayTime * Float(sampleRate)))
+            var delayBufs = (0..<channelCount).map { _ in [Float](repeating: 0, count: delaySamples) }
+            var delayIdx = [Int](repeating: 0, count: channelCount)
+            var lpfStores = [Float](repeating: 0, count: channelCount)
+
+            let wet = min(1.0, max(0.0, wetDry))
+            let dry: Float = 1.0 - wet
+
+            // Echo tail: time for repeats to decay to -60dB
+            let tailSeconds: Double
+            if clampedFB > 0.01 {
+                tailSeconds = min(10.0, Double(delayTime) * (-log(0.001) / -log(Double(clampedFB))))
+            } else {
+                tailSeconds = Double(delayTime) + 0.5
+            }
+            let tailFrames = Int(tailSeconds * sampleRate)
+            let totalOutputFrames = totalFrameCount + tailFrames
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+
+            guard let inBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount),
+                  let outBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffers")
+            }
+
+            sourceFile.framePosition = 0
+            var outWritten = 0
+            var inRead = 0
+
+            while outWritten < totalOutputFrames {
+                let chunkSize = min(Int(chunkFrameCount), totalOutputFrames - outWritten)
+
+                let inAvailable = max(0, totalFrameCount - inRead)
+                let toRead = AVAudioFrameCount(min(chunkSize, inAvailable))
+                inBuf.frameLength = 0
+                if toRead > 0 {
+                    try sourceFile.read(into: inBuf, frameCount: toRead)
+                    inRead += Int(inBuf.frameLength)
+                }
+                let actualIn = Int(inBuf.frameLength)
+
+                outBuf.frameLength = AVAudioFrameCount(chunkSize)
+                guard let inData = inBuf.floatChannelData,
+                      let outData = outBuf.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                for frame in 0..<chunkSize {
+                    for ch in 0..<channelCount {
+                        let input: Float = frame < actualIn ? inData[ch][frame] : 0
+
+                        // Read delayed signal
+                        let delayed = delayBufs[ch][delayIdx[ch]]
+
+                        // One-pole lowpass damping on delayed signal
+                        lpfStores[ch] = delayed * (1.0 - clampedDamp) + lpfStores[ch] * clampedDamp
+
+                        // Write to delay line: input + damped feedback
+                        delayBufs[ch][delayIdx[ch]] = input + lpfStores[ch] * clampedFB
+                        delayIdx[ch] = (delayIdx[ch] + 1) % delaySamples
+
+                        // Mix wet/dry
+                        outData[ch][frame] = input * dry + delayed * wet
+                    }
+                }
+
+                try outputFile.write(from: outBuf)
+                outWritten += chunkSize
+            }
+
+            let newDuration = Double(totalOutputFrames) / sampleRate
             return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
         } catch {
             return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
@@ -701,17 +1191,6 @@ final class AudioEditor {
             let cutEndFrame = max(cutStartFrame, min(AVAudioFramePosition(endTime * sampleRate), totalFrames))
             let crossfadeFrames = Int(crossfadeDuration * sampleRate)
 
-            // Read entire file for crossfade processing
-            guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)) else {
-                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
-            }
-            sourceFile.framePosition = 0
-            try sourceFile.read(into: sourceBuffer, frameCount: AVAudioFrameCount(totalFrames))
-
-            guard let srcData = sourceBuffer.floatChannelData else {
-                throw AudioEditorError.editFailed("Cannot access float channel data")
-            }
-
             let beforeCount = Int(cutStartFrame)
             let afterStart = Int(cutEndFrame)
             let afterCount = Int(totalFrames) - afterStart
@@ -724,47 +1203,83 @@ final class AudioEditor {
                 return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: AudioEditorError.invalidRange)
             }
 
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalOutput)) else {
-                throw AudioEditorError.editFailed("Failed to allocate output buffer")
-            }
-            outputBuffer.frameLength = AVAudioFrameCount(totalOutput)
-
-            guard let outData = outputBuffer.floatChannelData else {
-                throw AudioEditorError.editFailed("Cannot access output channel data")
-            }
-
-            // Copy part before cut (minus crossfade overlap)
-            let beforeEnd = beforeCount - actualCrossfade
-            for ch in 0..<channelCount {
-                for frame in 0..<beforeEnd {
-                    outData[ch][frame] = srcData[ch][frame]
-                }
-            }
-
-            // Crossfade zone: blend end of "before" with start of "after"
-            for i in 0..<actualCrossfade {
-                let t = Float(i) / Float(max(1, actualCrossfade))
-                let fadeOut = 1.0 - t // Before fades out
-                let fadeIn = t        // After fades in
-                let beforeFrame = beforeCount - actualCrossfade + i
-                let afterFrame = afterStart + i
-                for ch in 0..<channelCount {
-                    outData[ch][beforeEnd + i] = srcData[ch][beforeFrame] * fadeOut + srcData[ch][afterFrame] * fadeIn
-                }
-            }
-
-            // Copy remaining after (past crossfade)
-            let afterRemaining = afterCount - actualCrossfade
-            let outputOffset = beforeEnd + actualCrossfade
-            for ch in 0..<channelCount {
-                for frame in 0..<afterRemaining {
-                    outData[ch][outputOffset + frame] = srcData[ch][afterStart + actualCrossfade + frame]
-                }
-            }
-
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
-            try outputFile.write(from: outputBuffer)
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+
+            // 1. Write "before" portion in chunks (up to beforeCount - actualCrossfade)
+            let beforeEnd = beforeCount - actualCrossfade
+            if beforeEnd > 0 {
+                sourceFile.framePosition = 0
+                var written = 0
+                while written < beforeEnd {
+                    let framesToRead = min(chunkFrameCount, AVAudioFrameCount(beforeEnd - written))
+                    buffer.frameLength = 0
+                    try sourceFile.read(into: buffer, frameCount: framesToRead)
+                    try outputFile.write(from: buffer)
+                    written += Int(buffer.frameLength)
+                }
+            }
+
+            // 2. Build crossfade overlap in memory (small — typically < 1 second)
+            if actualCrossfade > 0 {
+                guard let xfadeBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(actualCrossfade)) else {
+                    throw AudioEditorError.editFailed("Failed to allocate crossfade buffer")
+                }
+                xfadeBuffer.frameLength = AVAudioFrameCount(actualCrossfade)
+
+                guard let outData = xfadeBuffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access crossfade channel data")
+                }
+
+                // Read the tail of the "before" region
+                guard let beforeTailBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(actualCrossfade)) else {
+                    throw AudioEditorError.editFailed("Failed to allocate before-tail buffer")
+                }
+                sourceFile.framePosition = AVAudioFramePosition(beforeCount - actualCrossfade)
+                try sourceFile.read(into: beforeTailBuf, frameCount: AVAudioFrameCount(actualCrossfade))
+
+                // Read the head of the "after" region
+                guard let afterHeadBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(actualCrossfade)) else {
+                    throw AudioEditorError.editFailed("Failed to allocate after-head buffer")
+                }
+                sourceFile.framePosition = AVAudioFramePosition(afterStart)
+                try sourceFile.read(into: afterHeadBuf, frameCount: AVAudioFrameCount(actualCrossfade))
+
+                guard let beforeData = beforeTailBuf.floatChannelData,
+                      let afterData = afterHeadBuf.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access crossfade source data")
+                }
+
+                // Blend
+                for i in 0..<actualCrossfade {
+                    let t = Float(i) / Float(max(1, actualCrossfade))
+                    let fadeOut = 1.0 - t
+                    let fadeIn = t
+                    for ch in 0..<channelCount {
+                        outData[ch][i] = beforeData[ch][i] * fadeOut + afterData[ch][i] * fadeIn
+                    }
+                }
+
+                try outputFile.write(from: xfadeBuffer)
+            }
+
+            // 3. Write "after" portion in chunks (past the crossfade overlap)
+            let afterRemaining = afterCount - actualCrossfade
+            if afterRemaining > 0 {
+                sourceFile.framePosition = AVAudioFramePosition(afterStart + actualCrossfade)
+                var written = 0
+                while written < afterRemaining {
+                    let framesToRead = min(chunkFrameCount, AVAudioFrameCount(afterRemaining - written))
+                    buffer.frameLength = 0
+                    try sourceFile.read(into: buffer, frameCount: framesToRead)
+                    try outputFile.write(from: buffer)
+                    written += Int(buffer.frameLength)
+                }
+            }
 
             let newDuration = Double(totalOutput) / sampleRate
             return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)

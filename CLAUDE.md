@@ -82,6 +82,11 @@ Xcode project: `Sonidea.xcodeproj`
 ## Pro-Gated Features
 Edit mode, shared albums, tags, iCloud sync, auto-icons, overdub, projects & versioning, watch auto-sync, metronome/click track, live recording effects, mixer & mixdown
 
+## Temporarily Free Features (for TestFlight testing)
+Edit mode and Overdub — controlled via `ProFeatureContext.temporarilyFree` set in `ProFeatureGate.swift`. To re-gate behind Pro, remove `.editMode` and/or `.recordOverTrack` from that set.
+
+**APP STORE CONNECT REMINDER:** Before every submission to App Store Connect, check if `.editMode` and `.recordOverTrack` should be re-gated behind Pro by removing them from `ProFeatureContext.temporarilyFree` in `ProFeatureGate.swift`.
+
 ## Free Features (previously Pro)
 Recording quality (all presets: Standard, High, Lossless, WAV) — available to all users
 
@@ -165,6 +170,7 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 - iPad uses `sizeClass == .regular` checks for adaptive layout (wider top padding, fullScreenCover for sheets)
 - Watch uses PBXFileSystemSynchronizedRootGroup — Xcode auto-syncs with filesystem
 - Watch app icon matches iOS app icon (Sonidea waveform logo)
+- **watchOS asset catalog rule:** The watch AppIcon.appiconset `Contents.json` must use `"platform": "watchos"` (lowercase). Using `"watchOS"` (camelCase) causes App Store Connect to reject the upload with "Missing Icons" errors. File: `SonideaWatch Watch App/Assets.xcassets/AppIcon.appiconset/Contents.json`
 
 ## Recent Changes (this session)
 - Removed Dual Mono and Spatial recording modes (were not functionally different from Stereo)

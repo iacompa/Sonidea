@@ -99,6 +99,7 @@ actor DataSafetyManager {
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .secondsSince1970
+        e.outputFormatting = [.sortedKeys]
         return e
     }()
 
@@ -299,6 +300,7 @@ enum DataSafetyFileOps {
         // Verify checksum
         let payloadEncoder = JSONEncoder()
         payloadEncoder.dateEncodingStrategy = .secondsSince1970
+        payloadEncoder.outputFormatting = [.sortedKeys]
         guard let payloadData = try? payloadEncoder.encode(envelope.payload) else {
             logger.warning("Cannot re-encode payload for checksum verification: \(url.lastPathComponent)")
             return nil
@@ -363,6 +365,7 @@ enum DataSafetyFileOps {
     static func saveSync<T: Codable>(_ items: [T], collection: CollectionID) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
+        encoder.outputFormatting = [.sortedKeys]
 
         guard let directory = try? ensureDirectory() else {
             logger.error("Cannot ensure directory for sync save of \(collection.rawValue)")

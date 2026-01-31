@@ -72,14 +72,31 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
         let duration = metadata["duration"] as? TimeInterval ?? 0
         let title = metadata["title"] as? String ?? "Watch Recording"
 
+        // Copy file synchronously to a stable location BEFORE dispatching to main.
+        // WCSession may delete the file at file.fileURL after this delegate returns,
+        // so we must preserve it before the async block runs.
+        let stableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + "_" + file.fileURL.lastPathComponent)
+        do {
+            try FileManager.default.copyItem(at: file.fileURL, to: stableURL)
+        } catch {
+            print("PhoneConnectivity: Failed to copy received file to stable location: \(error)")
+            return
+        }
+
         DispatchQueue.main.async { [weak self] in
-            guard let self, let appState = self.appState else { return }
+            guard let self, let appState = self.appState else {
+                // Cleanup stable copy if we can't proceed
+                try? FileManager.default.removeItem(at: stableURL)
+                return
+            }
 
             // Dedup check on main thread to prevent race conditions
             // when multiple files arrive simultaneously
             var importedUUIDs = UserDefaults.standard.stringArray(forKey: self.importedUUIDsKey) ?? []
             if importedUUIDs.contains(uuidString) {
                 print("PhoneConnectivity: Duplicate recording \(uuidString), skipping")
+                try? FileManager.default.removeItem(at: stableURL)
                 return
             }
 
@@ -87,6 +104,7 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             guard appState.supportManager.canUseProFeatures,
                   appState.appSettings.watchSyncEnabled else {
                 print("PhoneConnectivity: Watch sync requires Pro plan and Watch Sync enabled in settings")
+                try? FileManager.default.removeItem(at: stableURL)
                 return
             }
 
@@ -96,7 +114,7 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             // Import the recording into Watch Recordings album
             do {
                 try appState.importRecording(
-                    from: file.fileURL,
+                    from: stableURL,
                     duration: duration,
                     title: title,
                     albumID: Album.watchRecordingsID
@@ -110,6 +128,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             } catch {
                 print("PhoneConnectivity: Failed to import recording: \(error)")
             }
+
+            // Clean up the stable copy (importRecording copies into its own location)
+            try? FileManager.default.removeItem(at: stableURL)
         }
     }
 }

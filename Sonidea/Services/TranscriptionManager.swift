@@ -13,6 +13,7 @@ enum TranscriptionError: Error, LocalizedError {
     case notAvailable
     case recognitionFailed(String)
     case fileNotFound
+    case timeout
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +25,8 @@ enum TranscriptionError: Error, LocalizedError {
             return "Transcription failed: \(message)"
         case .fileNotFound:
             return "Audio file not found."
+        case .timeout:
+            return "Transcription timed out after 120 seconds."
         }
     }
 }
@@ -110,30 +113,61 @@ final class TranscriptionManager {
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
         request.shouldReportPartialResults = false
 
-        // Perform recognition
-        return try await withCheckedThrowingContinuation { continuation in
-            var hasResumed = false
-            recognizer.recognitionTask(with: request) { result, error in
-                guard !hasResumed else { return }
+        // Perform recognition with a 120-second timeout to prevent hanging
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { continuation in
+                    var hasResumed = false
+                    let task = recognizer.recognitionTask(with: request) { result, error in
+                        guard !hasResumed else { return }
 
-                if let error = error {
-                    hasResumed = true
-                    continuation.resume(throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
-                    return
-                }
+                        if let error = error {
+                            hasResumed = true
+                            continuation.resume(throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
+                            return
+                        }
 
-                guard let result = result else {
-                    hasResumed = true
-                    continuation.resume(throwing: TranscriptionError.recognitionFailed("No result returned"))
-                    return
-                }
+                        guard let result = result else {
+                            hasResumed = true
+                            continuation.resume(throwing: TranscriptionError.recognitionFailed("No result returned"))
+                            return
+                        }
 
-                if result.isFinal {
-                    hasResumed = true
-                    let transcript = result.bestTranscription.formattedString
-                    continuation.resume(returning: transcript)
+                        if result.isFinal {
+                            hasResumed = true
+                            let transcript = result.bestTranscription.formattedString
+                            continuation.resume(returning: transcript)
+                        }
+                    }
+
+                    // If the task is cancelled externally (e.g. by timeout), cancel recognition and resume
+                    Task {
+                        await withTaskCancellationHandler {
+                            // Wait indefinitely — the recognition callback above handles completion
+                            while !Task.isCancelled {
+                                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                            }
+                        } onCancel: {
+                            task.cancel()
+                            if !hasResumed {
+                                hasResumed = true
+                                continuation.resume(throwing: TranscriptionError.timeout)
+                            }
+                        }
+                    }
                 }
             }
+
+            // Timeout task
+            group.addTask {
+                try await Task.sleep(nanoseconds: 120_000_000_000) // 120 seconds
+                throw TranscriptionError.timeout
+            }
+
+            // Return the first result and cancel the other task
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 

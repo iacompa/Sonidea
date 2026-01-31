@@ -122,6 +122,9 @@ final class CloudKitSyncEngine {
     private var tombstones: [Tombstone] = []
     private var deviceId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
 
+    /// Tracks the last synced modifiedAt date per record ID to avoid re-uploading unchanged items
+    private var lastSyncedDates: [String: Date] = [:]
+
     // Weak reference to AppState
     weak var appState: AppState?
 
@@ -132,6 +135,7 @@ final class CloudKitSyncEngine {
     private let lastSyncKey = "cloudkit.lastSync"
     private let zoneCreatedKey = "cloudkit.zoneCreated"
     private let subscriptionCreatedKey = "cloudkit.subscriptionCreated"
+    private let lastSyncedDatesKey = "cloudkit.lastSyncedDates"
 
     // MARK: - Initialization
 
@@ -223,7 +227,17 @@ final class CloudKitSyncEngine {
     func saveRecording(_ recording: RecordingItem) async throws {
         guard isEnabled else { return }
 
-        let record = recording.toCKRecord(zoneID: zoneID)
+        // Fetch existing record to preserve server change tag, or create new
+        let recordID = CKRecord.ID(recordName: recording.id.uuidString, zoneID: zoneID)
+        let record: CKRecord
+        do {
+            record = try await privateDatabase.record(for: recordID)
+        } catch {
+            record = CKRecord(recordType: SonideaRecordType.recording.rawValue, recordID: recordID)
+        }
+
+        // Set fields on the (possibly existing) record
+        recording.populateCKRecord(record)
 
         // Add audio file as CKAsset if it exists
         if FileManager.default.fileExists(atPath: recording.fileURL.path) {
@@ -243,20 +257,6 @@ final class CloudKitSyncEngine {
         status = .syncing(progress: 0, description: "Uploading \(recording.title)...")
 
         do {
-            let operation = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: nil)
-            operation.savePolicy = .changedKeys
-            operation.qualityOfService = .userInitiated
-
-            // Progress tracking
-            operation.perRecordProgressBlock = { [weak self] _, progress in
-                Task { @MainActor in
-                    if let index = self?.uploadProgress.firstIndex(where: { $0.id == recording.id }) {
-                        self?.uploadProgress[index].progress = progress
-                    }
-                    self?.status = .syncing(progress: progress, description: "Uploading \(recording.title)...")
-                }
-            }
-
             try await privateDatabase.modifyRecords(saving: [record], deleting: [])
 
             // Mark upload complete
@@ -314,7 +314,16 @@ final class CloudKitSyncEngine {
     func saveTag(_ tag: Tag) async throws {
         guard isEnabled else { return }
 
-        let record = tag.toCKRecord(zoneID: zoneID)
+        // Fetch existing record to preserve server change tag, or create new
+        let recordID = CKRecord.ID(recordName: tag.id.uuidString, zoneID: zoneID)
+        let record: CKRecord
+        do {
+            record = try await privateDatabase.record(for: recordID)
+        } catch {
+            record = CKRecord(recordType: SonideaRecordType.tag.rawValue, recordID: recordID)
+        }
+
+        tag.populateCKRecord(record)
 
         do {
             try await privateDatabase.modifyRecords(saving: [record], deleting: [])
@@ -329,7 +338,16 @@ final class CloudKitSyncEngine {
     func saveAlbum(_ album: Album) async throws {
         guard isEnabled else { return }
 
-        let record = album.toCKRecord(zoneID: zoneID)
+        // Fetch existing record to preserve server change tag, or create new
+        let recordID = CKRecord.ID(recordName: album.id.uuidString, zoneID: zoneID)
+        let record: CKRecord
+        do {
+            record = try await privateDatabase.record(for: recordID)
+        } catch {
+            record = CKRecord(recordType: SonideaRecordType.album.rawValue, recordID: recordID)
+        }
+
+        album.populateCKRecord(record)
 
         do {
             try await privateDatabase.modifyRecords(saving: [record], deleting: [])
@@ -344,7 +362,16 @@ final class CloudKitSyncEngine {
     func saveProject(_ project: Project) async throws {
         guard isEnabled else { return }
 
-        let record = project.toCKRecord(zoneID: zoneID)
+        // Fetch existing record to preserve server change tag, or create new
+        let recordID = CKRecord.ID(recordName: project.id.uuidString, zoneID: zoneID)
+        let record: CKRecord
+        do {
+            record = try await privateDatabase.record(for: recordID)
+        } catch {
+            record = CKRecord(recordType: SonideaRecordType.project.rawValue, recordID: recordID)
+        }
+
+        project.populateCKRecord(record)
 
         do {
             try await privateDatabase.modifyRecords(saving: [record], deleting: [])
@@ -503,31 +530,58 @@ final class CloudKitSyncEngine {
     private func performFullSync() async {
         guard let appState = appState else { return }
 
+        uploadProgress.removeAll()
         status = .syncing(progress: 0, description: "Syncing...")
 
         do {
-            // Upload local changes
+            // Upload local changes — skip items whose modifiedAt hasn't changed since last sync
             let recordings = appState.recordings
             let tags = appState.tags
             let albums = appState.albums
             let projects = appState.projects
 
-            let totalItems = recordings.count + tags.count + albums.count + projects.count
+            // Filter to only items that have changed since last synced
+            let recordingsToSync = recordings.filter { recording in
+                guard let lastSynced = lastSyncedDates[recording.id.uuidString] else { return true }
+                return recording.modifiedAt > lastSynced
+            }
+            let projectsToSync = projects.filter { project in
+                guard let lastSynced = lastSyncedDates[project.id.uuidString] else { return true }
+                return project.updatedAt > lastSynced
+            }
+            // Tags and albums are lightweight — always sync them
+            let totalItems = recordingsToSync.count + tags.count + albums.count + projectsToSync.count
             var completed = 0
 
-            // Batch upload recordings
-            for recording in recordings {
+            logger.info("Full sync: \(recordingsToSync.count)/\(recordings.count) recordings, \(projectsToSync.count)/\(projects.count) projects need upload")
+
+            // Batch upload recordings (only changed ones)
+            for recording in recordingsToSync {
                 status = .syncing(
                     progress: Double(completed) / Double(max(1, totalItems)),
                     description: "Uploading \(recording.title)..."
                 )
-                try await saveRecording(recording)
+                do {
+                    try await withRetry {
+                        try await self.saveRecording(recording)
+                    }
+                    markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
+                } catch {
+                    logger.error("Failed to sync recording after retries: \(error.localizedDescription)")
+                    // Continue with next recording
+                }
                 completed += 1
             }
 
             // Batch upload tags
             for tag in tags {
-                try await saveTag(tag)
+                do {
+                    try await withRetry {
+                        try await self.saveTag(tag)
+                    }
+                } catch {
+                    logger.error("Failed to sync tag after retries: \(error.localizedDescription)")
+                }
                 completed += 1
                 status = .syncing(
                     progress: Double(completed) / Double(max(1, totalItems)),
@@ -537,15 +591,31 @@ final class CloudKitSyncEngine {
 
             // Batch upload albums
             for album in albums {
-                try await saveAlbum(album)
+                do {
+                    try await withRetry {
+                        try await self.saveAlbum(album)
+                    }
+                } catch {
+                    logger.error("Failed to sync album after retries: \(error.localizedDescription)")
+                }
                 completed += 1
             }
 
-            // Batch upload projects
-            for project in projects {
-                try await saveProject(project)
+            // Batch upload projects (only changed ones)
+            for project in projectsToSync {
+                do {
+                    try await withRetry {
+                        try await self.saveProject(project)
+                    }
+                    markSynced(id: project.id.uuidString, modifiedAt: project.updatedAt)
+                } catch {
+                    logger.error("Failed to sync project after retries: \(error.localizedDescription)")
+                }
                 completed += 1
             }
+
+            // Persist the synced dates
+            saveLastSyncedDates()
 
             // Fetch remote changes
             await fetchChanges()
@@ -780,8 +850,21 @@ final class CloudKitSyncEngine {
             tombstones = (try? JSONDecoder().decode([Tombstone].self, from: data)) ?? []
         }
 
+        // Prune old tombstones (older than 90 days)
+        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        let countBefore = tombstones.count
+        tombstones.removeAll { $0.deletedAt < cutoff }
+        if tombstones.count < countBefore {
+            saveTombstones()
+        }
+
         // Load last sync date
         lastSyncDate = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
+
+        // Load last synced dates for incremental sync
+        if let dict = UserDefaults.standard.dictionary(forKey: lastSyncedDatesKey) as? [String: Date] {
+            lastSyncedDates = dict
+        }
     }
 
     private func saveChangeToken() {
@@ -797,20 +880,48 @@ final class CloudKitSyncEngine {
         }
     }
 
+    private func saveLastSyncedDates() {
+        UserDefaults.standard.set(lastSyncedDates, forKey: lastSyncedDatesKey)
+    }
+
+    /// Record that a specific item was successfully synced at a given modifiedAt date
+    private func markSynced(id: String, modifiedAt: Date) {
+        lastSyncedDates[id] = modifiedAt
+    }
+
     private func updateLastSync() {
         lastSyncDate = Date()
         UserDefaults.standard.set(lastSyncDate, forKey: lastSyncKey)
         status = .synced(lastSyncDate!)
+    }
+
+    // MARK: - Retry Helper
+
+    /// Retry an async operation with exponential backoff
+    private func withRetry<T>(maxAttempts: Int = 3, initialDelay: TimeInterval = 1.0, operation: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for attempt in 0..<maxAttempts {
+            do {
+                return try await operation()
+            } catch {
+                lastError = error
+                if attempt < maxAttempts - 1 {
+                    let delay = initialDelay * pow(2.0, Double(attempt))
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    logger.warning("Retry attempt \(attempt + 1) after error: \(error.localizedDescription)")
+                }
+            }
+        }
+        throw lastError!
     }
 }
 
 // MARK: - CKRecord Extensions
 
 extension RecordingItem {
-    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
-        let record = CKRecord(recordType: SonideaRecordType.recording.rawValue, recordID: recordID)
-
+    /// Populate an existing CKRecord with this recording's fields.
+    /// Use this instead of toCKRecord when you already have a record (e.g. fetched from server).
+    func populateCKRecord(_ record: CKRecord) {
         record["title"] = title
         record["notes"] = notes
         record["duration"] = duration
@@ -868,7 +979,12 @@ extension RecordingItem {
         if let secondary = secondaryIcons {
             record["secondaryIcons"] = secondary
         }
+    }
 
+    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+        let record = CKRecord(recordType: SonideaRecordType.recording.rawValue, recordID: recordID)
+        populateCKRecord(record)
         return record
     }
 
@@ -954,14 +1070,17 @@ extension RecordingItem {
 }
 
 extension Tag {
-    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
-        let record = CKRecord(recordType: SonideaRecordType.tag.rawValue, recordID: recordID)
-
+    /// Populate an existing CKRecord with this tag's fields.
+    func populateCKRecord(_ record: CKRecord) {
         record["name"] = name
         record["colorHex"] = colorHex
         record["isProtected"] = isProtected
+    }
 
+    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+        let record = CKRecord(recordType: SonideaRecordType.tag.rawValue, recordID: recordID)
+        populateCKRecord(record)
         return record
     }
 
@@ -978,12 +1097,15 @@ extension Tag {
 }
 
 extension Album {
+    /// Populate an existing CKRecord with this album's fields.
+    func populateCKRecord(_ record: CKRecord) {
+        record["name"] = name
+    }
+
     func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
         let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
         let record = CKRecord(recordType: SonideaRecordType.album.rawValue, recordID: recordID)
-
-        record["name"] = name
-
+        populateCKRecord(record)
         return record
     }
 
@@ -999,10 +1121,8 @@ extension Album {
 }
 
 extension Project {
-    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
-        let record = CKRecord(recordType: SonideaRecordType.project.rawValue, recordID: recordID)
-
+    /// Populate an existing CKRecord with this project's fields.
+    func populateCKRecord(_ record: CKRecord) {
         record["title"] = title
         record["createdAt"] = createdAt
         record["updatedAt"] = updatedAt
@@ -1010,7 +1130,12 @@ extension Project {
         record["notes"] = notes
         record["bestTakeRecordingId"] = bestTakeRecordingId?.uuidString
         record["sortOrder"] = sortOrder
+    }
 
+    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+        let record = CKRecord(recordType: SonideaRecordType.project.rawValue, recordID: recordID)
+        populateCKRecord(record)
         return record
     }
 

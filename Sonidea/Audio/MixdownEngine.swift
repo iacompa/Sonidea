@@ -7,6 +7,7 @@
 //  for faster-than-real-time bounce to a stereo WAV file.
 //
 
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -59,6 +60,15 @@ final class MixdownEngine {
         do {
             // Open all source files
             let baseFile = try AVAudioFile(forReading: baseFileURL)
+
+            // Check disk space before bounce
+            let attrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+            if let freeSize = attrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+                return MixdownResult(outputURL: outputURL, duration: 0, success: false,
+                    error: NSError(domain: "MixdownEngine", code: 10,
+                        userInfo: [NSLocalizedDescriptionKey: "Not enough storage space to bounce. Please free up at least 50MB."]))
+            }
+
             let baseFormat = baseFile.processingFormat
             let sampleRate = baseFormat.sampleRate
 
@@ -143,6 +153,24 @@ final class MixdownEngine {
 
             var position: AVAudioFramePosition = 0
 
+            // Pre-compute pan gains (constant across all chunks)
+            let baseVol = volumes.base
+            let basePan = mixSettings.baseChannel.pan
+            let basePanAngle = (basePan + 1.0) / 2.0 * (.pi / 2.0)
+            let baseLeftGain = baseVol * cos(basePanAngle)
+            let baseRightGain = baseVol * sin(basePanAngle)
+
+            struct LayerGains {
+                let leftGain: Float
+                let rightGain: Float
+            }
+            let layerGains: [LayerGains] = (0..<layerFiles.count).map { layerIdx in
+                let vol = layerIdx < volumes.layers.count ? volumes.layers[layerIdx] : 1.0
+                let pan = layerIdx < mixSettings.layerChannels.count ? mixSettings.layerChannels[layerIdx].pan : 0.0
+                let panAngle = (pan + 1.0) / 2.0 * (.pi / 2.0)
+                return LayerGains(leftGain: vol * cos(panAngle), rightGain: vol * sin(panAngle))
+            }
+
             while position < maxFrames {
                 let framesToProcess = min(chunkSize, AVAudioFrameCount(maxFrames - position))
                 outBuffer.frameLength = framesToProcess
@@ -159,11 +187,6 @@ final class MixdownEngine {
                 // Mix base track (with loop support)
                 let baseLength = baseFile.length
                 if baseIsLooped || position < baseLength {
-                    let vol = volumes.base
-                    let pan = mixSettings.baseChannel.pan
-                    let panAngle = (pan + 1.0) / 2.0 * (.pi / 2.0)
-                    let leftGain = vol * cos(panAngle)
-                    let rightGain = vol * sin(panAngle)
 
                     var outOffset = 0
                     var remaining = Int(framesToProcess)
@@ -181,11 +204,10 @@ final class MixdownEngine {
                         try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
 
                         if let baseData = baseBuffer.floatChannelData {
-                            for i in 0..<readable {
-                                let sample = baseData[0][i]
-                                outLeft[outOffset + i] += sample * leftGain
-                                outRight[outOffset + i] += sample * rightGain
-                            }
+                            var lGain = baseLeftGain
+                            var rGain = baseRightGain
+                            vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
+                            vDSP_vsma(baseData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
                         }
                         outOffset += readable
                         remaining -= readable
@@ -201,11 +223,8 @@ final class MixdownEngine {
 
                     guard let layerBuf = layerBuffers[layerIdx] else { continue }
 
-                    let vol = layerIdx < volumes.layers.count ? volumes.layers[layerIdx] : 1.0
-                    let pan = layerIdx < mixSettings.layerChannels.count ? mixSettings.layerChannels[layerIdx].pan : 0.0
-                    let panAngle = (pan + 1.0) / 2.0 * (.pi / 2.0)
-                    let leftGain = vol * cos(panAngle)
-                    let rightGain = vol * sin(panAngle)
+                    let leftGain = layerGains[layerIdx].leftGain
+                    let rightGain = layerGains[layerIdx].rightGain
 
                     var outOffset = 0
                     var remaining = Int(framesToProcess)
@@ -213,9 +232,10 @@ final class MixdownEngine {
                         let globalPos = position + AVAudioFramePosition(outOffset)
                         let layerPos = globalPos - offsetFrames
                         guard layerPos >= 0 else {
-                            // Haven't reached this layer's start yet — skip one frame
-                            outOffset += 1
-                            remaining -= 1
+                            // Haven't reached this layer's start yet — skip ahead
+                            let framesToSkip = min(remaining, Int(-layerPos))
+                            outOffset += framesToSkip
+                            remaining -= framesToSkip
                             continue
                         }
 
@@ -231,11 +251,10 @@ final class MixdownEngine {
                         try layerFile.read(into: layerBuf, frameCount: AVAudioFrameCount(readable))
 
                         if let layerData = layerBuf.floatChannelData {
-                            for i in 0..<readable {
-                                let sample = layerData[0][i]
-                                outLeft[outOffset + i] += sample * leftGain
-                                outRight[outOffset + i] += sample * rightGain
-                            }
+                            var lGain = leftGain
+                            var rGain = rightGain
+                            vDSP_vsma(layerData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
+                            vDSP_vsma(layerData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
                         }
                         outOffset += readable
                         remaining -= readable

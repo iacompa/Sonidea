@@ -341,6 +341,8 @@ struct EditableWaveformView: View {
                 .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)
         }
         .offset(x: x - 1)
+        .accessibilityLabel("Playhead")
+        .accessibilityValue(formatTimeWithCentiseconds(playheadPosition))
         .highPriorityGesture(
             DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
@@ -407,6 +409,8 @@ struct EditableWaveformView: View {
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
+        .accessibilityLabel("Selection start")
+        .accessibilityValue(formatTimeWithCentiseconds(selectionStart))
         .highPriorityGesture(
             DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
@@ -466,6 +470,8 @@ struct EditableWaveformView: View {
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
+        .accessibilityLabel("Selection end")
+        .accessibilityValue(formatTimeWithCentiseconds(selectionEnd))
         .highPriorityGesture(
             DragGesture(minimumDistance: dragMinDistance)
                 .onChanged { value in
@@ -667,7 +673,7 @@ struct WaveformEditActionsView: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             // Trim button
             EditActionButton(
                 icon: "crop",
@@ -686,25 +692,102 @@ struct WaveformEditActionsView: View {
                 action: onCut
             )
 
-            // Divider
-            Rectangle()
-                .fill(palette.stroke.opacity(0.3))
-                .frame(width: 1, height: 28)
-                .padding(.horizontal, 4)
-
-            // Add Marker button
-            EditActionButton(
-                icon: "flag.fill",
-                label: "Marker",
-                isEnabled: !isProcessing,
-                style: .secondary,
-                action: onAddMarker
-            )
+            // Add Marker button (text only)
+            Button(action: onAddMarker) {
+                Text("Mark")
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                    .foregroundColor(!isProcessing ? palette.accent : palette.textTertiary)
+                    .background(!isProcessing ? palette.accent.opacity(0.12) : palette.inputBackground)
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(!isProcessing ? palette.accent.opacity(0.25) : Color.clear, lineWidth: 1)
+                    )
+            }
+            .disabled(isProcessing)
 
             // Precision toggle
             HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
         }
-        .padding(.horizontal, 4)
+    }
+}
+
+// MARK: - Full-Width Edit Actions Row
+
+struct EditActionsRow: View {
+    let canTrim: Bool
+    let canCut: Bool
+    let isProcessing: Bool
+    @Binding var isPrecisionMode: Bool
+    @Binding var showToolsPanel: Bool
+    let onTrim: () -> Void
+    let onCut: () -> Void
+    let onAddMarker: () -> Void
+    let onMoreTapped: () -> Void
+
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 0) {
+            EditActionButton(
+                icon: "crop",
+                label: "Trim",
+                isEnabled: canTrim && !isProcessing,
+                style: .primary,
+                action: onTrim
+            )
+
+            Spacer()
+
+            EditActionButton(
+                icon: "scissors",
+                label: "Cut",
+                isEnabled: canCut && !isProcessing,
+                style: .destructive,
+                action: onCut
+            )
+
+            Spacer()
+
+            // Mark button (icon + text)
+            Button(action: onAddMarker) {
+                HStack(spacing: 4) {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Mark")
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .foregroundColor(!isProcessing ? palette.accent : palette.textTertiary)
+                .background(!isProcessing ? palette.accent.opacity(0.12) : palette.inputBackground)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(!isProcessing ? palette.accent.opacity(0.25) : Color.clear, lineWidth: 1)
+                )
+            }
+            .disabled(isProcessing)
+
+            Spacer()
+
+            HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
+
+            Spacer()
+
+            EditToolButton(
+                icon: "line.3.horizontal",
+                label: "More",
+                isActive: showToolsPanel,
+                isEnabled: !isProcessing,
+                action: onMoreTapped
+            )
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -729,15 +812,15 @@ struct EditActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                 Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 8)
             .padding(.vertical, 10)
             .foregroundColor(foregroundColor)
             .background(backgroundColor)
@@ -848,19 +931,18 @@ struct HoldForPrecisionButton: View {
     private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Image(systemName: isPrecisionMode ? "scope" : "hand.tap")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
 
             Text(isPrecisionMode ? "0.01s" : "Precision")
-                .font(.caption2)
-                .fontWeight(.medium)
+                .font(.system(size: 10, weight: .medium))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundColor(isPrecisionMode ? .white : palette.textSecondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isPrecisionMode ? palette.accent : palette.inputBackground)

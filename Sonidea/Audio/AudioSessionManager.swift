@@ -123,7 +123,11 @@ final class AudioSessionManager {
             // Automatic mode - but if Bluetooth is connected and causing issues,
             // we may want to prefer the built-in mic for reliability
             // For now, just clear preferred input and let iOS choose
-            try? session.setPreferredInput(nil)
+            do {
+                try session.setPreferredInput(nil)
+            } catch {
+                print("⚠️ [AudioSession] Failed to clear preferred input: \(error.localizedDescription)")
+            }
             print("🎤 [AudioSession] Input set to Automatic")
             return
         }
@@ -139,10 +143,18 @@ final class AudioSessionManager {
             // Preferred input not available
             // If it was built-in mic and we have Bluetooth, try to force built-in
             if let builtIn = builtInMicPort() {
-                try? session.setPreferredInput(builtIn)
+                do {
+                    try session.setPreferredInput(builtIn)
+                } catch {
+                    print("⚠️ [AudioSession] Failed to set fallback built-in mic input: \(error.localizedDescription)")
+                }
                 print("🎤 [AudioSession] Fallback to built-in mic: \(builtIn.portName)")
             } else {
-                try? session.setPreferredInput(nil)
+                do {
+                    try session.setPreferredInput(nil)
+                } catch {
+                    print("⚠️ [AudioSession] Failed to clear preferred input: \(error.localizedDescription)")
+                }
                 print("🎤 [AudioSession] Preferred input not available, using automatic")
             }
         }
@@ -167,10 +179,18 @@ final class AudioSessionManager {
 
         // Try to set preferred sample rate
         let requestedSampleRate = quality.sampleRate
-        try? session.setPreferredSampleRate(requestedSampleRate)
+        do {
+            try session.setPreferredSampleRate(requestedSampleRate)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred sample rate: \(error.localizedDescription)")
+        }
 
         // Set preferred input channel count from recording mode (mono or stereo)
-        try? session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
+        do {
+            try session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+        }
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -213,9 +233,17 @@ final class AudioSessionManager {
         ]
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
-        try? session.setPreferredSampleRate(quality.sampleRate)
+        do {
+            try session.setPreferredSampleRate(quality.sampleRate)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred sample rate: \(error.localizedDescription)")
+        }
         // Set preferred input channel count from recording mode (mono or stereo)
-        try? session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
+        do {
+            try session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+        }
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         actualSampleRate = session.sampleRate
@@ -239,7 +267,11 @@ final class AudioSessionManager {
         try session.setCategory(.playAndRecord, mode: .default, options: options)
 
         // Force mono input - we only record mono for best quality on mobile devices
-        try? session.setPreferredInputNumberOfChannels(1)
+        do {
+            try session.setPreferredInputNumberOfChannels(1)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+        }
 
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
@@ -265,7 +297,11 @@ final class AudioSessionManager {
         isPlaybackActive = false
         if !isRecordingActive {
             let session = AVAudioSession.sharedInstance()
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            do {
+                try session.setActive(false, options: .notifyOthersOnDeactivation)
+            } catch {
+                print("⚠️ [AudioSession] Failed to deactivate after playback: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -273,7 +309,11 @@ final class AudioSessionManager {
         isRecordingActive = false
         if !isPlaybackActive {
             let session = AVAudioSession.sharedInstance()
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            do {
+                try session.setActive(false, options: .notifyOthersOnDeactivation)
+            } catch {
+                print("⚠️ [AudioSession] Failed to deactivate after recording: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -402,11 +442,23 @@ final class AudioSessionManager {
 
         // Request lower latency for overdub
         let requestedSampleRate = quality.sampleRate
-        try? session.setPreferredSampleRate(requestedSampleRate)
-        try? session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
+        do {
+            try session.setPreferredSampleRate(requestedSampleRate)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred sample rate for overdub: \(error.localizedDescription)")
+        }
+        do {
+            try session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred IO buffer duration: \(error.localizedDescription)")
+        }
 
         // Force mono input - we only record mono for best quality on mobile devices
-        try? session.setPreferredInputNumberOfChannels(1)
+        do {
+            try session.setPreferredInputNumberOfChannels(1)
+        } catch {
+            print("⚠️ [AudioSession] Failed to set preferred input channels for overdub: \(error.localizedDescription)")
+        }
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)

@@ -233,9 +233,15 @@ struct ProWaveformEditor: View {
     @State private var leftHandleDragTime: TimeInterval = 0
     @State private var rightHandleDragTime: TimeInterval = 0
 
-    // Region selection state (drag-to-select in edit mode)
+    // Region selection state (hold-to-select in edit mode)
     @State private var isRegionSelecting = false
     @State private var regionSelectAnchorTime: TimeInterval = 0
+
+    // Unified edit-mode drag: decides pan vs region-select based on hold duration
+    enum EditDragMode { case undecided, panning, selecting }
+    @State private var editDragMode: EditDragMode = .undecided
+    @State private var editDragStartDate: Date = .distantPast
+    @State private var editDragStartTranslation: CGSize = .zero
 
     // Height (configurable)
     let waveformHeight: CGFloat
@@ -384,8 +390,10 @@ struct ProWaveformEditor: View {
                     )
                 }
                 .contentShape(Rectangle())
+                .accessibilityLabel("Waveform editor")
+                .accessibilityHint("Double tap to play or pause. Drag to scrub.")
                 .gesture(isEditing
-                    ? AnyGesture(regionSelectGesture(width: width).map { _ in })
+                    ? AnyGesture(editModeDragGesture(width: width).map { _ in })
                     : AnyGesture(panGesture(width: width).map { _ in })
                 )
                 .gesture(tapGesture(width: width))
@@ -564,53 +572,106 @@ struct ProWaveformEditor: View {
             }
     }
 
-    /// In edit mode, dragging on the waveform body selects a region (sets IN/OUT points).
-    /// Drag from left to right or right to left — the selection always covers the dragged range.
-    /// Auto-scrolls when dragging near the edges of the visible area.
-    private func regionSelectGesture(width: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 15)
+    /// Unified edit-mode drag gesture:
+    /// - Tap (lift quickly, minimal movement) → sets playhead
+    /// - Quick swipe (moved >15pt before 0.4s) → pans the waveform
+    /// - Hold in place for 0.4s then drag → selects IN/OUT region
+    ///
+    /// Uses minimumDistance: 0 so the hold timer starts immediately on touch.
+    /// Time check is evaluated before movement check so that a hold always
+    /// wins, even if the user moves quickly after the 0.4s threshold.
+    private func editModeDragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if !isRegionSelecting {
-                    isRegionSelecting = true
-                    // Anchor = where the drag started
-                    var anchor = timeline.xToTime(value.startLocation.x, width: width)
-                    anchor = max(0, min(anchor, duration))
-                    anchor = timeline.quantize(anchor)
-                    regionSelectAnchorTime = anchor
+                // First call — record start time immediately on touch
+                if editDragMode == .undecided && editDragStartDate == .distantPast {
+                    editDragStartDate = Date()
+                    editDragStartTranslation = value.translation
+                    panStartTime = timeline.visibleStartTime
+                }
+
+                let elapsed = Date().timeIntervalSince(editDragStartDate)
+                let movedX = abs(value.translation.width - editDragStartTranslation.width)
+                let movedY = abs(value.translation.height - editDragStartTranslation.height)
+                let totalMoved = sqrt(movedX * movedX + movedY * movedY)
+
+                // Decide mode if still undecided
+                if editDragMode == .undecided {
+                    // Time check FIRST: held >= 0.4s → region select (always wins over movement)
+                    if elapsed >= 0.4 {
+                        editDragMode = .selecting
+                        impactGenerator.impactOccurred(intensity: 0.5)
+                        var anchor = timeline.xToTime(value.startLocation.x, width: width)
+                        anchor = max(0, min(anchor, duration))
+                        anchor = timeline.quantize(anchor)
+                        regionSelectAnchorTime = anchor
+                        isRegionSelecting = true
+                        // Fall through to selecting handler below
+                    } else if totalMoved > 15 {
+                        // Moved enough before hold threshold → pan mode
+                        editDragMode = .panning
+                        isPanning = true
+                        // Fall through to panning handler below
+                    } else {
+                        return  // Still undecided — wait
+                    }
+                }
+
+                // --- Panning ---
+                if editDragMode == .panning {
+                    var deltaX = -value.translation.width
+                    if isPrecisionMode { deltaX *= 0.25 }
+                    let timeDelta = Double(deltaX) / Double(width) * timeline.visibleDuration
+                    let newStartTime = panStartTime + timeDelta
+                    let clampedStart = max(0, min(newStartTime, timeline.duration - timeline.visibleDuration))
+                    if abs(clampedStart - timeline.visibleStartTime) > 0.0001 {
+                        timeline.visibleStartTime = clampedStart
+                    }
+                }
+
+                // --- Region selecting ---
+                if editDragMode == .selecting {
+                    let x = value.location.x
+
+                    // Auto-scroll near edges
+                    let edgeZone: CGFloat = 30
+                    let scrollSpeed = timeline.visibleDuration * 0.03
+                    if x < edgeZone && timeline.visibleStartTime > 0 {
+                        let factor = Double(1 - x / edgeZone)
+                        timeline.pan(by: -scrollSpeed * factor)
+                    } else if x > width - edgeZone && timeline.visibleEndTime < duration {
+                        let factor = Double(1 - (width - x) / edgeZone)
+                        timeline.pan(by: scrollSpeed * factor)
+                    }
+
+                    var current = timeline.xToTime(x, width: width)
+                    current = max(0, min(current, duration))
+                    current = timeline.quantize(current)
+
+                    selectionStart = min(regionSelectAnchorTime, current)
+                    selectionEnd = max(regionSelectAnchorTime, current)
+                }
+            }
+            .onEnded { value in
+                if editDragMode == .selecting {
+                    isRegionSelecting = false
+                    if selectionEnd - selectionStart < 0.02 {
+                        selectionStart = 0
+                        selectionEnd = duration
+                    }
+                    impactGenerator.impactOccurred(intensity: 0.3)
+                } else if editDragMode == .undecided {
+                    // Finger lifted before mode was decided — treat as a tap (set playhead)
+                    var tappedTime = timeline.xToTime(value.startLocation.x, width: width)
+                    tappedTime = max(0, min(tappedTime, duration))
+                    tappedTime = timeline.quantize(tappedTime)
+                    playheadPosition = tappedTime
+                    onSeek(tappedTime)
                     impactGenerator.impactOccurred(intensity: 0.4)
                 }
-
-                let x = value.location.x
-
-                // Auto-scroll when dragging near edges (within 30pt)
-                let edgeZone: CGFloat = 30
-                let scrollSpeed = timeline.visibleDuration * 0.03  // 3% of visible per frame
-                if x < edgeZone && timeline.visibleStartTime > 0 {
-                    let factor = Double(1 - x / edgeZone)  // 0→1 as you approach edge
-                    timeline.pan(by: -scrollSpeed * factor)
-                } else if x > width - edgeZone && timeline.visibleEndTime < duration {
-                    let factor = Double(1 - (width - x) / edgeZone)
-                    timeline.pan(by: scrollSpeed * factor)
-                }
-
-                // Current drag position (recalculate after potential scroll)
-                var current = timeline.xToTime(x, width: width)
-                current = max(0, min(current, duration))
-                current = timeline.quantize(current)
-
-                // Set selection to cover from anchor to current (either direction)
-                selectionStart = min(regionSelectAnchorTime, current)
-                selectionEnd = max(regionSelectAnchorTime, current)
-            }
-            .onEnded { _ in
-                isRegionSelecting = false
-                // Ensure minimum selection width
-                if selectionEnd - selectionStart < 0.02 {
-                    // Too small — treat as a tap; reset to full range
-                    selectionStart = 0
-                    selectionEnd = duration
-                }
-                impactGenerator.impactOccurred(intensity: 0.3)
+                isPanning = false
+                editDragMode = .undecided
+                editDragStartDate = .distantPast
             }
     }
 

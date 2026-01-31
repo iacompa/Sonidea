@@ -43,7 +43,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 
     var fileExtension: String {
         switch self {
-        case .original: return "m4a"
+        case .original: return ""  // sentinel — use recording's actual extension
         case .wav: return "wav"
         case .m4a: return "m4a"
         case .alac: return "m4a"
@@ -108,9 +108,11 @@ final class AudioExporter {
     /// - Returns: A safe filename with the appropriate extension
     func safeFileName(for recording: RecordingItem, format: ExportFormat, existingNames: Set<String> = []) -> String {
         let baseName = sanitizeFilename(recording.title)
+        // For .original, use the recording's actual file extension instead of hardcoded value
+        let ext = format == .original ? recording.fileURL.pathExtension : format.fileExtension
 
         if !existingNames.contains(baseName) {
-            return "\(baseName).\(format.fileExtension)"
+            return "\(baseName).\(ext)"
         }
 
         var counter = 2
@@ -120,7 +122,7 @@ final class AudioExporter {
             uniqueName = "\(baseName) (\(counter))"
         }
 
-        return "\(uniqueName).\(format.fileExtension)"
+        return "\(uniqueName).\(ext)"
     }
 
     /// Legacy convenience for WAV-only callers.
@@ -360,7 +362,8 @@ final class AudioExporter {
             let exportFilename = safeFileName(for: recording, format: format, existingNames: usedNames)
 
             // Track this name (without extension) as used
-            let extLength = format.fileExtension.count + 1 // +1 for the dot
+            let actualExt = format == .original ? recording.fileURL.pathExtension : format.fileExtension
+            let extLength = actualExt.count + 1 // +1 for the dot
             let nameWithoutExtension = String(exportFilename.dropLast(extLength))
             usedNames.insert(nameWithoutExtension)
             usedNamesByFolder[folderName] = usedNames
@@ -451,6 +454,13 @@ final class AudioExporter {
     }
 
     private func manualConvertToWAV(sourceURL: URL, outputURL: URL) throws {
+        // Check disk space before conversion
+        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+            throw NSError(domain: "AudioExporter", code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+        }
+
         let inputFile = try AVAudioFile(forReading: sourceURL)
         let format = inputFile.processingFormat
         let frameCount = AVAudioFrameCount(inputFile.length)
@@ -532,6 +542,13 @@ final class AudioExporter {
     }
 
     private func manualConvertToAAC(sourceURL: URL, outputURL: URL) throws {
+        // Check disk space before conversion
+        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+            throw NSError(domain: "AudioExporter", code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+        }
+
         let inputFile = try AVAudioFile(forReading: sourceURL)
         let format = inputFile.processingFormat
 
@@ -609,6 +626,13 @@ final class AudioExporter {
     }
 
     private func manualConvertToALAC(sourceURL: URL, outputURL: URL) throws {
+        // Check disk space before conversion
+        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+            throw NSError(domain: "AudioExporter", code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+        }
+
         let inputFile = try AVAudioFile(forReading: sourceURL)
         let format = inputFile.processingFormat
 

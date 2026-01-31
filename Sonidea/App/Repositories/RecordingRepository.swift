@@ -194,8 +194,11 @@ enum RecordingRepository {
     ) {
         for i in recordings.indices {
             if recordingIDs.contains(recordings[i].id) {
+                let hadTag = recordings[i].tagIDs.contains(tag.id)
                 recordings[i].tagIDs.removeAll { $0 == tag.id }
-                recordings[i].modifiedAt = Date()
+                if hadTag {
+                    recordings[i].modifiedAt = Date()
+                }
             }
         }
     }
@@ -294,6 +297,12 @@ enum RecordingRepository {
                 overdubGroups.removeAll { $0.id == groupId }
                 removedGroupIDs.insert(groupId)
                 groupsChanged = true
+            } else if recording.overdubRole == .layer,
+                      let groupId = recording.overdubGroupId,
+                      let groupIdx = overdubGroups.firstIndex(where: { $0.id == groupId }) {
+                // Remove this trashed layer from its parent group
+                overdubGroups[groupIdx].layerRecordingIds.removeAll { $0 == recording.id }
+                groupsChanged = true
             }
         }
 
@@ -350,6 +359,12 @@ enum RecordingRepository {
                 recordings.removeAll { group.layerRecordingIds.contains($0.id) && !purgeIds.contains($0.id) }
                 overdubGroups.removeAll { $0.id == groupId }
                 removedGroupIDs.insert(groupId)
+                groupsChanged = true
+            } else if recording.overdubRole == .layer,
+                      let groupId = recording.overdubGroupId,
+                      let groupIdx = overdubGroups.firstIndex(where: { $0.id == groupId }) {
+                // Remove this purged layer from its parent group
+                overdubGroups[groupIdx].layerRecordingIds.removeAll { $0 == recording.id }
                 groupsChanged = true
             }
         }

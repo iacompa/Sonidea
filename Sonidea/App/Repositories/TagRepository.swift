@@ -26,7 +26,7 @@ enum TagRepository {
     }
 
     static func tagUsageCount(_ tag: Tag, in recordings: [RecordingItem]) -> Int {
-        recordings.filter { $0.tagIDs.contains(tag.id) }.count
+        recordings.filter { !$0.isTrashed && $0.tagIDs.contains(tag.id) }.count
     }
 
     static func tagExists(name: String, excludingID: UUID? = nil, in tags: [Tag]) -> Bool {
