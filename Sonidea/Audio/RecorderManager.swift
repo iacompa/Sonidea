@@ -63,6 +63,7 @@ final class RecorderManager: NSObject {
     private var limiterNode: AVAudioUnitEffect?
     private var audioFile: AVAudioFile?
     private var isUsingEngine = false  // Track which recording method is in use
+    private var writeErrorCount = 0  // Track buffer write failures during engine recording
 
     // Legacy AVAudioRecorder (fallback when no gain/limiter needed)
     private var audioRecorder: AVAudioRecorder?
@@ -530,6 +531,9 @@ final class RecorderManager: NSObject {
             print("🎙️ [RecorderManager] Tap format: \(effectiveTapFormat.sampleRate)Hz, \(effectiveTapFormat.channelCount)ch")
             #endif
 
+            // Reset write error counter
+            writeErrorCount = 0
+
             // Create output audio file matching tap format
             let file = try AVAudioFile(
                 forWriting: fileURL,
@@ -553,10 +557,11 @@ final class RecorderManager: NSObject {
                     }
                 }
 
-                writeQueue.async {
+                writeQueue.async { [weak self] in
                     do {
                         try file.write(from: copy)
                     } catch {
+                        self?.writeErrorCount += 1
                         #if DEBUG
                         print("❌ [RecorderManager] Error writing audio buffer: \(error)")
                         #endif
@@ -590,11 +595,9 @@ final class RecorderManager: NSObject {
             applyInputSettings()
 
             // Attach metronome click source to main mixer (NOT to recording chain)
-            // Click goes: ClickSourceNode -> MainMixerNode -> Output (headphones)
+            // Click goes: ClickSourceNode -> MainMixerNode -> Output (speaker/headphones)
             // Recording tap is on LimiterNode, so click is not captured.
-            // Metronome requires headphones to prevent mic picking up the click.
-            let headphonesConnected = AudioSessionManager.shared.isHeadphoneMonitoringActive()
-            if metronome.isEnabled && headphonesConnected {
+            if metronome.isEnabled {
                 let clickNode = metronome.createSourceNode(sampleRate: inputFormat.sampleRate)
                 engine.attach(clickNode)
                 let monoFormat = AVAudioFormat(
@@ -605,11 +608,7 @@ final class RecorderManager: NSObject {
                 )!
                 engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
                 #if DEBUG
-                print("🎵 [RecorderManager] Metronome attached — headphones detected")
-                #endif
-            } else if metronome.isEnabled {
-                #if DEBUG
-                print("🎵 [RecorderManager] Metronome skipped — no headphones detected")
+                print("🎵 [RecorderManager] Metronome click node attached to mainMixerNode")
                 #endif
             }
 
@@ -639,8 +638,8 @@ final class RecorderManager: NSObject {
             // Start the engine
             try engine.start()
 
-            // Start metronome if enabled and headphones are connected
-            if metronome.isEnabled && headphonesConnected {
+            // Start metronome if enabled
+            if metronome.isEnabled {
                 metronome.start()
             }
 
@@ -853,9 +852,15 @@ final class RecorderManager: NSObject {
 
         if !fileVerified {
             #if DEBUG
-            print("❌ [RecorderManager] File verification failed")
+            print("❌ [RecorderManager] File verification failed (write errors: \(writeErrorCount))")
             #endif
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
+        }
+
+        if writeErrorCount > 0 {
+            #if DEBUG
+            print("⚠️ [RecorderManager] \(writeErrorCount) buffer write errors occurred during recording")
+            #endif
         }
 
         // Use wall clock duration for instant stop response.
@@ -974,6 +979,10 @@ final class RecorderManager: NSObject {
         if isUsingEngine {
             do {
                 try audioEngine?.start()
+                // Restart metronome if it was enabled
+                if metronome.isEnabled {
+                    metronome.start()
+                }
             } catch {
                 #if DEBUG
                 print("❌ [RecorderManager] Failed to resume engine: \(error)")

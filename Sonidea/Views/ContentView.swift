@@ -1298,21 +1298,20 @@ struct LevelMeterBar: View {
         ]
     }
 
-    // Gradient color stops aligned to dB boundaries
-    private var gradientStops: [Gradient.Stop] {
-        let greenEnd = dbToPosition(greenEndDB)   // -18 dB
-        let yellowEnd = dbToPosition(yellowEndDB)  // -12 dB
-        let orangeEnd = dbToPosition(orangeEndDB)  // -6 dB
-        return [
-            .init(color: .green,  location: 0),
-            .init(color: .green,  location: greenEnd),
-            .init(color: .yellow, location: greenEnd + 0.001),
-            .init(color: .yellow, location: yellowEnd),
-            .init(color: .orange, location: yellowEnd + 0.001),
-            .init(color: .orange, location: orangeEnd),
-            .init(color: .red,    location: orangeEnd + 0.001),
-            .init(color: .red,    location: 1.0),
-        ]
+    // Single flat color based on current peak level
+    private var meterColor: Color {
+        let greenEnd = dbToPosition(greenEndDB)   // -18 dB → ~0.70
+        let yellowEnd = dbToPosition(yellowEndDB)  // -12 dB → ~0.80
+        let orangeEnd = dbToPosition(orangeEndDB)  // -6 dB → ~0.90
+        if displayLevel >= orangeEnd {
+            return .red
+        } else if displayLevel >= yellowEnd {
+            return .orange
+        } else if displayLevel >= greenEnd {
+            return .yellow
+        } else {
+            return .green
+        }
     }
 
     private let clipThreshold: Float = 0.95  // ~-3 dB input level triggers clip indicator
@@ -1349,15 +1348,9 @@ struct LevelMeterBar: View {
                     Capsule()
                         .fill(Color.gray.opacity(0.15))
 
-                    // Filled meter with DAW-style color gradient
+                    // Filled meter with single flat color based on level
                     Capsule()
-                        .fill(
-                            LinearGradient(
-                                stops: gradientStops,
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
+                        .fill(meterColor)
                         .frame(width: max(0, min(displayLevel * width, width)))
 
                     // Peak hold indicator (thin white line that holds then decays)

@@ -52,7 +52,8 @@ struct WaveformView: View {
                         width: zoomedWidth,
                         height: geometry.size.height,
                         isDarkMode: colorScheme == .dark,
-                        playheadColor: palette.playheadColor
+                        playheadColor: palette.playheadColor,
+                        waveformBarColor: palette.waveformBarColor
                     )
                     .frame(width: zoomedWidth, height: geometry.size.height)
                     .id("waveform")
@@ -61,7 +62,7 @@ struct WaveformView: View {
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03))
+                    .fill(palette.waveformBackground)
             )
             .gesture(
                 MagnificationGesture()
@@ -88,6 +89,7 @@ struct WaveformCanvas: View {
     let height: CGFloat
     let isDarkMode: Bool
     var playheadColor: Color = .white
+    var waveformBarColor: Color = .white
 
     var body: some View {
         Canvas { context, size in
@@ -100,8 +102,8 @@ struct WaveformCanvas: View {
 
             // Theme-based colors
             let gridColor: Color = isDarkMode ? .white.opacity(0.08) : .black.opacity(0.06)
-            // Use playhead color as waveform accent for better visibility on all themes
-            let waveformColor: Color = playheadColor.opacity(0.8)
+            // High-contrast neutral bar color
+            let waveformColor: Color = waveformBarColor
 
             // === 1. Draw Grid (behind waveform) ===
 
@@ -186,10 +188,12 @@ struct DetailsWaveformView: View {
     let progress: Double
     let duration: TimeInterval
     var isPlaying: Bool = false
+    var markers: [Marker] = []
     /// Callback when user taps or drags to seek to a time position (in seconds)
     var onSeek: ((TimeInterval) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePalette) private var palette
 
     // Use the SAME WaveformTimeline as Edit mode for identical zoom/pan behavior
     @State private var timeline: WaveformTimeline?
@@ -198,12 +202,8 @@ struct DetailsWaveformView: View {
     @State private var panStartTime: TimeInterval = 0
     @State private var initialPinchZoom: CGFloat = 1.0
 
-    private var palette: ThemePalette {
-        colorScheme == .dark ? ThemePalette.systemDark : ThemePalette.systemLight
-    }
-
     // Compact ruler height for Details view
-    private let detailsRulerHeight: CGFloat = 20
+    private let detailsRulerHeight: CGFloat = 28
 
     var body: some View {
         GeometryReader { geometry in
@@ -238,6 +238,17 @@ struct DetailsWaveformView: View {
                             showsHorizontalGrid: false  // Cleaner look for Details
                         )
 
+                        // Marker flags
+                        if !markers.isEmpty {
+                            MarkerFlagsOverlay(
+                                markers: markers,
+                                playheadPosition: progress * duration,
+                                timeline: timeline,
+                                width: width,
+                                palette: palette
+                            )
+                        }
+
                         // Playhead overlay (same style as Edit mode)
                         DetailsPlayheadView(
                             progress: progress,
@@ -249,6 +260,8 @@ struct DetailsWaveformView: View {
                         )
                     }
                     .frame(height: waveformHeight)
+                    .background(palette.waveformBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .frame(height: totalHeight)
                 // Pinch to zoom (same as Edit mode)
@@ -259,7 +272,10 @@ struct DetailsWaveformView: View {
                                 initialPinchZoom = timeline.zoomScale
                             }
                             let newScale = initialPinchZoom * value
-                            timeline.zoomScale = min(max(newScale, 1.0), WaveformTimeline.maxZoom)
+                            let clampedScale = min(max(newScale, 1.0), WaveformTimeline.maxZoom)
+                            // Use zoom(to:centeredOn:) to keep visibleStartTime in sync
+                            let centerTime = timeline.visibleStartTime + timeline.visibleDuration / 2
+                            timeline.zoom(to: clampedScale, centeredOn: centerTime)
                         }
                         .onEnded { _ in
                             initialPinchZoom = 1.0

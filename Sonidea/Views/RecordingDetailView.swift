@@ -1324,6 +1324,7 @@ struct RecordingDetailView: View {
                                 .strokeBorder(palette.accent.opacity(0.25), lineWidth: 1)
                         )
                     }
+                    .fixedSize()
                 }
                 .padding(.horizontal, 8)
             }
@@ -1821,6 +1822,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.reverb(
@@ -1840,6 +1843,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Reverb applied"
                     showSkipSilenceResult = true
                 }
@@ -1853,6 +1858,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.echo(
@@ -1871,6 +1878,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Echo applied"
                     showSkipSilenceResult = true
                 }
@@ -1884,6 +1893,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.compressor(
@@ -1900,6 +1911,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Compression applied"
                     showSkipSilenceResult = true
                 }
@@ -1913,6 +1926,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.applyFade(
@@ -1930,6 +1945,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Fade applied"
                     showSkipSilenceResult = true
                 }
@@ -1943,6 +1960,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.normalize(
@@ -1958,6 +1977,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Normalized audio"
                     showSkipSilenceResult = true
                 }
@@ -1971,6 +1992,8 @@ struct RecordingDetailView: View {
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
 
         Task {
             let result = await AudioEditor.shared.noiseGate(
@@ -1986,6 +2009,8 @@ struct RecordingDetailView: View {
                     selectionStart = 0
                     selectionEnd = 0
                     playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
                     skipSilenceResultMessage = "Noise gate applied"
                     showSkipSilenceResult = true
                 }
