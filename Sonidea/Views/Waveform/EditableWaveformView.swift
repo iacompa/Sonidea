@@ -112,8 +112,8 @@ struct EditableWaveformView: View {
                 // Background waveform
                 waveformCanvas(width: width, height: height)
 
-                // Selection overlay (only in edit mode)
-                if isEditing {
+                // Selection overlay (only when there is an active selection)
+                if isEditing && (selectionEnd - selectionStart) > 0.02 {
                     selectionOverlay(width: width, height: height)
                 }
 
@@ -127,8 +127,8 @@ struct EditableWaveformView: View {
                     playbackPlayheadLine(width: width, height: height)
                 }
 
-                // Selection handles (only in edit mode)
-                if isEditing {
+                // Selection handles (only when there is an active selection)
+                if isEditing && (selectionEnd - selectionStart) > 0.02 {
                     leftHandle(width: width, height: height)
                     rightHandle(width: width, height: height)
                 }
@@ -160,18 +160,19 @@ struct EditableWaveformView: View {
             let barWidth = Swift.max(2, availableWidth / CGFloat(barCount))
             let cornerRadius: CGFloat = 1.5
 
-            // Determine colors based on edit mode and selection
-            let playedColor = colorScheme == .dark ? Color.white : palette.accent
-            let unplayedColor = colorScheme == .dark ? Color.white.opacity(0.3) : Color(.systemGray3)
-            let selectedColor = palette.accent.opacity(0.7)
+            // DAW-style waveform: always use accent color for high visibility on all themes
+            let waveformColor = palette.accent
+            let playedColor = waveformColor
+            let unplayedColor = colorScheme == .dark ? waveformColor.opacity(0.6) : waveformColor.opacity(0.5)
 
             let playheadProgress = duration > 0 ? currentTime / duration : 0
             let playheadIndex = Int(playheadProgress * Double(barCount))
 
             let selectionStartProgress = duration > 0 ? selectionStart / duration : 0
-            let selectionEndProgress = duration > 0 ? selectionEnd / duration : 1
+            let selectionEndProgress = duration > 0 ? selectionEnd / duration : 0
             let selectionStartIndex = Int(selectionStartProgress * Double(barCount))
             let selectionEndIndex = Int(selectionEndProgress * Double(barCount))
+            let hasActiveSelection = isEditing && selectionEndIndex > selectionStartIndex
 
             for (index, sample) in samples.enumerated() {
                 let x = CGFloat(index) * (barWidth + barSpacing)
@@ -183,12 +184,13 @@ struct EditableWaveformView: View {
 
                 let color: Color
                 if isEditing {
-                    // In edit mode: show selection highlighting
-                    let isInSelection = index >= selectionStartIndex && index <= selectionEndIndex
-                    if isInSelection {
-                        color = selectedColor
+                    // DAW-style: accent color waveform, dim unselected when selection exists
+                    if hasActiveSelection {
+                        let isInSelection = index >= selectionStartIndex && index <= selectionEndIndex
+                        color = isInSelection ? waveformColor : waveformColor.opacity(0.5)
                     } else {
-                        color = unplayedColor.opacity(0.5)
+                        // No selection: full brightness
+                        color = waveformColor
                     }
                 } else {
                     // Normal playback mode

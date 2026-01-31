@@ -91,7 +91,9 @@ final class LocationManager: NSObject {
 
             return (item.placemark.coordinate, label)
         } catch {
+            #if DEBUG
             print("Geocode error: \(error)")
+            #endif
             return nil
         }
     }
@@ -112,7 +114,9 @@ final class LocationManager: NSObject {
 
             return (location.coordinate, label)
         } catch {
+            #if DEBUG
             print("Geocode error: \(error)")
+            #endif
             return nil
         }
     }
@@ -153,7 +157,9 @@ extension LocationManager: CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        #if DEBUG
         print("Location error: \(error.localizedDescription)")
+        #endif
         Task { @MainActor in
             self.isUpdatingLocation = false
         }

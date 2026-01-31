@@ -8,6 +8,7 @@
 import AVFoundation
 import Foundation
 
+@MainActor
 @Observable
 class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
@@ -38,7 +39,9 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
         } catch {
+            #if DEBUG
             print("WatchRecorder: Audio session error: \(error)")
+            #endif
             return false
         }
 
@@ -68,7 +71,9 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             startMeterTimer()
             return true
         } catch {
+            #if DEBUG
             print("WatchRecorder: Failed to start: \(error)")
+            #endif
             return false
         }
     }
@@ -138,7 +143,9 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         if !flag {
+            #if DEBUG
             print("WatchRecorder: Recording finished unsuccessfully")
+            #endif
         }
         isRecording = false
         stopTimer()

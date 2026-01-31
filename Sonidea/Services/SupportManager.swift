@@ -205,7 +205,9 @@ final class SupportManager {
             await updateAnnualIntroOfferEligibility()
             isLoadingProducts = false
         } catch {
+            #if DEBUG
             print("Failed to load products: \(error)")
+            #endif
             isLoadingProducts = false
         }
     }

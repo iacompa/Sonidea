@@ -55,7 +55,9 @@ final class RecordingLiveActivityManager {
     func startActivity(recordingId: String, startDate: Date) {
         guard #available(iOS 16.1, *) else { return }
         guard isSupported else {
+            #if DEBUG
             print("📱 [LiveActivity] Not supported on this device")
+            #endif
             return
         }
 
@@ -79,9 +81,13 @@ final class RecordingLiveActivityManager {
                 pushType: nil
             )
             currentActivity = activity
+            #if DEBUG
             print("✅ [LiveActivity] Started for recording: \(recordingId)")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ [LiveActivity] Failed to start: \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -89,7 +95,9 @@ final class RecordingLiveActivityManager {
     func updateActivity(isRecording: Bool, pausedDuration: TimeInterval? = nil) {
         guard #available(iOS 16.1, *) else { return }
         guard let activity = currentActivity else {
+            #if DEBUG
             print("⚠️ [LiveActivity] No active activity to update")
+            #endif
             return
         }
 
@@ -100,7 +108,9 @@ final class RecordingLiveActivityManager {
 
         Task {
             await activity.update(.init(state: updatedState, staleDate: nil))
+            #if DEBUG
             print("🔄 [LiveActivity] Updated: isRecording=\(isRecording), pausedDuration=\(pausedDuration ?? 0)")
+            #endif
         }
     }
 
@@ -124,7 +134,9 @@ final class RecordingLiveActivityManager {
                     .init(state: finalState, staleDate: nil),
                     dismissalPolicy: .immediate
                 )
+                #if DEBUG
                 print("🛑 [LiveActivity] Ended current activity")
+                #endif
             }
         }
 
@@ -140,7 +152,9 @@ final class RecordingLiveActivityManager {
         let count = activities.count
 
         if count > 0 {
+            #if DEBUG
             print("🧹 [LiveActivity] Cleaning up \(count) stuck activit\(count == 1 ? "y" : "ies")")
+            #endif
         }
 
         Task {

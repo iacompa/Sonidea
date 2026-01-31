@@ -122,6 +122,10 @@ struct ZoomableWaveformEditor: View {
     @State private var isPanning = false
     @State private var panStartOffset: TimeInterval = 0
 
+    // Pinch-zoom tracking: suppresses pan/selection gestures while pinching
+    @State private var isPinching = false
+    @GestureState private var pinchActive = false
+
     // MARK: - Constants
 
     private var waveformHeight: CGFloat { sizeClass == .regular ? 220 : 160 }
@@ -189,8 +193,8 @@ struct ZoomableWaveformEditor: View {
                         colorScheme: colorScheme
                     )
 
-                    // Selection overlay
-                    if isEditing {
+                    // Selection overlay (only when there is an active selection)
+                    if isEditing && (selectionEnd - selectionStart) > 0.02 {
                         SelectionOverlayView(
                             selectionStart: selectionStart,
                             selectionEnd: selectionEnd,
@@ -227,8 +231,8 @@ struct ZoomableWaveformEditor: View {
                         palette: palette
                     )
 
-                    // Selection handles (high priority to capture touches first)
-                    if isEditing {
+                    // Selection handles (only when there is an active selection)
+                    if isEditing && (selectionEnd - selectionStart) > 0.02 {
                         SelectionHandlesView(
                             selectionStart: $selectionStart,
                             selectionEnd: $selectionEnd,
@@ -246,8 +250,8 @@ struct ZoomableWaveformEditor: View {
                 .gesture(panGesture(width: geometry.size.width))
                 // Tap gesture for seeking
                 .gesture(tapGesture(width: geometry.size.width))
-                // Pinch to zoom
-                .gesture(zoomGesture)
+                // Pinch to zoom (simultaneous so it is recognised alongside pan)
+                .simultaneousGesture(zoomGesture)
             }
             .frame(height: isEditing ? waveformHeight : (sizeClass == .regular ? 140 : 100))
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -280,13 +284,31 @@ struct ZoomableWaveformEditor: View {
                 timelineState.ensureVisible(newTime)
             }
         }
+        .onChange(of: pinchActive) { _, active in
+            // Safety net: @GestureState resets to false when pinch ends.
+            // Clear isPinching if .onEnded was not called (gesture cancelled).
+            if !active && isPinching {
+                isPinching = false
+                isPanning = false
+            }
+        }
     }
 
     // MARK: - Gestures
 
     private var zoomGesture: some Gesture {
         MagnificationGesture()
+            .updating($pinchActive) { _, state, _ in
+                state = true
+            }
             .onChanged { scale in
+                // Mark pinching so pan gesture is suppressed
+                if !isPinching {
+                    isPinching = true
+                    // Cancel any in-progress pan that started before pinch recognition
+                    isPanning = false
+                }
+
                 if initialPinchZoom == 1.0 {
                     initialPinchZoom = timelineState.zoomLevel
                 }
@@ -300,6 +322,7 @@ struct ZoomableWaveformEditor: View {
             }
             .onEnded { _ in
                 initialPinchZoom = 1.0
+                isPinching = false
                 impactGenerator.impactOccurred(intensity: 0.3)
             }
     }
@@ -307,6 +330,9 @@ struct ZoomableWaveformEditor: View {
     private func panGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 15)  // Higher threshold to avoid conflicts with handles
             .onChanged { value in
+                // Suppress pan while pinch-zooming
+                if isPinching || pinchActive { return }
+
                 if !isPanning {
                     isPanning = true
                     panStartOffset = timelineState.visibleStartTime
@@ -326,6 +352,7 @@ struct ZoomableWaveformEditor: View {
             }
             .onEnded { _ in
                 isPanning = false
+                isPinching = false  // Safety: clear pinch flag if drag ended
                 panStartOffset = 0
             }
     }
@@ -509,10 +536,10 @@ struct ZoomableWaveformCanvas: View {
             let barWidth = Swift.max(2, availableWidth / CGFloat(barCount))
             let cornerRadius: CGFloat = 1.5
 
-            // Colors
-            let playedColor = colorScheme == .dark ? Color.white : palette.accent
-            let unplayedColor = colorScheme == .dark ? Color.white.opacity(0.3) : Color(.systemGray3)
-            let selectedColor = palette.accent.opacity(0.7)
+            // DAW-style waveform: always use accent color for visibility on all themes
+            let waveformColor = palette.accent
+            let playedColor = waveformColor
+            let unplayedColor = colorScheme == .dark ? waveformColor.opacity(0.6) : waveformColor.opacity(0.5)
 
             // Playhead and selection indices
             let playheadProgress = (currentTime - timelineState.visibleStartTime) / timelineState.visibleDuration
@@ -522,6 +549,7 @@ struct ZoomableWaveformCanvas: View {
             let selectionEndProgress = (selectionEnd - timelineState.visibleStartTime) / timelineState.visibleDuration
             let selectionStartIndex = Int(selectionStartProgress * Double(barCount))
             let selectionEndIndex = Int(selectionEndProgress * Double(barCount))
+            let hasActiveSelection = isEditing && selectionEndIndex > selectionStartIndex
 
             for (index, sample) in visibleSamples.enumerated() {
                 let x = CGFloat(index) * (barWidth + barSpacing)
@@ -533,11 +561,13 @@ struct ZoomableWaveformCanvas: View {
 
                 let color: Color
                 if isEditing {
-                    let isInSelection = index >= selectionStartIndex && index <= selectionEndIndex
-                    if isInSelection {
-                        color = selectedColor
+                    // DAW-style: accent color waveform, dim unselected when selection exists
+                    if hasActiveSelection {
+                        let isInSelection = index >= selectionStartIndex && index <= selectionEndIndex
+                        color = isInSelection ? waveformColor : waveformColor.opacity(0.5)
                     } else {
-                        color = unplayedColor.opacity(0.5)
+                        // No selection: full brightness
+                        color = waveformColor
                     }
                 } else {
                     color = index < playheadIndex ? playedColor : unplayedColor

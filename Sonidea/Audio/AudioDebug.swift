@@ -15,6 +15,7 @@ enum AudioDebug {
 
     /// Log detailed file information
     static func logFileInfo(url: URL, context: String) {
+        #if DEBUG
         print("🎵 [\(context)] File diagnostics:")
         print("   URL: \(url.path)")
 
@@ -61,6 +62,7 @@ enum AudioDebug {
             print("   Parent directory exists: \(parentExists)")
             print("   Parent directory: \(parentDir.path)")
         }
+        #endif
     }
 
     /// Verify a file exists and has valid audio content
@@ -106,6 +108,7 @@ enum AudioDebug {
 
     /// Log current audio session state
     static func logSessionState(context: String) {
+        #if DEBUG
         let session = AVAudioSession.sharedInstance()
 
         print("🔊 [\(context)] Audio session state:")
@@ -118,10 +121,12 @@ enum AudioDebug {
         let route = session.currentRoute
         print("   Inputs: \(route.inputs.map { $0.portName }.joined(separator: ", "))")
         print("   Outputs: \(route.outputs.map { $0.portName }.joined(separator: ", "))")
+        #endif
     }
 
     /// Log error with context
     static func logError(_ error: Error, context: String) {
+        #if DEBUG
         print("❌ [\(context)] Error: \(error.localizedDescription)")
         if let nsError = error as NSError? {
             print("   Domain: \(nsError.domain)")
@@ -130,6 +135,7 @@ enum AudioDebug {
                 print("   Underlying: \(underlying.localizedDescription)")
             }
         }
+        #endif
     }
 }
 

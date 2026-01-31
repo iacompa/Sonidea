@@ -436,7 +436,9 @@ struct RecordingsListView: View {
                 exportedURL = url
                 showShareSheet = true
             } catch {
+                #if DEBUG
                 print("Export failed: \(error)")
+                #endif
             }
         }
     }
@@ -459,7 +461,9 @@ struct RecordingsListView: View {
                     }
                 }
             } catch {
+                #if DEBUG
                 print("Export failed: \(error)")
+                #endif
             }
         }
     }

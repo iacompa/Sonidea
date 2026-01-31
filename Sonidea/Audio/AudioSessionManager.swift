@@ -49,6 +49,7 @@ final class AudioSessionManager {
 
     /// Log current audio route for debugging
     func logCurrentRoute(context: String = "") {
+        #if DEBUG
         let session = AVAudioSession.sharedInstance()
         let route = session.currentRoute
 
@@ -64,6 +65,7 @@ final class AudioSessionManager {
         print("   Preferred Input: \(session.preferredInput?.portName ?? "None")")
         print("   Available Inputs: \(availableInputs.map { "\($0.portName) (\($0.portType.rawValue))" }.joined(separator: ", "))")
         print("   Sample Rate: \(session.sampleRate) Hz")
+        #endif
     }
 
     /// Get the built-in microphone port from available inputs
@@ -79,11 +81,15 @@ final class AudioSessionManager {
     /// Force built-in mic even when Bluetooth is connected
     func forceBuiltInMic() throws {
         guard let builtIn = builtInMicPort() else {
+            #if DEBUG
             print("⚠️ [AudioSession] Built-in mic not available")
+            #endif
             return
         }
         try AVAudioSession.sharedInstance().setPreferredInput(builtIn)
+        #if DEBUG
         print("🎤 [AudioSession] Forced built-in mic: \(builtIn.portName)")
+        #endif
     }
 
     // MARK: - Input Management
@@ -126,18 +132,26 @@ final class AudioSessionManager {
             do {
                 try session.setPreferredInput(nil)
             } catch {
+                #if DEBUG
                 print("⚠️ [AudioSession] Failed to clear preferred input: \(error.localizedDescription)")
+                #endif
             }
+            #if DEBUG
             print("🎤 [AudioSession] Input set to Automatic")
+            #endif
             return
         }
 
         if let matchingInput = input(for: preferredUID) {
             do {
                 try session.setPreferredInput(matchingInput)
+                #if DEBUG
                 print("🎤 [AudioSession] Preferred input set to: \(matchingInput.portName) (\(matchingInput.portType.rawValue))")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ [AudioSession] Failed to set preferred input: \(error)")
+                #endif
             }
         } else {
             // Preferred input not available
@@ -146,16 +160,24 @@ final class AudioSessionManager {
                 do {
                     try session.setPreferredInput(builtIn)
                 } catch {
+                    #if DEBUG
                     print("⚠️ [AudioSession] Failed to set fallback built-in mic input: \(error.localizedDescription)")
+                    #endif
                 }
+                #if DEBUG
                 print("🎤 [AudioSession] Fallback to built-in mic: \(builtIn.portName)")
+                #endif
             } else {
                 do {
                     try session.setPreferredInput(nil)
                 } catch {
+                    #if DEBUG
                     print("⚠️ [AudioSession] Failed to clear preferred input: \(error.localizedDescription)")
+                    #endif
                 }
+                #if DEBUG
                 print("🎤 [AudioSession] Preferred input not available, using automatic")
+                #endif
             }
         }
     }
@@ -167,9 +189,12 @@ final class AudioSessionManager {
     func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) async throws {
         let session = AVAudioSession.sharedInstance()
 
+        // Remember settings so route-change handler can reapply preferred input
+        lastAppliedSettings = settings
+
         // Use .allowBluetooth (HFP, supports mic) and .allowBluetoothA2DP (output).
         // .playAndRecord with .allowBluetooth will negotiate HFP when input is needed.
-        var options: AVAudioSession.CategoryOptions = [
+        let options: AVAudioSession.CategoryOptions = [
             .defaultToSpeaker,
             .allowBluetooth,
             .allowBluetoothA2DP
@@ -182,42 +207,54 @@ final class AudioSessionManager {
         do {
             try session.setPreferredSampleRate(requestedSampleRate)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred sample rate: \(error.localizedDescription)")
+            #endif
         }
 
         // Set preferred input channel count from recording mode (mono or stereo)
         do {
             try session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+            #endif
         }
+
+        // Apply preferred input BEFORE activation so the session activates
+        // with the correct input already selected.
+        applyPreferredInput(from: settings)
 
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         // Wait for Bluetooth HFP route stabilization if needed.
         // A2DP→HFP transition takes ~200-500ms; without this, inputNode format may be invalid.
-        if isBluetoothOutput() {
+        if isBluetoothOutput() || isBluetoothInput() {
             #if DEBUG
             print("🔄 [AudioSession] Bluetooth detected — waiting for HFP route stabilization")
             #endif
             try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+
+            // Reapply preferred input after route stabilization — the HFP
+            // transition may have changed available inputs.
+            refreshAvailableInputs()
+            applyPreferredInput(from: settings)
         }
 
         // Store actual sample rate
         actualSampleRate = session.sampleRate
 
         if actualSampleRate != requestedSampleRate {
+            #if DEBUG
             print("AudioSession: Requested \(requestedSampleRate)Hz, got \(actualSampleRate)Hz")
+            #endif
         }
-
-        // Apply preferred input
-        applyPreferredInput(from: settings)
 
         // Refresh inputs after activation
         refreshAvailableInputs()
 
-        logCurrentRoute(context: "configureForRecording")
+        logCurrentRoute(context: "configureForRecording (async)")
 
         isRecordingActive = true
     }
@@ -226,7 +263,10 @@ final class AudioSessionManager {
     func configureForRecording(quality: RecordingQualityPreset, settings: AppSettings) throws {
         let session = AVAudioSession.sharedInstance()
 
-        var options: AVAudioSession.CategoryOptions = [
+        // Remember settings so route-change handler can reapply preferred input
+        lastAppliedSettings = settings
+
+        let options: AVAudioSession.CategoryOptions = [
             .defaultToSpeaker,
             .allowBluetooth,
             .allowBluetoothA2DP
@@ -236,20 +276,32 @@ final class AudioSessionManager {
         do {
             try session.setPreferredSampleRate(quality.sampleRate)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred sample rate: \(error.localizedDescription)")
+            #endif
         }
         // Set preferred input channel count from recording mode (mono or stereo)
         do {
             try session.setPreferredInputNumberOfChannels(settings.recordingMode.channelCount)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+            #endif
         }
+
+        // Apply preferred input BEFORE activation so the session activates
+        // with the correct input already selected.
+        applyPreferredInput(from: settings)
+
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         actualSampleRate = session.sampleRate
+
+        // Reapply preferred input after activation — activation may have
+        // changed the route, especially with wired headphones.
         applyPreferredInput(from: settings)
         refreshAvailableInputs()
-        logCurrentRoute(context: "configureForRecording")
+        logCurrentRoute(context: "configureForRecording (sync)")
         isRecordingActive = true
     }
 
@@ -257,12 +309,11 @@ final class AudioSessionManager {
     func configureForRecording() throws {
         let session = AVAudioSession.sharedInstance()
 
-        var options: AVAudioSession.CategoryOptions = [
+        let options: AVAudioSession.CategoryOptions = [
             .defaultToSpeaker,
-            .allowBluetooth
+            .allowBluetooth,
+            .allowBluetoothA2DP
         ]
-
-        options.insert(.allowBluetoothA2DP)
 
         try session.setCategory(.playAndRecord, mode: .default, options: options)
 
@@ -270,7 +321,9 @@ final class AudioSessionManager {
         do {
             try session.setPreferredInputNumberOfChannels(1)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred input channels: \(error.localizedDescription)")
+            #endif
         }
 
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -300,7 +353,9 @@ final class AudioSessionManager {
             do {
                 try session.setActive(false, options: .notifyOthersOnDeactivation)
             } catch {
+                #if DEBUG
                 print("⚠️ [AudioSession] Failed to deactivate after playback: \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -312,7 +367,9 @@ final class AudioSessionManager {
             do {
                 try session.setActive(false, options: .notifyOthersOnDeactivation)
             } catch {
+                #if DEBUG
                 print("⚠️ [AudioSession] Failed to deactivate after recording: \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -408,6 +465,31 @@ final class AudioSessionManager {
         return false
     }
 
+    /// Check if the current input route is Bluetooth (AirPods mic, BT headset mic, etc.)
+    func isBluetoothInput() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        for input in session.currentRoute.inputs {
+            switch input.portType {
+            case .bluetoothHFP, .bluetoothLE:
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Check if a wired headset mic is connected
+    func isWiredHeadsetInput() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        for input in session.currentRoute.inputs {
+            if input.portType == .headsetMic {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Get the current output type name for display
     func currentOutputName() -> String {
         let session = AVAudioSession.sharedInstance()
@@ -445,19 +527,25 @@ final class AudioSessionManager {
         do {
             try session.setPreferredSampleRate(requestedSampleRate)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred sample rate for overdub: \(error.localizedDescription)")
+            #endif
         }
         do {
             try session.setPreferredIOBufferDuration(0.005) // 5ms buffer for low latency
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred IO buffer duration: \(error.localizedDescription)")
+            #endif
         }
 
         // Force mono input - we only record mono for best quality on mobile devices
         do {
             try session.setPreferredInputNumberOfChannels(1)
         } catch {
+            #if DEBUG
             print("⚠️ [AudioSession] Failed to set preferred input channels for overdub: \(error.localizedDescription)")
+            #endif
         }
 
         // Activate the session
@@ -475,7 +563,9 @@ final class AudioSessionManager {
         // Verify we have a valid input route
         let currentInputs = session.currentRoute.inputs
         if currentInputs.isEmpty {
+            #if DEBUG
             print("⚠️ [AudioSession] No input route available after overdub configuration")
+            #endif
         } else {
             #if DEBUG
             for input in currentInputs {
@@ -558,6 +648,10 @@ final class AudioSessionManager {
         }
     }
 
+    /// Settings reference for reapplying preferred input on route changes.
+    /// Set by `configureForRecording` so that route-change handler can reapply.
+    private var lastAppliedSettings: AppSettings?
+
     private func handleRouteChange(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
@@ -582,13 +676,23 @@ final class AudioSessionManager {
             case .routeConfigurationChange: reasonStr = "routeConfigurationChange"
             @unknown default: reasonStr = "unknown(\(reasonValue))"
             }
+            #if DEBUG
             print("🔄 [AudioSession] Route changed: \(reasonStr)")
+            #endif
             logCurrentRoute(context: "after route change")
 
-            // Determine if this requires engine restart (Bluetooth changes typically do)
+            // Reapply preferred input whenever a device is added or removed,
+            // so the user's mic-source selection is honoured after plug/unplug.
+            if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
+                if let settings = lastAppliedSettings {
+                    applyPreferredInput(from: settings)
+                }
+            }
+
+            // Determine if this requires engine restart (device changes typically do)
             switch reason {
             case .newDeviceAvailable, .oldDeviceUnavailable:
-                // Bluetooth device connected/disconnected - engine input may be invalid
+                // Device connected/disconnected - engine input may be invalid
                 requiresEngineRestart = true
                 onRouteChange?(reason)
             case .categoryChange, .override, .routeConfigurationChange:

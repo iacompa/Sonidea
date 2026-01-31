@@ -18,8 +18,8 @@ struct SonideaWatchApp: App {
                 .environment(\.watchPalette, appState.currentPalette)
                 .onAppear {
                     // Wire theme updates from phone
-                    WatchConnectivityService.shared.onThemeUpdate = { [weak appState] rawValue in
-                        appState?.applyTheme(rawValue)
+                    WatchConnectivityService.shared.onThemeUpdate = { rawValue in
+                        appState.applyTheme(rawValue)
                     }
                     WatchConnectivityService.shared.activate()
                 }

@@ -143,7 +143,9 @@ final class OverdubEngine {
         // Validate base file duration
         let actualDuration = Double(baseFile.length) / baseFile.processingFormat.sampleRate
         if abs(actualDuration - baseDuration) > 1.0 {
+            #if DEBUG
             print("⚠️ [OverdubEngine] Base file duration mismatch: expected \(baseDuration)s, actual \(actualDuration)s. Using actual.")
+            #endif
             self.baseDuration = actualDuration
         }
 
@@ -167,13 +169,17 @@ final class OverdubEngine {
                 let layerFile = try AVAudioFile(forReading: layerURL)
 
                 guard layerFile.processingFormat.sampleRate > 0 else {
+                    #if DEBUG
                     print("⚠️ [OverdubEngine] Layer \(index) has invalid sample rate, skipping")
+                    #endif
                     failedLayerIndices.append(index + 1)
                     continue
                 }
 
                 if layerFile.processingFormat.sampleRate != baseSampleRate {
+                    #if DEBUG
                     print("⚠️ [OverdubEngine] Layer \(index) sample rate (\(layerFile.processingFormat.sampleRate)) differs from base (\(baseSampleRate)). AVAudioEngine will convert automatically.")
+                    #endif
                 }
 
                 layerAudioFiles.append(layerFile)
@@ -183,7 +189,9 @@ final class OverdubEngine {
                 engine.connect(layerPlayer, to: mainMixer, format: layerFile.processingFormat)
                 layerPlayerNodes.append(layerPlayer)
             } catch {
+                #if DEBUG
                 print("⚠️ [OverdubEngine] Failed to load layer \(index): \(error)")
+                #endif
                 failedLayerIndices.append(index + 1)
             }
         }
@@ -192,7 +200,9 @@ final class OverdubEngine {
         if !failedLayerIndices.isEmpty {
             let layerNames = failedLayerIndices.map { "Layer \($0)" }.joined(separator: ", ")
             layerWarning = "\(layerNames) could not be loaded and won't play during monitoring."
+            #if DEBUG
             print("⚠️ [OverdubEngine] Failed to load: \(layerNames)")
+            #endif
         } else {
             layerWarning = nil
         }
@@ -202,7 +212,9 @@ final class OverdubEngine {
         if sourceCount > 1 {
             let headroomGain = 1.0 / sqrt(Float(sourceCount))
             engine.mainMixerNode.outputVolume = headroomGain
+            #if DEBUG
             print("🎚️ [OverdubEngine] Auto headroom: \(sourceCount) sources, mixer gain = \(headroomGain)")
+            #endif
         }
 
         // Pre-load PCM buffers for looped tracks (needed for .loops scheduling)
@@ -223,7 +235,9 @@ final class OverdubEngine {
         self.audioEngine = engine
         state = .idle
 
+        #if DEBUG
         print("🎙️ [OverdubEngine] Prepared with base: \(baseFileURL.lastPathComponent), \(layerFileURLs.count) layers")
+        #endif
     }
 
     /// Prepare the engine for preview playback including an unsaved layer
@@ -283,7 +297,9 @@ final class OverdubEngine {
         guard let engine = audioEngine,
               let basePlayer = basePlayerNode,
               let baseFile = baseAudioFile else {
+            #if DEBUG
             print("⚠️ [OverdubEngine] Cannot play: engine not prepared")
+            #endif
             return
         }
 
@@ -376,7 +392,9 @@ final class OverdubEngine {
             startTimer()
 
         } catch {
+            #if DEBUG
             print("❌ [OverdubEngine] Failed to start playback: \(error)")
+            #endif
             recordingError = "Failed to start playback: \(error.localizedDescription)"
         }
     }
@@ -686,7 +704,9 @@ final class OverdubEngine {
             }
         }
 
+        #if DEBUG
         print("🎙️ [OverdubEngine] Started recording to: \(finalURL.lastPathComponent)")
+        #endif
     }
 
     /// Stop recording and return the recorded duration (frame-accurate)
@@ -736,13 +756,17 @@ final class OverdubEngine {
 
         switch type {
         case .began:
+            #if DEBUG
             print("⚠️ [OverdubEngine] Audio interruption began")
+            #endif
             if state == .recording {
                 stopRecordingInternal()
                 recordingError = "Recording was interrupted (phone call or other audio). Your partial recording was saved."
             }
         case .ended:
+            #if DEBUG
             print("ℹ️ [OverdubEngine] Audio interruption ended")
+            #endif
         @unknown default:
             break
         }
@@ -832,7 +856,9 @@ final class OverdubEngine {
             try file.read(into: buffer, frameCount: frameCount)
             return buffer
         } catch {
+            #if DEBUG
             print("⚠️ [OverdubEngine] Failed to load loop buffer: \(error)")
+            #endif
             return nil
         }
     }
@@ -911,12 +937,21 @@ final class OverdubEngine {
         let frameLength = Int(buffer.frameLength)
         guard frameLength > 0 else { return }
 
-        var rms: Float = 0
-        vDSP_rmsqv(channelData[0], 1, &rms, vDSP_Length(frameLength))
+        // True peak detection across all channels for accurate metering
+        var peak: Float = 0
+        let channelCount = Int(buffer.format.channelCount)
+        for ch in 0..<channelCount {
+            for i in 0..<frameLength {
+                let absSample = abs(channelData[ch][i])
+                if absSample > peak {
+                    peak = absSample
+                }
+            }
+        }
 
-        // Convert to normalized level (0...1)
-        let dB = 20 * log10(max(rms, 0.000001))
-        let minDB: Float = -50
+        // Convert peak amplitude to dB with -60 dB floor
+        let dB = 20 * log10(max(peak, 1e-6))
+        let minDB: Float = -60
         let maxDB: Float = 0
         let clampedDB = max(minDB, min(maxDB, dB))
         meterLevel = (clampedDB - minDB) / (maxDB - minDB)

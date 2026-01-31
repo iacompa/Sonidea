@@ -710,26 +710,36 @@ struct ContentView: View {
     // MARK: - Save Recording
 
     private func saveRecording() {
+        #if DEBUG
         print("🎙️ [ContentView] saveRecording() called")
+        #endif
 
         guard let rawData = appState.recorder.stopRecording() else {
+            #if DEBUG
             print("❌ [ContentView] stopRecording() returned nil - no data to save")
+            #endif
             saveErrorMessage = "Recording failed: No audio data was captured. Please check your microphone permissions and try again."
             showSaveErrorAlert = true
             return
         }
 
+        #if DEBUG
         print("🎙️ [ContentView] Got raw data, file: \(rawData.fileURL.lastPathComponent), duration: \(rawData.duration)s")
+        #endif
 
         let result = appState.addRecording(from: rawData)
 
         switch result {
         case .success(let recording):
+            #if DEBUG
             print("✅ [ContentView] Recording saved successfully: \(recording.title)")
+            #endif
             appState.onRecordingSaved()
             currentRoute = .recordings
         case .failure(let errorMessage):
+            #if DEBUG
             print("❌ [ContentView] Failed to save recording: \(errorMessage)")
+            #endif
             saveErrorMessage = "Recording could not be saved: \(errorMessage)"
             showSaveErrorAlert = true
         }
@@ -1236,53 +1246,81 @@ struct RecordingControlsSheet: View {
     }
 }
 
-// MARK: - Level Meter Bar (green → yellow → red with dB scale)
+// MARK: - Level Meter Bar (professional DAW-style dB meter)
 
 struct LevelMeterBar: View {
-    let level: Float   // 0.0 – 1.0 normalized
+    let level: Float   // 0.0 – 1.0 normalized (represents -60 to 0 dB)
     var isPaused: Bool = false
 
     @Environment(\.themePalette) private var palette
 
-    // dB scale marks at perceptually balanced positions
-    private let scaleMarks: [(db: String, normalized: CGFloat)] = [
-        ("-24", 0.20),
-        ("-12", 0.50),
-        ("-3",  0.75),
-        ("0",   0.90),
-    ]
+    // Professional DAW dB color ranges:
+    //   Green:  -60 dB to -18 dB  (safe recording level)
+    //   Yellow: -18 dB to -12 dB  (optimal level)
+    //   Orange: -12 dB to  -6 dB  (hot)
+    //   Red:     -6 dB to   0 dB  (clipping danger)
 
-    private let clipThreshold: Float = 0.97  // ~-1.5 dB input level
+    // Meter range constants
+    private let meterMinDB: Float = -60
+    private let meterMaxDB: Float = 0
+
+    // Color boundary dB values
+    private let greenEndDB: Float = -18
+    private let yellowEndDB: Float = -12
+    private let orangeEndDB: Float = -6
+    // Red ends at 0 dB
+
+    // dB scale tick marks at key boundaries (positions computed from dB)
+    private var scaleMarks: [(db: String, position: CGFloat)] {
+        [
+            ("-48", dbToPosition(-48)),
+            ("-36", dbToPosition(-36)),
+            ("-24", dbToPosition(-24)),
+            ("-18", dbToPosition(-18)),
+            ("-12", dbToPosition(-12)),
+            ("-6",  dbToPosition(-6)),
+            ("0",   dbToPosition(0)),
+        ]
+    }
+
+    // Gradient color stops aligned to dB boundaries
+    private var gradientStops: [Gradient.Stop] {
+        let greenEnd = dbToPosition(greenEndDB)   // -18 dB
+        let yellowEnd = dbToPosition(yellowEndDB)  // -12 dB
+        let orangeEnd = dbToPosition(orangeEndDB)  // -6 dB
+        return [
+            .init(color: .green,  location: 0),
+            .init(color: .green,  location: greenEnd),
+            .init(color: .yellow, location: greenEnd + 0.001),
+            .init(color: .yellow, location: yellowEnd),
+            .init(color: .orange, location: yellowEnd + 0.001),
+            .init(color: .orange, location: orangeEnd),
+            .init(color: .red,    location: orangeEnd + 0.001),
+            .init(color: .red,    location: 1.0),
+        ]
+    }
+
+    private let clipThreshold: Float = 0.95  // ~-3 dB input level triggers clip indicator
 
     @State private var displayLevel: CGFloat = 0
+    @State private var peakHoldLevel: CGFloat = 0
     @State private var isClipping = false
     @State private var clipTask: Task<Void, Never>?
+    @State private var peakHoldTask: Task<Void, Never>?
 
-    /// Convert normalized level (0-1, representing -50 to 0 dB) to display position.
-    /// Perceptually balanced piecewise mapping:
-    ///   -50 to -24 dB → 0% to 20%  (noise floor)
-    ///   -24 to -12 dB → 20% to 50% (normal speech)
-    ///   -12 to  -3 dB → 50% to 75% (loud speech/instruments)
-    ///    -3 to   0 dB → 75% to 90% (near clip)
-    ///     0 to  +3 dB → 90% to 100% (clipping)
+    /// Convert a dB value (-60..0) to a normalized position (0..1) on the meter.
+    /// Uses a linear dB scale — since dB is already logarithmic, a linear mapping
+    /// of dB values produces the correct perceptual spacing for a professional meter.
+    private func dbToPosition(_ dB: Float) -> CGFloat {
+        let clamped = max(meterMinDB, min(meterMaxDB, dB))
+        return CGFloat((clamped - meterMinDB) / (meterMaxDB - meterMinDB))
+    }
+
+    /// Convert a normalized level (0..1, representing -60..0 dB linearly)
+    /// to a meter display position. Since the input is already in linear-dB space
+    /// (computed in RecorderManager), we use it directly — no additional warping needed.
     private func levelToPosition(_ level: Float) -> CGFloat {
-        let dB = level * 50 - 50  // normalized 0-1 to -50..0 dB range
-        if dB <= -24 {
-            // -50 to -24 dB → 0% to 20% (noise floor, 26 dB range)
-            return CGFloat(max(0, (dB + 50) / 26.0 * 0.20))
-        } else if dB <= -12 {
-            // -24 to -12 dB → 20% to 50% (normal speech, 12 dB range)
-            return CGFloat(0.20 + (dB + 24) / 12.0 * 0.30)
-        } else if dB <= -3 {
-            // -12 to -3 dB → 50% to 75% (loud speech/instruments, 9 dB range)
-            return CGFloat(0.50 + (dB + 12) / 9.0 * 0.25)
-        } else if dB <= 0 {
-            // -3 to 0 dB → 75% to 90% (near clip, 3 dB range)
-            return CGFloat(0.75 + (dB + 3) / 3.0 * 0.15)
-        } else {
-            // 0 to +3 dB → 90% to 100% (clipping)
-            return CGFloat(min(1.0, 0.90 + dB / 3.0 * 0.10))
-        }
+        return CGFloat(max(0, min(1, level)))
     }
 
     var body: some View {
@@ -1292,28 +1330,32 @@ struct LevelMeterBar: View {
                 let width = geo.size.width
 
                 ZStack(alignment: .leading) {
-                    // Background track
+                    // Background track with subtle segmented dB marks
                     Capsule()
                         .fill(Color.gray.opacity(0.15))
 
-                    // Filled meter with gradient
+                    // Filled meter with DAW-style color gradient
                     Capsule()
                         .fill(
                             LinearGradient(
-                                stops: [
-                                    .init(color: .green, location: 0),
-                                    .init(color: .green, location: 0.50),
-                                    .init(color: .yellow, location: 0.60),
-                                    .init(color: .orange, location: 0.75),
-                                    .init(color: .red, location: 1.0),
-                                ],
+                                stops: gradientStops,
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
                         .frame(width: max(0, min(displayLevel * width, width)))
 
-                    // Clip dot
+                    // Peak hold indicator (thin white line that holds then decays)
+                    if peakHoldLevel > 0.01 && !isPaused {
+                        let peakX = min(peakHoldLevel * width, width - 1)
+                        Rectangle()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: 2, height: geo.size.height)
+                            .position(x: peakX, y: geo.size.height / 2)
+                            .shadow(color: .white.opacity(0.5), radius: 1)
+                    }
+
+                    // Clip dot at far right
                     if isClipping && !isPaused {
                         HStack {
                             Spacer()
@@ -1324,9 +1366,9 @@ struct LevelMeterBar: View {
                         }
                     }
 
-                    // dB tick lines
+                    // dB tick lines at key boundaries
                     ForEach(scaleMarks, id: \.db) { mark in
-                        let x = mark.normalized * width
+                        let x = mark.position * width
                         Rectangle()
                             .fill(palette.textSecondary.opacity(0.3))
                             .frame(width: 1)
@@ -1337,15 +1379,24 @@ struct LevelMeterBar: View {
             .frame(height: 4)
             .clipShape(Capsule())
 
-            // dB labels
+            // dB labels below the meter
             GeometryReader { geo in
                 let width = geo.size.width
-                ForEach(scaleMarks, id: \.db) { mark in
-                    let x = mark.normalized * width
+                // Show a subset of labels to avoid crowding
+                let labelMarks: [(db: String, position: CGFloat)] = [
+                    ("-48", dbToPosition(-48)),
+                    ("-24", dbToPosition(-24)),
+                    ("-18", dbToPosition(-18)),
+                    ("-12", dbToPosition(-12)),
+                    ("-6",  dbToPosition(-6)),
+                    ("0",   dbToPosition(0)),
+                ]
+                ForEach(labelMarks, id: \.db) { mark in
+                    let x = mark.position * width
                     Text(mark.db)
                         .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .foregroundColor(palette.textSecondary.opacity(0.6))
-                        .position(x: min(x, width - 8), y: 5)
+                        .position(x: min(max(x, 10), width - 8), y: 5)
                 }
             }
             .frame(height: 10)
@@ -1355,12 +1406,31 @@ struct LevelMeterBar: View {
             let newDisplay = isPaused ? CGFloat(0) : levelToPosition(newLevel)
             displayLevel = newDisplay
 
-            // Hold clip indicator for 500ms after clipping
+            // Peak hold: capture new peaks, hold for 1.5 seconds, then drop
+            if newDisplay > peakHoldLevel {
+                peakHoldLevel = newDisplay
+                // Reset the decay timer on each new peak
+                peakHoldTask?.cancel()
+                peakHoldTask = Task { @MainActor in
+                    // Hold the peak for 1.5 seconds
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard !Task.isCancelled else { return }
+                    // Decay the peak hold over ~500ms (10 steps)
+                    for _ in 0..<10 {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        guard !Task.isCancelled else { return }
+                        peakHoldLevel = max(peakHoldLevel - 0.1, 0)
+                    }
+                    peakHoldLevel = 0
+                }
+            }
+
+            // Hold clip indicator for 1 second after clipping detected
             if newLevel >= clipThreshold && !isPaused {
                 isClipping = true
                 clipTask?.cancel()
                 clipTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                     guard !Task.isCancelled else { return }
                     isClipping = false
                 }
@@ -1369,7 +1439,10 @@ struct LevelMeterBar: View {
         .onChange(of: isPaused) { _, paused in
             if paused {
                 displayLevel = 0
+                peakHoldLevel = 0
                 isClipping = false
+                peakHoldTask?.cancel()
+                clipTask?.cancel()
             }
         }
     }
@@ -1475,6 +1548,8 @@ struct SearchSheetView: View {
     @State private var searchMode: SearchMode = .default
     @State private var searchScope: SearchScope = .recordings
     @State private var searchQuery = ""
+    @State private var debouncedQuery = ""
+    @State private var searchTask: Task<Void, Never>?
     @State private var selectedTagIDs: Set<UUID> = []
     @State private var selectedRecording: RecordingItem?
     @State private var computedStorageUsed: String = "…"
@@ -1482,15 +1557,15 @@ struct SearchSheetView: View {
     @State private var selectedProject: Project?
 
     private var recordingResults: [RecordingItem] {
-        appState.searchRecordings(query: searchQuery, filterTagIDs: selectedTagIDs)
+        appState.searchRecordings(query: debouncedQuery, filterTagIDs: selectedTagIDs)
     }
 
     private var albumResults: [Album] {
-        appState.searchAlbums(query: searchQuery)
+        appState.searchAlbums(query: debouncedQuery)
     }
 
     private var projectResults: [Project] {
-        appState.searchProjects(query: searchQuery)
+        appState.searchProjects(query: debouncedQuery)
     }
 
     private var searchPlaceholder: String {
@@ -1594,6 +1669,18 @@ struct SearchSheetView: View {
             .onChange(of: searchScope) { _, _ in
                 if searchScope != .recordings { selectedTagIDs.removeAll() }
             }
+            .onChange(of: searchQuery) { _, newValue in
+                searchTask?.cancel()
+                searchTask = Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
+                    guard !Task.isCancelled else { return }
+                    debouncedQuery = newValue
+                }
+            }
+            .onChange(of: selectedTagIDs) { _, _ in
+                // Tag filter changes should apply immediately (no debounce)
+                debouncedQuery = searchQuery
+            }
         }
         .task {
             let recordings = appState.activeRecordings
@@ -1686,13 +1773,13 @@ struct SearchSheetView: View {
     // MARK: - Calendar Search Content
 
     private var calendarSearchContent: some View {
-        SearchCalendarView(searchQuery: searchQuery, selectedRecording: $selectedRecording)
+        SearchCalendarView(searchQuery: debouncedQuery, selectedRecording: $selectedRecording)
     }
 
     // MARK: - Timeline Search Content
 
     private var timelineSearchContent: some View {
-        SearchTimelineView(searchQuery: searchQuery, selectedRecording: $selectedRecording)
+        SearchTimelineView(searchQuery: debouncedQuery, selectedRecording: $selectedRecording)
     }
 
     // MARK: - Recordings Results
@@ -4245,7 +4332,9 @@ struct MicrophoneSelectorSheet: View {
         do {
             try AudioSessionManager.shared.setPreferredInput(uid: uid)
         } catch {
+            #if DEBUG
             print("Failed to set preferred input: \(error)")
+            #endif
         }
 
         dismiss()

@@ -224,7 +224,6 @@ struct RecordingDetailView: View {
         _editedSecondaryIcons = State(initialValue: recording.secondaryIcons ?? [])
         _localEQSettings = State(initialValue: recording.eqSettings ?? .flat)
         _editedMarkers = State(initialValue: recording.markers)
-        _selectionEnd = State(initialValue: recording.duration)
         // Store original hex to avoid overwriting with lossy Color -> hex conversion
         self.originalIconColorHex = recording.iconColorHex
         self.isOpenedFromProject = isOpenedFromProject
@@ -841,9 +840,9 @@ struct RecordingDetailView: View {
                                 // Capture playhead position BEFORE pausing
                                 let capturedTime = playback.currentTime
                                 playback.pause()
+                                // Start with no selection (user drags to create one)
                                 selectionStart = 0
-                                // Use actual playback duration for accurate timeline (not stored duration)
-                                selectionEnd = playback.duration > 0 ? playback.duration : currentRecording.duration
+                                selectionEnd = 0
                                 // Set playhead to captured position (quantized to 0.01s)
                                 editPlayheadPosition = (capturedTime / 0.01).rounded() * 0.01
                                 isEditingWaveform = true
@@ -889,7 +888,9 @@ struct RecordingDetailView: View {
                             // Ensure waveform loading is triggered when this view appears
                             // This handles cases where the pre-load failed or was skipped
                             if highResWaveformData == nil && !isLoadingHighResWaveform {
+                                #if DEBUG
                                 print("🎨 [Waveform] Loading view appeared - triggering load")
+                                #endif
                                 loadHighResWaveform(force: true)
                             }
                             // Ensure playback is loaded to get accurate duration
@@ -954,7 +955,10 @@ struct RecordingDetailView: View {
                         fallbackSamples: waveformSamples,
                         progress: playbackProgress,
                         duration: playback.duration > 0 ? playback.duration : currentRecording.duration,
-                        isPlaying: playback.isPlaying
+                        isPlaying: playback.isPlaying,
+                        onSeek: { time in
+                            playback.seek(to: time)
+                        }
                     )
                     .frame(height: compactWaveformHeight)
                 }
@@ -975,9 +979,8 @@ struct RecordingDetailView: View {
                             fadeDuration: effectiveEditDuration,
                             hasFadeApplied: hasFadeApplied,
                             onApplyFade: { fadeIn, fadeOut, curve in
-                                appliedFadeIn = fadeIn
-                                appliedFadeOut = fadeOut
-                                appliedFadeCurve = curve
+                                // Undo previous application if re-applying with new params
+                                if hasFadeApplied { undoLastEdit() }
                                 hasFadeApplied = true
                                 applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
                             },
@@ -985,7 +988,7 @@ struct RecordingDetailView: View {
                             peakTarget: $appliedPeakTarget,
                             hasPeakApplied: hasPeakApplied,
                             onApplyPeak: { target in
-                                appliedPeakTarget = target
+                                if hasPeakApplied { undoLastEdit() }
                                 hasPeakApplied = true
                                 applyNormalize(targetDb: target)
                             },
@@ -993,7 +996,7 @@ struct RecordingDetailView: View {
                             gateThreshold: $appliedGateThreshold,
                             hasGateApplied: hasGateApplied,
                             onApplyGate: { threshold in
-                                appliedGateThreshold = threshold
+                                if hasGateApplied { undoLastEdit() }
                                 hasGateApplied = true
                                 applyNoiseGate(threshold: threshold)
                             },
@@ -1002,8 +1005,7 @@ struct RecordingDetailView: View {
                             compReduction: $appliedCompressPeakReduction,
                             hasCompressApplied: hasCompressApplied,
                             onApplyCompress: { gain, reduction in
-                                appliedCompressGain = gain
-                                appliedCompressPeakReduction = reduction
+                                if hasCompressApplied { undoLastEdit() }
                                 hasCompressApplied = true
                                 applyCompression(gain: gain, peakReduction: reduction)
                             },
@@ -1015,11 +1017,7 @@ struct RecordingDetailView: View {
                             reverbWetDry: $appliedReverbWetDry,
                             hasReverbApplied: hasReverbApplied,
                             onApplyReverb: { room, preDelay, decay, damping, wetDry in
-                                appliedReverbRoomSize = room
-                                appliedReverbPreDelay = preDelay
-                                appliedReverbDecay = decay
-                                appliedReverbDamping = damping
-                                appliedReverbWetDry = wetDry
+                                if hasReverbApplied { undoLastEdit() }
                                 hasReverbApplied = true
                                 applyReverb(roomSize: room, preDelay: preDelay, decay: decay, damping: damping, wetDry: wetDry)
                             },
@@ -1030,10 +1028,7 @@ struct RecordingDetailView: View {
                             echoWetDry: $appliedEchoWetDry,
                             hasEchoApplied: hasEchoApplied,
                             onApplyEcho: { delay, feedback, damping, wetDry in
-                                appliedEchoDelay = delay
-                                appliedEchoFeedback = feedback
-                                appliedEchoDamping = damping
-                                appliedEchoWetDry = wetDry
+                                if hasEchoApplied { undoLastEdit() }
                                 hasEchoApplied = true
                                 applyEcho(delay: delay, feedback: feedback, damping: damping, wetDry: wetDry)
                             },
@@ -1057,14 +1052,83 @@ struct RecordingDetailView: View {
                         .padding(.horizontal, 8)
                     }
 
-                    // Selection time display with nudge controls (0.01s precision)
-                    // Center shows live playhead time during playback/scrubbing
-                    SelectionTimeDisplay(
-                        selectionStart: $selectionStart,
-                        selectionEnd: $selectionEnd,
-                        duration: effectiveEditDuration,
-                        playheadPosition: editPlayheadPosition
-                    )
+                    // Compact playback controls bar (positioned close to waveform)
+                    HStack(spacing: 12) {
+                        // Speed button
+                        Button {
+                            cycleSpeed()
+                        } label: {
+                            Text(String(format: "%.1fx", playback.playbackSpeed))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(palette.accent)
+                                .frame(width: 42, height: 32)
+                                .background(palette.accent.opacity(0.15))
+                                .cornerRadius(7)
+                        }
+
+                        Spacer()
+
+                        // Skip backward
+                        Button {
+                            let skipAmount = -Double(appState.appSettings.skipInterval.rawValue)
+                            let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
+                            editPlayheadPosition = newTime
+                            playback.seek(to: newTime)
+                        } label: {
+                            Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
+                                .font(.system(size: 22))
+                                .foregroundColor(palette.textPrimary)
+                                .frame(width: 36, height: 36)
+                        }
+
+                        // Play/Pause
+                        Button {
+                            if playback.isPlaying {
+                                playback.pause()
+                            } else {
+                                if !playback.isLoaded {
+                                    let audioURL = pendingAudioEdit ?? currentRecording.fileURL
+                                    playback.load(url: audioURL)
+                                }
+                                playback.seek(to: editPlayheadPosition)
+                                playback.play()
+                            }
+                        } label: {
+                            Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(palette.accent)
+                        }
+
+                        // Skip forward
+                        Button {
+                            let skipAmount = Double(appState.appSettings.skipInterval.rawValue)
+                            let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
+                            editPlayheadPosition = newTime
+                            playback.seek(to: newTime)
+                        } label: {
+                            Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
+                                .font(.system(size: 22))
+                                .foregroundColor(palette.textPrimary)
+                                .frame(width: 36, height: 36)
+                        }
+
+                        Spacer()
+
+                        // EQ button
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showEQPanel.toggle()
+                            }
+                        } label: {
+                            Text("EQ")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(showEQPanel ? .white : .purple)
+                                .frame(width: 42, height: 32)
+                                .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
+                                .cornerRadius(7)
+                        }
+                    }
+                    .padding(.horizontal, 4)
 
                     // Edit actions: Trim, Cut, Mark, Precision + More Tools
                     EditActionsRow(
@@ -1164,101 +1228,72 @@ struct RecordingDetailView: View {
                 .frame(height: 20)
             }
 
-            // Playback controls - Apple-like symmetric single row
-            // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ EQ ]
-            HStack(spacing: 16) {
-                // Speed button (left edge)
-                Button {
-                    cycleSpeed()
-                } label: {
-                    Text(String(format: "%.1fx", playback.playbackSpeed))
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.blue)
-                        .frame(width: 48, height: 36)
-                        .background(Color.blue.opacity(0.15))
-                        .cornerRadius(8)
-                }
-
-                Spacer()
-
-                // Skip backward
-                Button {
-                    let skipAmount = -Double(appState.appSettings.skipInterval.rawValue)
-                    if isEditingWaveform {
-                        // In edit mode: update editor playhead and sync to playback
-                        let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
-                        editPlayheadPosition = newTime
-                        playback.seek(to: newTime)
-                    } else {
-                        playback.skip(seconds: skipAmount)
+            // Playback controls - only shown when NOT in edit mode
+            // (In edit mode, compact controls are positioned right below the waveform)
+            if !isEditingWaveform {
+                // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ EQ ]
+                HStack(spacing: 16) {
+                    // Speed button (left edge)
+                    Button {
+                        cycleSpeed()
+                    } label: {
+                        Text(String(format: "%.1fx", playback.playbackSpeed))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.blue)
+                            .frame(width: 48, height: 36)
+                            .background(Color.blue.opacity(0.15))
+                            .cornerRadius(8)
                     }
-                } label: {
-                    Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
-                        .font(.system(size: 28))
-                        .foregroundColor(palette.textPrimary)
-                        .frame(width: 44, height: 44)
-                }
 
-                // Play/Pause (centered)
-                Button {
-                    if isEditingWaveform {
-                        if playback.isPlaying {
-                            // Pause playback
-                            playback.pause()
-                        } else {
-                            // In edit mode: ensure engine is loaded and seek to playhead before playing
-                            if !playback.isLoaded {
-                                let audioURL = pendingAudioEdit ?? currentRecording.fileURL
-                                playback.load(url: audioURL)
-                            }
-                            // Seek to the editor playhead position, then play
-                            playback.seek(to: editPlayheadPosition)
-                            playback.play()
-                        }
-                    } else {
+                    Spacer()
+
+                    // Skip backward
+                    Button {
+                        playback.skip(seconds: -Double(appState.appSettings.skipInterval.rawValue))
+                    } label: {
+                        Image(systemName: "gobackward.\(appState.appSettings.skipInterval.rawValue)")
+                            .font(.system(size: 28))
+                            .foregroundColor(palette.textPrimary)
+                            .frame(width: 44, height: 44)
+                    }
+
+                    // Play/Pause (centered)
+                    Button {
                         playback.togglePlayPause()
+                    } label: {
+                        Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 56))
+                            .foregroundColor(palette.accent)
                     }
-                } label: {
-                    Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 56))
-                        .foregroundColor(palette.accent)
-                }
 
-                // Skip forward
-                Button {
-                    let skipAmount = Double(appState.appSettings.skipInterval.rawValue)
-                    if isEditingWaveform {
-                        // In edit mode: update editor playhead and sync to playback
-                        let newTime = max(0, min(effectiveEditDuration, editPlayheadPosition + skipAmount))
-                        editPlayheadPosition = newTime
-                        playback.seek(to: newTime)
-                    } else {
-                        playback.skip(seconds: skipAmount)
+                    // Skip forward
+                    Button {
+                        playback.skip(seconds: Double(appState.appSettings.skipInterval.rawValue))
+                    } label: {
+                        Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
+                            .font(.system(size: 28))
+                            .foregroundColor(palette.textPrimary)
+                            .frame(width: 44, height: 44)
                     }
-                } label: {
-                    Image(systemName: "goforward.\(appState.appSettings.skipInterval.rawValue)")
-                        .font(.system(size: 28))
-                        .foregroundColor(palette.textPrimary)
-                        .frame(width: 44, height: 44)
-                }
 
-                Spacer()
+                    Spacer()
 
-                // EQ button (right edge)
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showEQPanel.toggle()
+                    // EQ button (right edge)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showEQPanel.toggle()
+                        }
+                    } label: {
+                        Text("EQ")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(showEQPanel ? .white : .purple)
+                            .frame(width: 48, height: 36)
+                            .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
+                            .cornerRadius(8)
                     }
-                } label: {
-                    Text("EQ")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(showEQPanel ? .white : .purple)
-                        .frame(width: 48, height: 36)
-                        .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
-                        .cornerRadius(8)
                 }
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 8)
 
             Text(currentRecording.formattedDate)
                 .font(.caption)
@@ -1278,13 +1313,14 @@ struct RecordingDetailView: View {
     // MARK: - Waveform Edit Helpers
 
     private var canPerformTrim: Bool {
-        // Can trim if selection is not the entire duration
+        // Can trim if there is an active selection that is not the entire duration
         let duration = pendingDuration ?? playback.duration
-        return selectionStart > 0.1 || selectionEnd < (duration - 0.1)
+        let hasSelection = selectionEnd - selectionStart > 0.02
+        return hasSelection && (selectionStart > 0.1 || selectionEnd < (duration - 0.1))
     }
 
     private var canPerformCut: Bool {
-        // Can cut if selection is not the entire duration and has some content
+        // Can cut if there is an active selection that is not the entire duration
         let duration = pendingDuration ?? playback.duration
         let selectionDuration = selectionEnd - selectionStart
         return selectionDuration > 0.1 && selectionDuration < (duration - 0.1)
@@ -1401,7 +1437,7 @@ struct RecordingDetailView: View {
 
                     // Reset selection to full new duration
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
 
                     // Reload playback
                     playback.load(url: result.outputURL)
@@ -1460,7 +1496,7 @@ struct RecordingDetailView: View {
 
                     // Reset selection
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
 
                     // Reload playback
                     playback.load(url: result.outputURL)
@@ -1574,7 +1610,7 @@ struct RecordingDetailView: View {
 
                     // Reset selection to full duration
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
 
                     // Clamp playhead
                     editPlayheadPosition = min(editPlayheadPosition, result.newDuration)
@@ -1642,7 +1678,7 @@ struct RecordingDetailView: View {
             hasAudioEdits = true
             reloadWaveformForPendingEdit()
             selectionStart = 0
-            selectionEnd = snapshot.duration
+            selectionEnd = 0
             playback.load(url: snapshot.audioFileURL)
         }
     }
@@ -1729,7 +1765,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Reverb applied"
                     showSkipSilenceResult = true
@@ -1762,7 +1798,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Echo applied"
                     showSkipSilenceResult = true
@@ -1793,7 +1829,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Compression applied"
                     showSkipSilenceResult = true
@@ -1825,7 +1861,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Fade applied"
                     showSkipSilenceResult = true
@@ -1855,7 +1891,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Normalized audio"
                     showSkipSilenceResult = true
@@ -1885,7 +1921,7 @@ struct RecordingDetailView: View {
                     hasAudioEdits = true
                     reloadWaveformForPendingEdit()
                     selectionStart = 0
-                    selectionEnd = result.newDuration
+                    selectionEnd = 0
                     playback.load(url: result.outputURL)
                     skipSilenceResultMessage = "Noise gate applied"
                     showSkipSilenceResult = true
@@ -2497,10 +2533,14 @@ struct RecordingDetailView: View {
 
     private func performDownloadToggle(to newValue: Bool, album: Album) {
         guard !isTogglingDownload else {
+            #if DEBUG
             print("⚠️ Toggle blocked - already toggling")
+            #endif
             return
         }
+        #if DEBUG
         print("🔄 Toggle download permission to: \(newValue)")
+        #endif
         isTogglingDownload = true
         Task {
             do {
@@ -2509,7 +2549,9 @@ struct RecordingDetailView: View {
                     album: album,
                     allow: newValue
                 )
+                #if DEBUG
                 print("✅ Toggle succeeded")
+                #endif
                 // Update the cache on success
                 await MainActor.run {
                     if var cached = appState.sharedRecordingInfoCache[currentRecording.id] {
@@ -2519,7 +2561,9 @@ struct RecordingDetailView: View {
                     isTogglingDownload = false
                 }
             } catch {
+                #if DEBUG
                 print("❌ Toggle failed: \(error)")
+                #endif
                 // Revert on failure
                 await MainActor.run {
                     allowDownload = !newValue
@@ -3137,14 +3181,18 @@ struct RecordingDetailView: View {
         // Skip if already loaded (unless forced) or currently loading
         if !force {
             guard highResWaveformData == nil else {
+                #if DEBUG
                 print("🎨 [Waveform] loadHighResWaveform skipped: already loaded")
+                #endif
                 return
             }
         }
 
         // Don't start another load if one is in progress
         guard !isLoadingHighResWaveform else {
+            #if DEBUG
             print("🎨 [Waveform] loadHighResWaveform skipped: already loading")
+            #endif
             return
         }
 
@@ -3152,9 +3200,11 @@ struct RecordingDetailView: View {
         let audioURL = pendingAudioEdit ?? currentRecording.fileURL
         let recordingId = currentRecording.id
 
+        #if DEBUG
         print("🎨 [Waveform] Loading high-res waveform for: \(audioURL.lastPathComponent)")
         print("🎨 [Waveform] File exists: \(FileManager.default.fileExists(atPath: audioURL.path))")
         print("🎨 [Waveform] Recording duration: \(currentRecording.duration)s")
+        #endif
 
         Task {
             do {
@@ -3163,7 +3213,9 @@ struct RecordingDetailView: View {
                 await MainActor.run {
                     // Verify we're still showing the same recording
                     guard self.currentRecording.id == recordingId else {
+                        #if DEBUG
                         print("⚠️ [Waveform] Recording changed during load, discarding result")
+                        #endif
                         self.isLoadingHighResWaveform = false  // Reset flag even if discarding
                         return
                     }
@@ -3174,12 +3226,16 @@ struct RecordingDetailView: View {
                     // Log success with sample counts
                     let lodCount = waveformData.lodLevels.count
                     let lod0Count = waveformData.lodLevels.first?.count ?? 0
+                    #if DEBUG
                     print("✅ [Waveform] High-res waveform loaded: \(lodCount) LOD levels, LOD0=\(lod0Count) samples, duration=\(waveformData.duration)s")
+                    #endif
                 }
             } catch {
                 await MainActor.run {
                     self.isLoadingHighResWaveform = false
+                    #if DEBUG
                     print("❌ [Waveform] Failed to load high-res waveform: \(error.localizedDescription)")
+                    #endif
                 }
             }
         }
@@ -4023,6 +4079,22 @@ struct IconPickerSheet: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
+                        // Instruction note
+                        if searchText.isEmpty {
+                            HStack(spacing: 8) {
+                                Image(systemName: "hand.tap")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(palette.textTertiary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Tap to set main icon. Press & hold to add up to 2 extra icons (3 total).")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.top, 4)
+                        }
+
                         // Suggested section (only show when not searching and has suggestions)
                         if !suggestedIcons.isEmpty && searchText.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {

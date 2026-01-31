@@ -723,8 +723,13 @@ final class CloudKitSyncEngine {
                         }
                         // Only add the recording if the audio file was successfully copied
                         if audioCopied {
-                            appState.recordings.append(recording)
-                            recordingsChanged = true
+                            // Dedup: skip if recording already exists locally
+                            if appState.recordings.contains(where: { $0.id == recording.id }) {
+                                logger.info("Skipping duplicate recording \(recording.id) — already exists locally")
+                            } else {
+                                appState.recordings.append(recording)
+                                recordingsChanged = true
+                            }
                         } else {
                             logger.warning("Skipping new synced recording \(recording.id) — audio file not available")
                         }

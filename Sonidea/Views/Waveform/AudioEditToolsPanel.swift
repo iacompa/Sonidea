@@ -62,6 +62,8 @@ struct FadeToolSheet: View {
     let onApply: (TimeInterval, TimeInterval, FadeCurve) -> Void
     let onRemove: () -> Void
 
+    @State private var debounceTask: Task<Void, Never>?
+
     private static let defaultFadeIn: Double = 0
     private static let defaultFadeOut: Double = 0
     private static let defaultCurve: FadeCurve = .sCurve
@@ -113,38 +115,13 @@ struct FadeToolSheet: View {
                 }
 
                 Section {
-                    Button {
-                        dismiss()
-                        onApply(fadeInDuration, fadeOutDuration, fadeCurve)
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label("Apply Fade", systemImage: "waveform.path.ecg")
-                                .fontWeight(.medium)
-                            Spacer()
-                        }
-                    }
-                    .disabled(isProcessing || (fadeInDuration == 0 && fadeOutDuration == 0))
-
-                    if isApplied {
-                        Button(role: .destructive) {
-                            dismiss()
-                            onRemove()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Remove Fade", systemImage: "arrow.uturn.backward")
-                                    .fontWeight(.medium)
-                                Spacer()
-                            }
-                        }
-                    }
-
-                    if !isDefault && !isApplied {
+                    if isApplied || !isDefault {
                         Button {
+                            debounceTask?.cancel()
                             fadeInDuration = Self.defaultFadeIn
                             fadeOutDuration = Self.defaultFadeOut
                             fadeCurve = Self.defaultCurve
+                            if isApplied { onRemove() }
                         } label: {
                             HStack {
                                 Spacer()
@@ -154,6 +131,19 @@ struct FadeToolSheet: View {
                                 Spacer()
                             }
                         }
+                        .disabled(isProcessing)
+                    }
+
+                    if isProcessing {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding(.trailing, 6)
+                            Text("Processing...")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textTertiary)
+                            Spacer()
+                        }
                     }
                 }
             }
@@ -161,9 +151,25 @@ struct FadeToolSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        debounceTask?.cancel()
+                        dismiss()
+                    }
                 }
             }
+            .onChange(of: fadeInDuration) { debouncedApply() }
+            .onChange(of: fadeOutDuration) { debouncedApply() }
+            .onChange(of: fadeCurve) { debouncedApply() }
+        }
+    }
+
+    private func debouncedApply() {
+        guard fadeInDuration > 0 || fadeOutDuration > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            onApply(fadeInDuration, fadeOutDuration, fadeCurve)
         }
     }
 }
@@ -179,6 +185,8 @@ struct PeakToolSheet: View {
     let isApplied: Bool
     let onApply: (Float) -> Void
     let onRemove: () -> Void
+
+    @State private var debounceTask: Task<Void, Never>?
 
     private static let defaultTarget: Float = -0.3
 
@@ -210,36 +218,11 @@ struct PeakToolSheet: View {
                 }
 
                 Section {
-                    Button {
-                        dismiss()
-                        onApply(normalizeTarget)
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label("Normalize", systemImage: "speaker.wave.3")
-                                .fontWeight(.medium)
-                            Spacer()
-                        }
-                    }
-                    .disabled(isProcessing)
-
-                    if isApplied {
-                        Button(role: .destructive) {
-                            dismiss()
-                            onRemove()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Remove Normalize", systemImage: "arrow.uturn.backward")
-                                    .fontWeight(.medium)
-                                Spacer()
-                            }
-                        }
-                    }
-
-                    if !isDefault && !isApplied {
+                    if isApplied || !isDefault {
                         Button {
+                            debounceTask?.cancel()
                             normalizeTarget = Self.defaultTarget
+                            if isApplied { onRemove() }
                         } label: {
                             HStack {
                                 Spacer()
@@ -249,6 +232,19 @@ struct PeakToolSheet: View {
                                 Spacer()
                             }
                         }
+                        .disabled(isProcessing)
+                    }
+
+                    if isProcessing {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding(.trailing, 6)
+                            Text("Processing...")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textTertiary)
+                            Spacer()
+                        }
                     }
                 }
             }
@@ -256,7 +252,18 @@ struct PeakToolSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        debounceTask?.cancel()
+                        dismiss()
+                    }
+                }
+            }
+            .onChange(of: normalizeTarget) {
+                debounceTask?.cancel()
+                debounceTask = Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    guard !Task.isCancelled else { return }
+                    onApply(normalizeTarget)
                 }
             }
         }
@@ -274,6 +281,8 @@ struct GateToolSheet: View {
     let isApplied: Bool
     let onApply: (Float) -> Void
     let onRemove: () -> Void
+
+    @State private var debounceTask: Task<Void, Never>?
 
     private static let defaultThreshold: Float = -40
 
@@ -305,36 +314,11 @@ struct GateToolSheet: View {
                 }
 
                 Section {
-                    Button {
-                        dismiss()
-                        onApply(gateThreshold)
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label("Apply Gate", systemImage: "waveform.badge.minus")
-                                .fontWeight(.medium)
-                            Spacer()
-                        }
-                    }
-                    .disabled(isProcessing)
-
-                    if isApplied {
-                        Button(role: .destructive) {
-                            dismiss()
-                            onRemove()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Remove Gate", systemImage: "arrow.uturn.backward")
-                                    .fontWeight(.medium)
-                                Spacer()
-                            }
-                        }
-                    }
-
-                    if !isDefault && !isApplied {
+                    if isApplied || !isDefault {
                         Button {
+                            debounceTask?.cancel()
                             gateThreshold = Self.defaultThreshold
+                            if isApplied { onRemove() }
                         } label: {
                             HStack {
                                 Spacer()
@@ -344,6 +328,19 @@ struct GateToolSheet: View {
                                 Spacer()
                             }
                         }
+                        .disabled(isProcessing)
+                    }
+
+                    if isProcessing {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding(.trailing, 6)
+                            Text("Processing...")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textTertiary)
+                            Spacer()
+                        }
                     }
                 }
             }
@@ -351,7 +348,18 @@ struct GateToolSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        debounceTask?.cancel()
+                        dismiss()
+                    }
+                }
+            }
+            .onChange(of: gateThreshold) {
+                debounceTask?.cancel()
+                debounceTask = Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    guard !Task.isCancelled else { return }
+                    onApply(gateThreshold)
                 }
             }
         }
@@ -370,6 +378,8 @@ struct CompressToolSheet: View {
     let isApplied: Bool
     let onApply: (Float, Float) -> Void
     let onRemove: () -> Void
+
+    @State private var debounceTask: Task<Void, Never>?
 
     private static let defaultGain: Float = 0
     private static let defaultReduction: Float = 0
@@ -422,37 +432,12 @@ struct CompressToolSheet: View {
                 }
 
                 Section {
-                    Button {
-                        dismiss()
-                        onApply(makeupGain, peakReduction)
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label("Apply Compression", systemImage: "waveform.badge.magnifyingglass")
-                                .fontWeight(.medium)
-                            Spacer()
-                        }
-                    }
-                    .disabled(isProcessing || (makeupGain == 0 && peakReduction == 0))
-
-                    if isApplied {
-                        Button(role: .destructive) {
-                            dismiss()
-                            onRemove()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Remove Compression", systemImage: "arrow.uturn.backward")
-                                    .fontWeight(.medium)
-                                Spacer()
-                            }
-                        }
-                    }
-
-                    if !isDefault && !isApplied {
+                    if isApplied || !isDefault {
                         Button {
+                            debounceTask?.cancel()
                             makeupGain = Self.defaultGain
                             peakReduction = Self.defaultReduction
+                            if isApplied { onRemove() }
                         } label: {
                             HStack {
                                 Spacer()
@@ -462,6 +447,19 @@ struct CompressToolSheet: View {
                                 Spacer()
                             }
                         }
+                        .disabled(isProcessing)
+                    }
+
+                    if isProcessing {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding(.trailing, 6)
+                            Text("Processing...")
+                                .font(.subheadline)
+                                .foregroundColor(palette.textTertiary)
+                            Spacer()
+                        }
                     }
                 }
             }
@@ -469,9 +467,24 @@ struct CompressToolSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        debounceTask?.cancel()
+                        dismiss()
+                    }
                 }
             }
+            .onChange(of: makeupGain) { debouncedApply() }
+            .onChange(of: peakReduction) { debouncedApply() }
+        }
+    }
+
+    private func debouncedApply() {
+        guard makeupGain > 0 || peakReduction > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            onApply(makeupGain, peakReduction)
         }
     }
 }
@@ -818,6 +831,12 @@ struct EditToolsSlidePanel: View {
 
     let onClose: () -> Void
 
+    // Debounce task for real-time apply
+    @State private var debounceTask: Task<Void, Never>?
+
+    // Debounce interval in nanoseconds (400ms)
+    private let debounceNanos: UInt64 = 400_000_000
+
     private var maxFade: Double { min(5.0, fadeDuration / 2) }
 
     private func isApplied(for tool: EditToolType) -> Bool {
@@ -831,107 +850,183 @@ struct EditToolsSlidePanel: View {
         }
     }
 
+    // MARK: - Default values for each tool
+
+    private static let defaultFadeIn: Double = 0
+    private static let defaultFadeOut: Double = 0
+    private static let defaultFadeCurve: FadeCurve = .sCurve
+    private static let defaultPeakTarget: Float = -0.3
+    private static let defaultGateThreshold: Float = -40
+    private static let defaultCompGain: Float = 0
+    private static let defaultCompReduction: Float = 0
+    private static let defaultReverbRoomSize: Float = 1.0
+    private static let defaultReverbPreDelay: Float = 20
+    private static let defaultReverbDecay: Float = 2.0
+    private static let defaultReverbDamping: Float = 0.5
+    private static let defaultReverbWetDry: Float = 0.3
+    private static let defaultEchoDelay: Float = 0.25
+    private static let defaultEchoFeedback: Float = 0.3
+    private static let defaultEchoDamping: Float = 0.3
+    private static let defaultEchoWetDry: Float = 0.3
+
+    private var isCurrentToolDefault: Bool {
+        switch selectedTool {
+        case .fade:
+            return fadeIn == Self.defaultFadeIn && fadeOut == Self.defaultFadeOut && fadeCurve == Self.defaultFadeCurve
+        case .peak:
+            return peakTarget == Self.defaultPeakTarget
+        case .gate:
+            return gateThreshold == Self.defaultGateThreshold
+        case .compress:
+            return compGain == Self.defaultCompGain && compReduction == Self.defaultCompReduction
+        case .reverb:
+            return reverbRoomSize == Self.defaultReverbRoomSize && reverbPreDelay == Self.defaultReverbPreDelay
+                && reverbDecay == Self.defaultReverbDecay && reverbDamping == Self.defaultReverbDamping
+                && reverbWetDry == Self.defaultReverbWetDry
+        case .echo:
+            return echoDelay == Self.defaultEchoDelay && echoFeedback == Self.defaultEchoFeedback
+                && echoDamping == Self.defaultEchoDamping && echoWetDry == Self.defaultEchoWetDry
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Grab handle
-            RoundedRectangle(cornerRadius: 2)
-                .fill(palette.textTertiary.opacity(0.3))
-                .frame(width: 36, height: 4)
-                .padding(.top, 8)
-                .padding(.bottom, 6)
-
-            // Tool tabs
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(EditToolType.allCases) { tool in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedTool = tool
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: tool.icon)
-                                    .font(.system(size: 11))
-                                Text(tool.displayName)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .foregroundColor(selectedTool == tool ? .white : (isApplied(for: tool) ? palette.accent : palette.textPrimary))
-                            .background(selectedTool == tool ? palette.accent : (isApplied(for: tool) ? palette.accent.opacity(0.15) : palette.inputBackground))
-                            .cornerRadius(12)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-            }
-
+            grabHandle
+            toolTabs
+            Divider().padding(.top, 6)
+            toolScrollContent
             Divider()
-                .padding(.top, 6)
-
-            // Tool content
-            ScrollView {
-                toolContent
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-            }
-            .frame(maxHeight: 190)
-
-            Divider()
-
-            // Action buttons
-            HStack(spacing: 10) {
-                // Apply
-                Button {
-                    applyCurrentTool()
-                } label: {
-                    Text("Apply")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundColor(.white)
-                        .background(palette.accent)
-                        .cornerRadius(10)
-                }
-                .disabled(isProcessing || !canApplyCurrentTool)
-
-                // Remove (only if applied)
-                if isApplied(for: selectedTool) {
-                    Button {
-                        removeCurrentTool()
-                    } label: {
-                        Text("Remove")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .foregroundColor(.red)
-                            .background(Color.red.opacity(0.12))
-                            .cornerRadius(10)
-                    }
-                    .disabled(isProcessing)
-                }
-
-                // Close
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(10)
-                        .foregroundColor(palette.textSecondary)
-                        .background(palette.inputBackground)
-                        .clipShape(Circle())
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            actionButtons
         }
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(palette.cardBackground.opacity(0.97))
                 .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
         )
+    }
+
+    private var grabHandle: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(palette.textTertiary.opacity(0.3))
+            .frame(width: 36, height: 4)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+    }
+
+    private var toolTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(EditToolType.allCases) { tool in
+                    toolTabButton(tool)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+    }
+
+    private func toolTabButton(_ tool: EditToolType) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedTool = tool
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 11))
+                Text(tool.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundColor(selectedTool == tool ? .white : (isApplied(for: tool) ? palette.accent : palette.textPrimary))
+            .background(selectedTool == tool ? palette.accent : (isApplied(for: tool) ? palette.accent.opacity(0.15) : palette.inputBackground))
+            .cornerRadius(12)
+        }
+    }
+
+    private var toolScrollContent: some View {
+        ScrollView {
+            toolContent
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+        }
+        .frame(maxHeight: 190)
+        .onChange(of: fadeIn) { debouncedApplyFade() }
+        .onChange(of: fadeOut) { debouncedApplyFade() }
+        .onChange(of: fadeCurve) { debouncedApplyFade() }
+        .onChange(of: peakTarget) { debouncedApplyPeak() }
+        .onChange(of: gateThreshold) { debouncedApplyGate() }
+        .onChange(of: compGain) { debouncedApplyCompress() }
+        .onChange(of: compReduction) { debouncedApplyCompress() }
+        .onChange(of: reverbRoomSize) { debouncedApplyReverb() }
+        .onChange(of: reverbPreDelay) { debouncedApplyReverb() }
+        .onChange(of: reverbDecay) { debouncedApplyReverb() }
+        .onChange(of: reverbDamping) { debouncedApplyReverb() }
+        .onChange(of: reverbWetDry) { debouncedApplyReverb() }
+        .onChange(of: echoDelay) { debouncedApplyEcho() }
+        .onChange(of: echoFeedback) { debouncedApplyEcho() }
+        .onChange(of: echoDamping) { debouncedApplyEcho() }
+        .onChange(of: echoWetDry) { debouncedApplyEcho() }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 10) {
+            if !isCurrentToolDefault || isApplied(for: selectedTool) {
+                resetButton
+            }
+            if isProcessing {
+                processingIndicator
+            }
+            closeButton
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var resetButton: some View {
+        Button {
+            resetCurrentTool()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Reset")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .foregroundColor(palette.textSecondary)
+            .background(palette.inputBackground)
+            .cornerRadius(10)
+        }
+        .disabled(isProcessing)
+    }
+
+    private var processingIndicator: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .scaleEffect(0.8)
+            Text("Processing...")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(palette.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+    }
+
+    private var closeButton: some View {
+        Button {
+            debounceTask?.cancel()
+            onClose()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .semibold))
+                .padding(10)
+                .foregroundColor(palette.textSecondary)
+                .background(palette.inputBackground)
+                .clipShape(Circle())
+        }
     }
 
     // MARK: - Tool Content
@@ -1039,38 +1134,105 @@ struct EditToolsSlidePanel: View {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Debounced Real-Time Apply
 
-    private var canApplyCurrentTool: Bool {
-        switch selectedTool {
-        case .fade: return fadeIn > 0 || fadeOut > 0
-        case .peak: return true
-        case .gate: return true
-        case .compress: return compGain > 0 || compReduction > 0
-        case .reverb: return reverbWetDry > 0
-        case .echo: return echoWetDry > 0
+    private func debouncedApplyFade() {
+        guard selectedTool == .fade else { return }
+        guard fadeIn > 0 || fadeOut > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyFade(fadeIn, fadeOut, fadeCurve)
         }
     }
 
-    private func applyCurrentTool() {
-        switch selectedTool {
-        case .fade: onApplyFade(fadeIn, fadeOut, fadeCurve)
-        case .peak: onApplyPeak(peakTarget)
-        case .gate: onApplyGate(gateThreshold)
-        case .compress: onApplyCompress(compGain, compReduction)
-        case .reverb: onApplyReverb(reverbRoomSize, reverbPreDelay, reverbDecay, reverbDamping, reverbWetDry)
-        case .echo: onApplyEcho(echoDelay, echoFeedback, echoDamping, echoWetDry)
+    private func debouncedApplyPeak() {
+        guard selectedTool == .peak else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyPeak(peakTarget)
         }
     }
 
-    private func removeCurrentTool() {
+    private func debouncedApplyGate() {
+        guard selectedTool == .gate else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyGate(gateThreshold)
+        }
+    }
+
+    private func debouncedApplyCompress() {
+        guard selectedTool == .compress else { return }
+        guard compGain > 0 || compReduction > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyCompress(compGain, compReduction)
+        }
+    }
+
+    private func debouncedApplyReverb() {
+        guard selectedTool == .reverb else { return }
+        guard reverbWetDry > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyReverb(reverbRoomSize, reverbPreDelay, reverbDecay, reverbDamping, reverbWetDry)
+        }
+    }
+
+    private func debouncedApplyEcho() {
+        guard selectedTool == .echo else { return }
+        guard echoWetDry > 0 else { return }
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onApplyEcho(echoDelay, echoFeedback, echoDamping, echoWetDry)
+        }
+    }
+
+    // MARK: - Reset Actions
+
+    private func resetCurrentTool() {
+        debounceTask?.cancel()
         switch selectedTool {
-        case .fade: onRemoveFade()
-        case .peak: onRemovePeak()
-        case .gate: onRemoveGate()
-        case .compress: onRemoveCompress()
-        case .reverb: onRemoveReverb()
-        case .echo: onRemoveEcho()
+        case .fade:
+            if hasFadeApplied { onRemoveFade() }
+            fadeIn = Self.defaultFadeIn
+            fadeOut = Self.defaultFadeOut
+            fadeCurve = Self.defaultFadeCurve
+        case .peak:
+            if hasPeakApplied { onRemovePeak() }
+            peakTarget = Self.defaultPeakTarget
+        case .gate:
+            if hasGateApplied { onRemoveGate() }
+            gateThreshold = Self.defaultGateThreshold
+        case .compress:
+            if hasCompressApplied { onRemoveCompress() }
+            compGain = Self.defaultCompGain
+            compReduction = Self.defaultCompReduction
+        case .reverb:
+            if hasReverbApplied { onRemoveReverb() }
+            reverbRoomSize = Self.defaultReverbRoomSize
+            reverbPreDelay = Self.defaultReverbPreDelay
+            reverbDecay = Self.defaultReverbDecay
+            reverbDamping = Self.defaultReverbDamping
+            reverbWetDry = Self.defaultReverbWetDry
+        case .echo:
+            if hasEchoApplied { onRemoveEcho() }
+            echoDelay = Self.defaultEchoDelay
+            echoFeedback = Self.defaultEchoFeedback
+            echoDamping = Self.defaultEchoDamping
+            echoWetDry = Self.defaultEchoWetDry
         }
     }
 }

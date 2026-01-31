@@ -54,6 +54,8 @@ struct OverdubSessionView: View {
     @State private var showDeleteLayerConfirmation = false
     @State private var bounceToastMessage: String?
     @State private var showBounceConfirmation = false
+    @State private var proUpgradeContext: ProFeatureContext?
+    @State private var showTipJar = false
 
     var body: some View {
         NavigationStack {
@@ -67,6 +69,24 @@ struct OverdubSessionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { overdubToolbar }
             .sheet(isPresented: $showMixer) { mixerSheet }
+            .sheet(item: $proUpgradeContext) { context in
+                ProUpgradeSheet(
+                    context: context,
+                    onViewPlans: {
+                        proUpgradeContext = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showTipJar = true
+                        }
+                    },
+                    onDismiss: {
+                        proUpgradeContext = nil
+                    }
+                )
+                .environment(\.themePalette, palette)
+            }
+            .sheet(isPresented: $showTipJar) {
+                TipJarView()
+            }
             .sheet(isPresented: $showTrackAlignment) {
                 TrackAlignmentView(
                     baseRecording: baseRecording,
@@ -226,8 +246,10 @@ struct OverdubSessionView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
-                if appState.supportManager.canUseProFeatures || ProFeatureContext.mixer.isFree || ProFeatureContext.recordOverTrack.isFree {
+                if appState.supportManager.canUseProFeatures || ProFeatureContext.recordOverTrack.isFree {
                     showMixer = true
+                } else {
+                    proUpgradeContext = .mixer
                 }
             } label: {
                 Image(systemName: "slider.vertical.3")
@@ -966,21 +988,27 @@ struct OverdubSessionView: View {
             return
         }
 
+        #if DEBUG
         print("🎙️ [OverdubSessionView] setupSession() called")
         print("🎙️ [OverdubSessionView] Base recording: \(baseRecording.title)")
         print("🎙️ [OverdubSessionView] Base URL: \(baseRecording.fileURL)")
+        #endif
 
         // Check for existing overdub group
         if let groupId = baseRecording.overdubGroupId,
            let group = appState.overdubGroup(for: groupId) {
             self.overdubGroup = group
             self.existingLayers = appState.layerRecordings(for: group)
+            #if DEBUG
             print("🎙️ [OverdubSessionView] Found existing overdub group with \(existingLayers.count) layers")
+            #endif
         }
 
         // Check headphones
         let hasHeadphones = AudioSessionManager.shared.isHeadphoneMonitoringActive()
+        #if DEBUG
         print("🎙️ [OverdubSessionView] Headphones connected: \(hasHeadphones)")
+        #endif
         if !hasHeadphones {
             showHeadphonesAlert = true
         }
@@ -1001,8 +1029,10 @@ struct OverdubSessionView: View {
             flags.append(ch.isLooped)
         }
 
+        #if DEBUG
         print("🎙️ [OverdubSessionView] Preparing engine with base: \(baseRecording.fileURL.lastPathComponent)")
         print("🎙️ [OverdubSessionView] Base file exists: \(FileManager.default.fileExists(atPath: baseRecording.fileURL.path))")
+        #endif
 
         do {
             try engine.prepare(
@@ -1015,7 +1045,9 @@ struct OverdubSessionView: View {
                 settings: appState.appSettings
             )
             isPrepared = true
+            #if DEBUG
             print("✅ [OverdubSessionView] Engine prepared successfully, isPrepared=\(isPrepared)")
+            #endif
 
             // Warn about any layers that couldn't be loaded
             if !engine.failedLayerIndices.isEmpty {
@@ -1027,7 +1059,9 @@ struct OverdubSessionView: View {
             isPrepared = false
             errorMessage = "Failed to prepare overdub: \(error.localizedDescription)"
             showErrorAlert = true
+            #if DEBUG
             print("❌ [OverdubSessionView] Engine preparation failed: \(error)")
+            #endif
         }
     }
 
@@ -1035,20 +1069,30 @@ struct OverdubSessionView: View {
 
     private func toggleLoopForBase() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        guard overdubGroup != nil else { return }
-        overdubGroup?.mixSettings.baseChannel.isLooped.toggle()
+        // Create overdub group if it doesn't exist yet
+        if overdubGroup == nil {
+            overdubGroup = appState.createOverdubGroup(baseRecording: baseRecording)
+        }
+        guard var group = overdubGroup else { return }
+        group.mixSettings.baseChannel.isLooped.toggle()
+        overdubGroup = group
         persistMixSettings()
         prepareEngine()
     }
 
     private func toggleLoopForLayer(at index: Int) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        guard overdubGroup != nil else { return }
-        var settings = overdubGroup!.mixSettings
+        // Create overdub group if it doesn't exist yet
+        if overdubGroup == nil {
+            overdubGroup = appState.createOverdubGroup(baseRecording: baseRecording)
+        }
+        guard var group = overdubGroup else { return }
+        var settings = group.mixSettings
         settings.syncLayerCount(existingLayers.count)
         guard index < settings.layerChannels.count else { return }
         settings.layerChannels[index].isLooped.toggle()
-        overdubGroup?.mixSettings = settings
+        group.mixSettings = settings
+        overdubGroup = group
         persistMixSettings()
         prepareEngine()
     }

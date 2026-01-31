@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct WaveformView: View {
     let samples: [Float]
@@ -99,7 +100,8 @@ struct WaveformCanvas: View {
 
             // Theme-based colors
             let gridColor: Color = isDarkMode ? .white.opacity(0.08) : .black.opacity(0.06)
-            let waveformColor: Color = isDarkMode ? .white.opacity(0.7) : Color(.systemGray)
+            // Use playhead color as waveform accent for better visibility on all themes
+            let waveformColor: Color = playheadColor.opacity(0.8)
 
             // === 1. Draw Grid (behind waveform) ===
 
@@ -184,12 +186,15 @@ struct DetailsWaveformView: View {
     let progress: Double
     let duration: TimeInterval
     var isPlaying: Bool = false
+    /// Callback when user taps or drags to seek to a time position (in seconds)
+    var onSeek: ((TimeInterval) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
     // Use the SAME WaveformTimeline as Edit mode for identical zoom/pan behavior
     @State private var timeline: WaveformTimeline?
     @State private var isPanning = false
+    @State private var isSeeking = false  // Track whether user is scrubbing the playhead
     @State private var panStartTime: TimeInterval = 0
     @State private var initialPinchZoom: CGFloat = 1.0
 
@@ -245,11 +250,12 @@ struct DetailsWaveformView: View {
                             initialPinchZoom = 1.0
                         }
                 )
-                // Pan when zoomed (same as Edit mode)
+                // Drag gesture: pan when zoomed, scrub playhead when not zoomed
                 .simultaneousGesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 5)
                         .onChanged { value in
                             if timeline.zoomScale > 1.0 {
+                                // Zoomed in: pan the visible window
                                 if !isPanning {
                                     isPanning = true
                                     panStartTime = timeline.visibleStartTime
@@ -261,13 +267,27 @@ struct DetailsWaveformView: View {
                                 if abs(clampedStart - timeline.visibleStartTime) > 0.0001 {
                                     timeline.visibleStartTime = clampedStart
                                 }
+                            } else {
+                                // Not zoomed: scrub playhead to drag position
+                                guard duration > 0 else { return }
+                                if !isSeeking {
+                                    isSeeking = true
+                                    // Light haptic on scrub start
+                                    let impact = UIImpactFeedbackGenerator(style: .light)
+                                    impact.impactOccurred()
+                                }
+                                let dragX = value.location.x
+                                let draggedTime = timeline.xToTime(dragX, width: width)
+                                let clampedTime = max(0, min(draggedTime, duration))
+                                onSeek?(clampedTime)
                             }
                         }
                         .onEnded { _ in
                             isPanning = false
+                            isSeeking = false
                         }
                 )
-                // Double-tap to toggle zoom (same as Edit mode)
+                // Double-tap to toggle zoom (must be registered before single-tap)
                 .onTapGesture(count: 2) {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         if timeline.zoomScale > 1.5 {
@@ -277,6 +297,16 @@ struct DetailsWaveformView: View {
                             timeline.zoom(to: 4.0, centeredOn: currentTime)
                         }
                     }
+                }
+                // Single-tap to seek playhead to tapped position
+                .onTapGesture(count: 1) { location in
+                    guard duration > 0 else { return }
+                    let tappedTime = timeline.xToTime(location.x, width: width)
+                    let clampedTime = max(0, min(tappedTime, duration))
+                    // Light haptic feedback
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred()
+                    onSeek?(clampedTime)
                 }
                 // Zoom indicator
                 .overlay(alignment: .topTrailing) {

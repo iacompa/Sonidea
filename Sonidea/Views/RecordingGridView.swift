@@ -322,7 +322,9 @@ struct RecordingGridView: View {
                 exportedURL = wavURL
                 showShareSheet = true
             } catch {
+                #if DEBUG
                 print("Export failed: \(error)")
+                #endif
             }
         }
     }
@@ -343,7 +345,9 @@ struct RecordingGridView: View {
                     clearSelection()
                 }
             } catch {
+                #if DEBUG
                 print("Export failed: \(error)")
+                #endif
             }
         }
     }

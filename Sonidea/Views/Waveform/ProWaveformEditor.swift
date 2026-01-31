@@ -237,6 +237,10 @@ struct ProWaveformEditor: View {
     @State private var isRegionSelecting = false
     @State private var regionSelectAnchorTime: TimeInterval = 0
 
+    // Pinch-zoom tracking: suppresses edit drag while pinching
+    @State private var isPinching = false
+    @GestureState private var pinchActive = false
+
     // Unified edit-mode drag: decides pan vs region-select based on hold duration
     enum EditDragMode { case undecided, panning, selecting }
     @State private var editDragMode: EditDragMode = .undecided
@@ -245,6 +249,11 @@ struct ProWaveformEditor: View {
 
     // Height (configurable)
     let waveformHeight: CGFloat
+
+    /// Whether there is a meaningful selection (not zero-length)
+    private var hasActiveSelection: Bool {
+        selectionEnd - selectionStart > 0.02
+    }
 
     // Constants
     private let timeRulerHeight: CGFloat = 36  // Reduced ~20% from 44
@@ -327,15 +336,17 @@ struct ProWaveformEditor: View {
                         )
                     }
 
-                    // Selection overlay (uses same timeToX as handles)
-                    SelectionRegionView(
-                        selectionStart: selectionStart,
-                        selectionEnd: selectionEnd,
-                        timeline: timeline,
-                        width: width,
-                        height: height,
-                        palette: palette
-                    )
+                    // Selection overlay and handles (only shown when there is an active selection)
+                    if hasActiveSelection || isRegionSelecting {
+                        SelectionRegionView(
+                            selectionStart: selectionStart,
+                            selectionEnd: selectionEnd,
+                            timeline: timeline,
+                            width: width,
+                            height: height,
+                            palette: palette
+                        )
+                    }
 
                     // Markers
                     MarkersView(
@@ -351,34 +362,36 @@ struct ProWaveformEditor: View {
 
                     // NOTE: Playhead moved to overlay outside clipped container to prevent clipping at edges
 
-                    // Selection handles
-                    SelectionHandleView(
-                        time: $selectionStart,
-                        otherTime: selectionEnd,
-                        isLeft: true,
-                        timeline: timeline,
-                        duration: duration,
-                        isPrecisionMode: isPrecisionMode,
-                        width: width,
-                        height: height,
-                        palette: palette,
-                        isDraggingExternal: $leftHandleDragging,
-                        dragTimeExternal: $leftHandleDragTime
-                    )
+                    // Selection handles (only shown when there is an active selection)
+                    if hasActiveSelection || isRegionSelecting {
+                        SelectionHandleView(
+                            time: $selectionStart,
+                            otherTime: selectionEnd,
+                            isLeft: true,
+                            timeline: timeline,
+                            duration: duration,
+                            isPrecisionMode: isPrecisionMode,
+                            width: width,
+                            height: height,
+                            palette: palette,
+                            isDraggingExternal: $leftHandleDragging,
+                            dragTimeExternal: $leftHandleDragTime
+                        )
 
-                    SelectionHandleView(
-                        time: $selectionEnd,
-                        otherTime: selectionStart,
-                        isLeft: false,
-                        timeline: timeline,
-                        duration: duration,
-                        isPrecisionMode: isPrecisionMode,
-                        width: width,
-                        height: height,
-                        palette: palette,
-                        isDraggingExternal: $rightHandleDragging,
-                        dragTimeExternal: $rightHandleDragTime
-                    )
+                        SelectionHandleView(
+                            time: $selectionEnd,
+                            otherTime: selectionStart,
+                            isLeft: false,
+                            timeline: timeline,
+                            duration: duration,
+                            isPrecisionMode: isPrecisionMode,
+                            width: width,
+                            height: height,
+                            palette: palette,
+                            isDraggingExternal: $rightHandleDragging,
+                            dragTimeExternal: $rightHandleDragTime
+                        )
+                    }
 
                     // Marker flags overlay (rendered last so always visible above playhead)
                     MarkerFlagsOverlay(
@@ -474,6 +487,23 @@ struct ProWaveformEditor: View {
                 timeline.duration = max(0.01, newDuration)
             }
         }
+        .onChange(of: pinchActive) { _, active in
+            // @GestureState resets to false when the pinch gesture ends.
+            // Use this as a safety net to clear isPinching in case .onEnded
+            // was not called (e.g., gesture cancelled by the system).
+            if !active && isPinching {
+                isPinching = false
+                // Also clean up any stale edit drag state
+                if editDragMode != .undecided {
+                    if editDragMode == .selecting {
+                        isRegionSelecting = false
+                    }
+                    isPanning = false
+                    editDragMode = .undecided
+                    editDragStartDate = .distantPast
+                }
+            }
+        }
     }
 
     // MARK: - Tooltip Overlay (outside clipped container)
@@ -530,7 +560,30 @@ struct ProWaveformEditor: View {
 
     private var zoomGesture: some Gesture {
         MagnificationGesture()
+            .updating($pinchActive) { _, state, _ in
+                state = true
+            }
             .onChanged { scale in
+                // Mark pinching immediately so editModeDragGesture is suppressed
+                if !isPinching {
+                    isPinching = true
+                    // Cancel any in-progress edit drag that may have started
+                    // before the pinch was recognized
+                    if editDragMode != .undecided {
+                        // Reset selection if it was being created during this touch
+                        if editDragMode == .selecting {
+                            isRegionSelecting = false
+                            if selectionEnd - selectionStart < 0.02 {
+                                selectionStart = 0
+                                selectionEnd = 0
+                            }
+                        }
+                        isPanning = false
+                        editDragMode = .undecided
+                        editDragStartDate = .distantPast
+                    }
+                }
+
                 if initialPinchZoom == 1.0 {
                     initialPinchZoom = timeline.zoomScale
                     impactGenerator.impactOccurred(intensity: 0.3)
@@ -540,6 +593,7 @@ struct ProWaveformEditor: View {
             }
             .onEnded { _ in
                 initialPinchZoom = 1.0
+                isPinching = false
                 impactGenerator.impactOccurred(intensity: 0.2)
             }
     }
@@ -547,6 +601,9 @@ struct ProWaveformEditor: View {
     private func panGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
+                // Suppress pan while pinch-zooming
+                if isPinching || pinchActive { return }
+
                 if !isPanning {
                     isPanning = true
                     panStartTime = timeline.visibleStartTime
@@ -583,6 +640,14 @@ struct ProWaveformEditor: View {
     private func editModeDragGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                // --- Pinch guard: suppress ALL edit drag logic while pinching ---
+                // When 2 fingers are down, the drag gesture fires for individual
+                // touch points before MagnificationGesture is recognised. We must
+                // ignore those spurious single-finger events.
+                if isPinching || pinchActive {
+                    return
+                }
+
                 // First call — record start time immediately on touch
                 if editDragMode == .undecided && editDragStartDate == .distantPast {
                     editDragStartDate = Date()
@@ -653,11 +718,20 @@ struct ProWaveformEditor: View {
                 }
             }
             .onEnded { value in
+                // If the drag ended because of a pinch, just clean up silently
+                if isPinching || pinchActive {
+                    isPanning = false
+                    editDragMode = .undecided
+                    editDragStartDate = .distantPast
+                    return
+                }
+
                 if editDragMode == .selecting {
                     isRegionSelecting = false
+                    // If the selection is too small (accidental tap-drag), clear it
                     if selectionEnd - selectionStart < 0.02 {
                         selectionStart = 0
-                        selectionEnd = duration
+                        selectionEnd = 0
                     }
                     impactGenerator.impactOccurred(intensity: 0.3)
                 } else if editDragMode == .undecided {
@@ -873,8 +947,8 @@ struct WaveformBarsView: View {
 
             // Theme colors
             let gridColor: Color = colorScheme == .dark ? .white.opacity(0.08) : .black.opacity(0.06)
-            let selectedColor = palette.accent
-            let unselectedColor: Color = colorScheme == .dark ? .white.opacity(0.5) : Color(.systemGray)
+            // DAW-style waveform: always use accent color for high visibility on all themes
+            let waveformColor = palette.accent
 
             // === 1. Draw Grid (aligned with time ruler) ===
 
@@ -939,6 +1013,9 @@ struct WaveformBarsView: View {
             // Cap line width: minimum 1, maximum 3 (prevents issues on zoom)
             let lineWidth = min(3, max(1, xStep * 0.7))
 
+            // Determine if there is an active selection (not zero-length)
+            let hasActiveSelection = showsSelectionHighlight && (selEndX - selStartX) > 1
+
             for (index, sample) in samples.enumerated() {
                 let x = CGFloat(index) * xStep + xStep / 2
 
@@ -949,13 +1026,16 @@ struct WaveformBarsView: View {
                 let yTop = centerY - amplitude
                 let yBottom = centerY + amplitude
 
-                // Only apply selection coloring in Edit mode
+                // DAW-style coloring:
+                // - Always use accent color for high contrast on all themes
+                // - When a selection exists, dim unselected bars to 80% opacity
+                // - When no selection, full brightness everywhere
                 let barColor: Color
-                if showsSelectionHighlight {
+                if hasActiveSelection {
                     let isInSelection = x >= selStartX && x <= selEndX
-                    barColor = isInSelection ? selectedColor : unselectedColor
+                    barColor = isInSelection ? waveformColor : waveformColor.opacity(0.5)
                 } else {
-                    barColor = unselectedColor
+                    barColor = waveformColor
                 }
 
                 var linePath = Path()

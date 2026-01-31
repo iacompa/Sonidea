@@ -74,7 +74,9 @@ final class SilenceRMSMeter {
             smoothedRMS = 0
 
         } catch {
+            #if DEBUG
             print("SilenceRMSMeter: Failed to load audio: \(error)")
+            #endif
         }
     }
 

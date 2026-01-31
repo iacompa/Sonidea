@@ -34,7 +34,9 @@ final class PlaybackManager: NSObject {
             duration = audioPlayer?.duration ?? 0
             currentTime = 0
         } catch {
+            #if DEBUG
             print("Failed to load audio: \(error)")
+            #endif
         }
     }
 

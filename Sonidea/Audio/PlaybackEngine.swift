@@ -73,7 +73,9 @@ final class PlaybackEngine {
         let status = AudioDebug.verifyAudioFile(url: url)
         guard status.isValid else {
             let errorMsg = status.errorMessage ?? "Unknown error"
+            #if DEBUG
             print("❌ [PlaybackEngine] File verification failed: \(errorMsg)")
+            #endif
 
             switch status {
             case .notFound:
@@ -115,7 +117,9 @@ final class PlaybackEngine {
             currentTime = 0
             seekFrame = 0
 
+            #if DEBUG
             print("✅ [PlaybackEngine] Audio file loaded: duration=\(duration)s, sampleRate=\(audioSampleRate), frames=\(audioLengthFrames)")
+            #endif
 
             setupAudioEngine(format: file.processingFormat)
         } catch {
@@ -127,7 +131,9 @@ final class PlaybackEngine {
 
     func play() {
         guard let engine = audioEngine, let player = playerNode, let file = audioFile else {
+            #if DEBUG
             print("⚠️ [PlaybackEngine] play() called but engine not ready")
+            #endif
             return
         }
 
@@ -301,7 +307,9 @@ final class PlaybackEngine {
               let player = playerNode,
               let timePitch = timePitchNode,
               let eq = eqNode else {
+            #if DEBUG
             print("⚠️ [PlaybackEngine] Failed to create audio nodes")
+            #endif
             return
         }
 
@@ -322,7 +330,9 @@ final class PlaybackEngine {
         engine.connect(eq, to: engine.mainMixerNode, format: format)
 
         engine.prepare()
+        #if DEBUG
         print("✅ [PlaybackEngine] Audio engine setup complete")
+        #endif
     }
 
     private func configureEQBands() {

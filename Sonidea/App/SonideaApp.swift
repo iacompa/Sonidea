@@ -178,7 +178,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
+        #if DEBUG
         print("Failed to register for remote notifications: \(error.localizedDescription)")
+        #endif
     }
 
     /// Shared album manager reference (set from SonideaApp on launch)

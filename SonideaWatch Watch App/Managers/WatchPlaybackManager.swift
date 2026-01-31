@@ -8,6 +8,7 @@
 import AVFoundation
 import Foundation
 
+@MainActor
 @Observable
 class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
 
@@ -33,7 +34,9 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
             duration = player?.duration ?? 0
             currentTime = 0
         } catch {
+            #if DEBUG
             print("WatchPlayback: Failed to load: \(error)")
+            #endif
         }
     }
 

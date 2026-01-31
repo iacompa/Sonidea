@@ -21,15 +21,36 @@ struct CreateSharedAlbumSheet: View {
     @State private var isCreating = false
     @State private var errorMessage: String?
     @State private var iCloudAvailable = true
+    @State private var proUpgradeContext: ProFeatureContext?
+    @State private var showTipJar = false
 
     var body: some View {
         NavigationStack {
-            // Pro feature guard - dismiss if user doesn't have access
+            // Pro feature guard - show upgrade prompt if user doesn't have access
             if !appState.supportManager.canUseProFeatures {
-                Color.clear.onAppear { dismiss() }
+                Color.clear.onAppear { proUpgradeContext = .sharedAlbums }
             } else {
                 createAlbumContent
             }
+        }
+        .sheet(item: $proUpgradeContext) { context in
+            ProUpgradeSheet(
+                context: context,
+                onViewPlans: {
+                    proUpgradeContext = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showTipJar = true
+                    }
+                },
+                onDismiss: {
+                    proUpgradeContext = nil
+                    dismiss()
+                }
+            )
+            .environment(\.themePalette, palette)
+        }
+        .sheet(isPresented: $showTipJar) {
+            TipJarView()
         }
     }
 
@@ -2236,7 +2257,9 @@ struct SharedRecordingDetailView: View {
                 )
                 appState.localActivityEvents.append(event)
             } catch {
+                #if DEBUG
                 print("Failed to delete comment: \(error)")
+                #endif
             }
         }
     }

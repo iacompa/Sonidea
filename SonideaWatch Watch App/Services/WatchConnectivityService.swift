@@ -30,7 +30,9 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
 
     func transferRecording(_ recording: WatchRecordingItem) {
         guard WCSession.default.activationState == .activated else {
+            #if DEBUG
             print("WatchConnectivity: Session not activated, skipping transfer")
+            #endif
             return
         }
 
@@ -48,7 +50,9 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         if let error {
+            #if DEBUG
             print("WatchConnectivity: Activation error: \(error)")
+            #endif
         }
 
         // Check for any pending theme from applicationContext

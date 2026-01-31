@@ -239,19 +239,25 @@ final class RecorderManager: NSObject {
             Task { @MainActor in
                 guard let self = self else { return }
 
+                #if DEBUG
                 print("🔄 [RecorderManager] Route change detected, recording: \(self.recordingState.isActive), engine: \(self.isUsingEngine)")
+                #endif
 
                 // If we're recording with the engine and a device changed, we need to restart
                 if self.recordingState.isActive && self.isUsingEngine {
                     if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
-                        print("🔄 [RecorderManager] Bluetooth device changed - restarting engine...")
+                        #if DEBUG
+                        print("🔄 [RecorderManager] Audio device changed - restarting engine...")
+                        #endif
                         self.handleEngineRouteChange()
                     }
                 } else if self.recordingState.isActive && !self.isUsingEngine {
                     // AVAudioRecorder may also need attention on route changes
                     // Force a reconfiguration of the audio session to ensure input is valid
                     if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
-                        print("🔄 [RecorderManager] Bluetooth device changed - reconfiguring session...")
+                        #if DEBUG
+                        print("🔄 [RecorderManager] Audio device changed - reconfiguring session...")
+                        #endif
                         self.handleRecorderRouteChange()
                     }
                 }
@@ -287,7 +293,9 @@ final class RecorderManager: NSObject {
                 return freeSize >= Self.minimumFreeDiskSpace
             }
         } catch {
+            #if DEBUG
             print("⚠️ [RecorderManager] Could not check disk space: \(error.localizedDescription)")
+            #endif
         }
         // If the check fails, allow recording to proceed rather than blocking
         return true
@@ -301,7 +309,9 @@ final class RecorderManager: NSObject {
         // Pre-flight: ensure enough disk space before starting
         if !hasSufficientDiskSpace() {
             let message = "Not enough storage to start recording. Please free up at least 50 MB and try again."
+            #if DEBUG
             print("⚠️ [RecorderManager] \(message)")
+            #endif
             recordingError = message
             return
         }
@@ -315,9 +325,10 @@ final class RecorderManager: NSObject {
         }
 
         let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
+            || AudioSessionManager.shared.isBluetoothInput()
 
         if isBluetooth {
-            // Bluetooth needs async route stabilization
+            // Bluetooth needs async route stabilization (A2DP -> HFP transition)
             Task { @MainActor in
                 do {
                     try await AudioSessionManager.shared.configureForRecording(
@@ -325,21 +336,25 @@ final class RecorderManager: NSObject {
                         settings: appSettings
                     )
                 } catch {
+                    #if DEBUG
                     print("Failed to set up audio session: \(error)")
+                    #endif
                     self.isPreparing = false
                     return
                 }
                 self.continueStartRecording()
             }
         } else {
-            // Wired/built-in: synchronous path (no wait needed)
+            // Wired/built-in: synchronous path
             do {
                 try AudioSessionManager.shared.configureForRecording(
                     quality: qualityPreset,
                     settings: appSettings
                 ) as Void
             } catch {
+                #if DEBUG
                 print("Failed to set up audio session: \(error)")
+                #endif
                 isPreparing = false
                 return
             }
@@ -394,8 +409,40 @@ final class RecorderManager: NSObject {
                 startDate: startDate
             )
         } catch {
+            #if DEBUG
             print("Failed to start recording: \(error)")
+            #endif
         }
+    }
+
+    /// Build an AVAudioFormat that matches the hardware input (sample rate + channel count).
+    /// Falls back to the inputNode's outputFormat if the hardware format is unavailable.
+    private static func hardwareInputFormat(for engine: AVAudioEngine) -> AVAudioFormat? {
+        let inputNode = engine.inputNode
+
+        // 1. Try the hardware format (reflects the actual mic, including headset mics)
+        let hwFormat = inputNode.inputFormat(forBus: 0)
+        if hwFormat.sampleRate > 0 && hwFormat.channelCount > 0 {
+            // Build an explicit Float32 non-interleaved format with the hardware's
+            // sample rate and channel count.  This avoids carrying over any unexpected
+            // common-format from the hardware descriptor.
+            if let fmt = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: hwFormat.sampleRate,
+                channels: hwFormat.channelCount,
+                interleaved: false
+            ) {
+                return fmt
+            }
+        }
+
+        // 2. Fallback: the output side of the input node (may already be correct)
+        let outFmt = inputNode.outputFormat(forBus: 0)
+        if outFmt.sampleRate > 0 && outFmt.channelCount > 0 {
+            return outFmt
+        }
+
+        return nil
     }
 
     /// Start recording using AVAudioEngine with gain and limiter nodes
@@ -403,19 +450,29 @@ final class RecorderManager: NSObject {
         do {
             // Create audio engine
             let engine = AVAudioEngine()
-            let inputNode = engine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
 
-            // Log input format for debugging
-            print("🎙️ [RecorderManager] Engine input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch, \(inputFormat.commonFormat.rawValue)")
-
-            // Verify input format is valid
-            guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
-                print("❌ [RecorderManager] Invalid input format - falling back to simple recording")
+            // Obtain the true hardware input format.
+            // Using inputNode.inputFormat(forBus:0) instead of outputFormat(forBus:0)
+            // ensures we get the format the connected mic actually delivers —
+            // critical for wired headset mics and Bluetooth HFP mics whose sample
+            // rate / channel count differ from the built-in mic.
+            guard let inputFormat = Self.hardwareInputFormat(for: engine) else {
+                #if DEBUG
+                print("❌ [RecorderManager] Could not determine a valid input format - falling back to simple recording")
+                #endif
                 isUsingEngine = false
                 startSimpleRecording(fileURL: fileURL)
                 return
             }
+
+            let inputNode = engine.inputNode
+
+            // Log input format for debugging
+            #if DEBUG
+            print("🎙️ [RecorderManager] Engine input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch, \(inputFormat.commonFormat.rawValue)")
+            print("🎙️ [RecorderManager] Hardware input format: \(inputNode.inputFormat(forBus: 0))")
+            print("🎙️ [RecorderManager] InputNode output format: \(inputNode.outputFormat(forBus: 0))")
+            #endif
 
             // Create gain mixer node
             let gainMixer = AVAudioMixerNode()
@@ -433,26 +490,32 @@ final class RecorderManager: NSObject {
             engine.attach(limiter)
 
             // Connect: Input → Gain Mixer → Limiter
+            // Use the hardware-derived format for all connections in the recording chain.
             engine.connect(inputNode, to: gainMixer, format: inputFormat)
             engine.connect(gainMixer, to: limiter, format: inputFormat)
 
-            // Use limiter's actual output format for tap (avoids sample rate mismatch that causes 0-frame files)
+            // Use limiter's actual output format for tap — this reflects the format
+            // after the full connection chain has been resolved by the engine.
             let tapFormat = limiter.outputFormat(forBus: 0)
-            resolvedEngineSampleRate = tapFormat.sampleRate
-            print("🎙️ [RecorderManager] Tap format: \(tapFormat.sampleRate)Hz, \(tapFormat.channelCount)ch")
+            // If the limiter output is invalid (can happen rarely), fall back to inputFormat
+            let effectiveTapFormat = (tapFormat.sampleRate > 0 && tapFormat.channelCount > 0) ? tapFormat : inputFormat
+            resolvedEngineSampleRate = effectiveTapFormat.sampleRate
+            #if DEBUG
+            print("🎙️ [RecorderManager] Tap format: \(effectiveTapFormat.sampleRate)Hz, \(effectiveTapFormat.channelCount)ch")
+            #endif
 
             // Create output audio file matching tap format
             let file = try AVAudioFile(
                 forWriting: fileURL,
                 settings: engineFileSettings(for: qualityPreset),
-                commonFormat: tapFormat.commonFormat,
-                interleaved: tapFormat.isInterleaved
+                commonFormat: effectiveTapFormat.commonFormat,
+                interleaved: effectiveTapFormat.isInterleaved
             )
 
             // Install tap on limiter output to write to file (using native format, no conversion)
             // File I/O is dispatched to a serial queue to avoid blocking the real-time render thread
             let writeQueue = self.fileWriteQueue
-            limiter.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: effectiveTapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
                 // Copy buffer for off-thread writing (tap may reuse the buffer)
                 guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
                 copy.frameLength = buffer.frameLength
@@ -468,7 +531,9 @@ final class RecorderManager: NSObject {
                     do {
                         try file.write(from: copy)
                     } catch {
+                        #if DEBUG
                         print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                        #endif
                     }
                 }
 
@@ -509,10 +574,10 @@ final class RecorderManager: NSObject {
                 engine.attach(nodes.mixer)
                 engine.attach(nodes.eq)
                 engine.attach(nodes.compressor)
-                engine.connect(limiter, to: nodes.mixer, format: tapFormat)
-                engine.connect(nodes.mixer, to: nodes.eq, format: tapFormat)
-                engine.connect(nodes.eq, to: nodes.compressor, format: tapFormat)
-                engine.connect(nodes.compressor, to: engine.mainMixerNode, format: tapFormat)
+                engine.connect(limiter, to: nodes.mixer, format: effectiveTapFormat)
+                engine.connect(nodes.mixer, to: nodes.eq, format: effectiveTapFormat)
+                engine.connect(nodes.eq, to: nodes.compressor, format: effectiveTapFormat)
+                engine.connect(nodes.compressor, to: engine.mainMixerNode, format: effectiveTapFormat)
             }
 
             // Start the engine
@@ -542,9 +607,13 @@ final class RecorderManager: NSObject {
                 startDate: startDate
             )
 
+            #if DEBUG
             print("🎙️ [RecorderManager] Started engine recording with gain: \(inputSettings.gainDb) dB, limiter: \(inputSettings.limiterEnabled ? "ON" : "OFF")")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ [RecorderManager] Failed to start engine recording: \(error)")
+            #endif
             // Fallback to simple recording
             isUsingEngine = false
             startSimpleRecording(fileURL: fileURL)
@@ -617,39 +686,63 @@ final class RecorderManager: NSObject {
     private var consecutiveSilentBuffers = 0
     private let silentBufferWarningThreshold = 20
 
+    /// Smoothed peak level for meter display (peak with decay)
+    private var smoothedPeakLevel: Float = 0
+    /// Decay rate per buffer callback (~93% retention gives ~300ms decay at 44.1kHz/4096 buffer)
+    private let peakDecayFactor: Float = 0.93
+
     /// Update meter samples from audio buffer (for engine recording)
+    /// Uses true peak detection (not RMS) for accurate, responsive metering.
     private func updateMeterFromBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
         let frameLength = Int(buffer.frameLength)
         guard frameLength > 0 else { return }
 
-        // Calculate RMS level
-        var sum: Float = 0
-        for i in 0..<frameLength {
-            let sample = channelData[0][i]
-            sum += sample * sample
+        // Find peak amplitude in the buffer (true peak metering)
+        var peak: Float = 0
+        let channelCount = Int(buffer.format.channelCount)
+        for ch in 0..<channelCount {
+            for i in 0..<frameLength {
+                let absSample = abs(channelData[ch][i])
+                if absSample > peak {
+                    peak = absSample
+                }
+            }
         }
-        let rms = sqrt(sum / Float(frameLength))
 
         // Detect if we're getting silence (potential Bluetooth routing issue)
-        if rms < 0.0001 {
+        if peak < 0.0001 {
             consecutiveSilentBuffers += 1
             if consecutiveSilentBuffers == silentBufferWarningThreshold {
+                #if DEBUG
                 print("⚠️ [RecorderManager] WARNING: \(silentBufferWarningThreshold) consecutive silent buffers detected - possible input routing issue!")
+                #endif
                 AudioSessionManager.shared.logCurrentRoute(context: "silent buffer warning")
             }
         } else {
             if consecutiveSilentBuffers >= silentBufferWarningThreshold {
+                #if DEBUG
                 print("✅ [RecorderManager] Audio input recovered after \(consecutiveSilentBuffers) silent buffers")
+                #endif
             }
             consecutiveSilentBuffers = 0
         }
 
-        // Convert to dB and normalize
-        let dB = 20 * log10(max(rms, 0.000001))
-        let minDB: Float = -50
+        // Peak hold with decay: rise instantly, fall slowly
+        if peak >= smoothedPeakLevel {
+            smoothedPeakLevel = peak
+        } else {
+            smoothedPeakLevel = smoothedPeakLevel * peakDecayFactor
+        }
+
+        // Convert peak amplitude to dB: dB = 20 * log10(amplitude)
+        // Use -60 dB as the floor (amplitude ~0.001) for professional meter range
+        let amplitude = max(smoothedPeakLevel, 1e-6)  // avoid log10(0)
+        let dB = 20 * log10(amplitude)
+        let minDB: Float = -60
         let maxDB: Float = 0
         let clampedDB = max(minDB, min(maxDB, dB))
+        // Linear mapping of dB to 0..1 (the view handles perceptual scaling)
         let normalized = (clampedDB - minDB) / (maxDB - minDB)
 
         // Update samples on main actor
@@ -662,17 +755,23 @@ final class RecorderManager: NSObject {
     /// Stop recording and return raw data for saving
     func stopRecording() -> RawRecordingData? {
         guard recordingState.isActive, let fileURL = currentFileURL else {
+            #if DEBUG
             print("⚠️ [RecorderManager] stopRecording called but no active recording")
+            #endif
             return nil
         }
 
         // Verify we have either engine or recorder
         guard isUsingEngine ? (audioEngine != nil) : (audioRecorder != nil) else {
+            #if DEBUG
             print("⚠️ [RecorderManager] stopRecording called but no recorder/engine available")
+            #endif
             return nil
         }
 
+        #if DEBUG
         print("🎙️ [RecorderManager] Stopping recording: \(fileURL.lastPathComponent)")
+        #endif
 
         // Update duration one final time if recording (not paused)
         if recordingState == .recording, let startTime = segmentStartTime {
@@ -702,15 +801,21 @@ final class RecorderManager: NSObject {
                 let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
                 if let size = attrs[.size] as? Int64, size > 100 {
                     fileVerified = true
+                    #if DEBUG
                     print("✅ [RecorderManager] File verified: \(size) bytes")
+                    #endif
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ [RecorderManager] Error checking file attributes: \(error.localizedDescription)")
+                #endif
             }
         }
 
         if !fileVerified {
+            #if DEBUG
             print("❌ [RecorderManager] File verification failed")
+            #endif
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
         }
 
@@ -814,7 +919,9 @@ final class RecorderManager: NSObject {
             do {
                 try audioEngine?.start()
             } catch {
+                #if DEBUG
                 print("❌ [RecorderManager] Failed to resume engine: \(error)")
+                #endif
                 return
             }
         } else {
@@ -840,7 +947,9 @@ final class RecorderManager: NSObject {
         guard let engine = audioEngine,
               let fileURL = currentFileURL,
               recordingState == .recording else {
+            #if DEBUG
             print("⚠️ [RecorderManager] Cannot handle route change - invalid state")
+            #endif
             return
         }
 
@@ -849,14 +958,19 @@ final class RecorderManager: NSObject {
             accumulatedDuration += Date().timeIntervalSince(startTime)
         }
 
+        #if DEBUG
         print("🔄 [RecorderManager] Stopping engine for route change...")
+        #endif
 
         // Stop the current engine (but keep the file open)
         limiterNode?.removeTap(onBus: 0)
         engine.stop()
 
-        // Small delay to let the audio system settle after route change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // Allow the audio system to settle after route change.
+        // Bluetooth HFP transitions can take 200-500ms; wired headsets ~100-200ms.
+        let delay: Double = AudioSessionManager.shared.isBluetoothOutput()
+            || AudioSessionManager.shared.isBluetoothInput() ? 0.5 : 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.restartEngineAfterRouteChange()
         }
     }
@@ -866,7 +980,9 @@ final class RecorderManager: NSObject {
         guard let engine = audioEngine,
               let gainMixer = gainMixerNode,
               let limiter = limiterNode else {
+            #if DEBUG
             print("❌ [RecorderManager] Cannot restart engine - missing components")
+            #endif
             return
         }
 
@@ -877,16 +993,17 @@ final class RecorderManager: NSObject {
                 settings: appSettings
             )
 
-            let inputNode = engine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
-
-            print("🔄 [RecorderManager] New input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
-
-            // Verify input format is valid (non-zero sample rate)
-            guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+            // Use the hardware input format — same approach as startEngineRecording
+            guard let inputFormat = Self.hardwareInputFormat(for: engine) else {
+                #if DEBUG
                 print("❌ [RecorderManager] Invalid input format after route change")
+                #endif
                 return
             }
+
+            #if DEBUG
+            print("🔄 [RecorderManager] New input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
+            #endif
 
             // Check if sample rate changed - if so, we need a new file
             let newOutputFormat = engineOutputFormat(for: qualityPreset, inputFormat: inputFormat)
@@ -900,7 +1017,9 @@ final class RecorderManager: NSObject {
                 let segmentURL = fileURL.deletingPathExtension()
                     .appendingPathExtension("seg\(Int(Date().timeIntervalSince1970))")
                     .appendingPathExtension(fileURL.pathExtension)
+                #if DEBUG
                 print("🔄 [RecorderManager] Sample rate changed (\(previousSampleRate) -> \(newOutputFormat.sampleRate)), creating new segment: \(segmentURL.lastPathComponent)")
+                #endif
                 let newFile = try AVAudioFile(
                     forWriting: segmentURL,
                     settings: engineFileSettings(for: qualityPreset),
@@ -913,17 +1032,29 @@ final class RecorderManager: NSObject {
                 // Same sample rate - reuse existing file
                 activeFile = file
             } else {
+                #if DEBUG
                 print("❌ [RecorderManager] No audio file available after route change")
+                #endif
                 return
             }
 
-            // Reconnect nodes with new format
+            // Disconnect ALL nodes in the recording chain so we can reconnect
+            // with the new format — prevents format mismatches between nodes.
             engine.disconnectNodeInput(gainMixer)
+            engine.disconnectNodeInput(limiter)
+
+            // Reconnect full chain: Input → Gain Mixer → Limiter
+            let inputNode = engine.inputNode
             engine.connect(inputNode, to: gainMixer, format: inputFormat)
+            engine.connect(gainMixer, to: limiter, format: inputFormat)
+
+            // Determine effective tap format after reconnection
+            let tapFmt = limiter.outputFormat(forBus: 0)
+            let effectiveTapFormat = (tapFmt.sampleRate > 0 && tapFmt.channelCount > 0) ? tapFmt : inputFormat
 
             // Reinstall tap on limiter — dispatch file write off the real-time thread
             let writeQueue = self.fileWriteQueue
-            limiter.installTap(onBus: 0, bufferSize: 4096, format: newOutputFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: effectiveTapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
                 // Copy buffer for off-thread writing (tap may reuse the buffer)
                 guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
                 copy.frameLength = buffer.frameLength
@@ -939,7 +1070,9 @@ final class RecorderManager: NSObject {
                     do {
                         try activeFile.write(from: copy)
                     } catch {
+                        #if DEBUG
                         print("❌ [RecorderManager] Error writing audio buffer: \(error)")
+                        #endif
                     }
                 }
 
@@ -948,15 +1081,32 @@ final class RecorderManager: NSObject {
                 }
             }
 
+            // Reconnect monitoring effects if active
+            if monitorEffects.isEnabled {
+                let nodes = monitorEffects.createNodes()
+                // Check if nodes are already attached; if not, attach them
+                if nodes.mixer.engine == nil { engine.attach(nodes.mixer) }
+                if nodes.eq.engine == nil { engine.attach(nodes.eq) }
+                if nodes.compressor.engine == nil { engine.attach(nodes.compressor) }
+                engine.connect(limiter, to: nodes.mixer, format: effectiveTapFormat)
+                engine.connect(nodes.mixer, to: nodes.eq, format: effectiveTapFormat)
+                engine.connect(nodes.eq, to: nodes.compressor, format: effectiveTapFormat)
+                engine.connect(nodes.compressor, to: engine.mainMixerNode, format: effectiveTapFormat)
+            }
+
             // Restart the engine
             try engine.start()
 
             // Resume timing
             segmentStartTime = Date()
+            #if DEBUG
             print("✅ [RecorderManager] Engine restarted successfully after route change")
+            #endif
 
         } catch {
+            #if DEBUG
             print("❌ [RecorderManager] Failed to restart engine: \(error)")
+            #endif
         }
     }
 
@@ -984,14 +1134,18 @@ final class RecorderManager: NSObject {
                 settings: appSettings
             )
         } catch {
+            #if DEBUG
             print("⚠️ [RecorderManager] Failed to reconfigure session: \(error)")
+            #endif
         }
 
         // Resume recording
         recorder.record()
         segmentStartTime = Date()
 
+        #if DEBUG
         print("✅ [RecorderManager] Recorder resumed after route change")
+        #endif
     }
 
     /// Discard the current recording without saving
@@ -1046,6 +1200,7 @@ final class RecorderManager: NSObject {
         liveMeterSamples = []
         wasRecordingBeforeInterruption = false
         consecutiveSilentBuffers = 0
+        smoothedPeakLevel = 0
         currentLocation = nil
         currentLocationLabel = ""
     }
@@ -1160,7 +1315,9 @@ final class RecorderManager: NSObject {
                 ofItemAtPath: url.path
             )
         } catch {
+            #if DEBUG
             print("⚠️ [RecorderManager] Failed to set file protection: \(error.localizedDescription)")
+            #endif
         }
 
         // Ensure file is included in iCloud backup (not excluded)
@@ -1170,7 +1327,9 @@ final class RecorderManager: NSObject {
         do {
             try fileURL.setResourceValues(resourceValues)
         } catch {
+            #if DEBUG
             print("⚠️ [RecorderManager] Failed to set backup inclusion: \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -1214,13 +1373,13 @@ final class RecorderManager: NSObject {
 
         recorder.updateMeters()
 
-        // Get average power in dB (typically -160 to 0)
-        let dB = recorder.averagePower(forChannel: 0)
+        // Use peak power (not average) for responsive, accurate peak metering.
+        // peakPower returns the peak sample value in dB for the most recent buffer.
+        let dB = recorder.peakPower(forChannel: 0)
 
-        // Convert dB to normalized value (0...1)
-        // dB ranges from about -60 (silence) to 0 (max)
-        // We'll use -50 as practical minimum for better visual range
-        let minDB: Float = -50
+        // Map dB to normalized value (0...1) with -60 dB floor for professional range.
+        // AVAudioRecorder returns -160 dB for silence; we clamp to -60 dB.
+        let minDB: Float = -60
         let maxDB: Float = 0
 
         let clampedDB = max(minDB, min(maxDB, dB))
@@ -1268,7 +1427,9 @@ extension RecorderManager: CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        #if DEBUG
         print("Location error: \(error.localizedDescription)")
+        #endif
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {

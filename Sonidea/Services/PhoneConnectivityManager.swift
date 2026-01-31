@@ -35,7 +35,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
         do {
             try WCSession.default.updateApplicationContext(["theme": theme.rawValue])
         } catch {
+            #if DEBUG
             print("PhoneConnectivity: Failed to send theme: \(error)")
+            #endif
         }
     }
 
@@ -43,7 +45,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         if let error {
+            #if DEBUG
             print("PhoneConnectivity: Activation error: \(error)")
+            #endif
         }
     }
 
@@ -60,12 +64,16 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         guard let metadata = file.metadata else {
+            #if DEBUG
             print("PhoneConnectivity: Received file without metadata")
+            #endif
             return
         }
 
         guard let uuidString = metadata["uuid"] as? String else {
+            #if DEBUG
             print("PhoneConnectivity: Missing uuid in metadata")
+            #endif
             return
         }
 
@@ -80,7 +88,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
         do {
             try FileManager.default.copyItem(at: file.fileURL, to: stableURL)
         } catch {
+            #if DEBUG
             print("PhoneConnectivity: Failed to copy received file to stable location: \(error)")
+            #endif
             return
         }
 
@@ -95,7 +105,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             // when multiple files arrive simultaneously
             var importedUUIDs = UserDefaults.standard.stringArray(forKey: self.importedUUIDsKey) ?? []
             if importedUUIDs.contains(uuidString) {
+                #if DEBUG
                 print("PhoneConnectivity: Duplicate recording \(uuidString), skipping")
+                #endif
                 try? FileManager.default.removeItem(at: stableURL)
                 return
             }
@@ -103,7 +115,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             // Check Pro + watch sync setting
             guard appState.supportManager.canUseProFeatures,
                   appState.appSettings.watchSyncEnabled else {
+                #if DEBUG
                 print("PhoneConnectivity: Watch sync requires Pro plan and Watch Sync enabled in settings")
+                #endif
                 try? FileManager.default.removeItem(at: stableURL)
                 return
             }
@@ -124,9 +138,13 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
                 importedUUIDs.append(uuidString)
                 UserDefaults.standard.set(importedUUIDs, forKey: self.importedUUIDsKey)
 
+                #if DEBUG
                 print("PhoneConnectivity: Imported watch recording '\(title)'")
+                #endif
             } catch {
+                #if DEBUG
                 print("PhoneConnectivity: Failed to import recording: \(error)")
+                #endif
             }
 
             // Clean up the stable copy (importRecording copies into its own location)

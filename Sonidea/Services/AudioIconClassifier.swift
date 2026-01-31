@@ -58,7 +58,9 @@ final class SoundAnalysisClassifier: AudioIconClassifier {
     func classify(fileURL: URL) async -> AudioClassificationResult? {
         // Verify file exists
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            #if DEBUG
             print("[SoundAnalysisClassifier] File not found: \(fileURL.path)")
+            #endif
             return AudioClassificationResult(icon: .waveform, confidence: 0)
         }
 
@@ -84,7 +86,9 @@ final class SoundAnalysisClassifier: AudioIconClassifier {
                 analyzer.analyze()
             }
         } catch {
+            #if DEBUG
             print("[SoundAnalysisClassifier] Analysis failed: \(error.localizedDescription)")
+            #endif
             return AudioClassificationResult(icon: .waveform, confidence: 0)
         }
     }
@@ -144,7 +148,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
     }
 
     func request(_ request: SNRequest, didFailWithError error: Error) {
+        #if DEBUG
         print("[SoundAnalysisClassifier] Request failed: \(error.localizedDescription)")
+        #endif
         deliverResult()
     }
 
@@ -171,7 +177,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
                 confidence: best.value,
                 topPredictions: Array(qualifiedPredictions)
             )
+            #if DEBUG
             print("[SoundAnalysisClassifier] Best: \(best.key) @ \(Int(best.value * 100))%, suggestions: \(qualifiedPredictions.count)")
+            #endif
             onComplete?(result)
         } else {
             onComplete?(AudioClassificationResult(icon: .waveform, confidence: 0, topPredictions: []))
@@ -205,10 +213,14 @@ final class AudioIconClassifierManager {
         // Use Apple's built-in SoundAnalysis classifier on iOS 15+
         if #available(iOS 15.0, *) {
             classifier = SoundAnalysisClassifier()
+            #if DEBUG
             print("[AudioIconClassifierManager] Using Apple SoundAnalysis classifier")
+            #endif
         } else {
             classifier = LegacySoundAnalysisClassifier()
+            #if DEBUG
             print("[AudioIconClassifierManager] Using legacy fallback (iOS < 15)")
+            #endif
         }
     }
 
@@ -221,10 +233,14 @@ final class AudioIconClassifierManager {
         }
 
         if result.meetsThreshold(confidenceThreshold) {
+            #if DEBUG
             print("[AudioIconClassifierManager] Classification: \(result.icon.displayName) @ \(Int(result.confidence * 100))%")
+            #endif
             return result.icon
         } else {
+            #if DEBUG
             print("[AudioIconClassifierManager] Below threshold: \(result.icon.displayName) @ \(Int(result.confidence * 100))%")
+            #endif
             return nil
         }
     }
@@ -242,13 +258,17 @@ final class AudioIconClassifierManager {
 
         // Skip if user has already set an icon (iconSource == .user)
         if recording.iconSource == .user {
+            #if DEBUG
             print("[AudioIconClassifierManager] Skipping - user-set icon")
+            #endif
             return recording
         }
 
         // Skip if icon has already been auto-classified (iconSourceRaw is set to "auto")
         if recording.iconSourceRaw == IconSource.auto.rawValue && recording.iconName != nil {
+            #if DEBUG
             print("[AudioIconClassifierManager] Skipping - already classified")
+            #endif
             return recording
         }
 
@@ -268,9 +288,13 @@ final class AudioIconClassifierManager {
         if result.meetsThreshold(confidenceThreshold) {
             updated.iconName = result.icon.rawValue
             updated.iconSource = .auto
+            #if DEBUG
             print("[AudioIconClassifierManager] Set icon to \(result.icon.displayName) for: \(recording.title)")
+            #endif
         } else {
+            #if DEBUG
             print("[AudioIconClassifierManager] Below threshold (\(Int(result.confidence * 100))%), stored \(result.topPredictions.count) suggestions")
+            #endif
         }
 
         return updated
