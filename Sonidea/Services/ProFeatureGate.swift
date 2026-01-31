@@ -18,7 +18,7 @@ enum ProFeatureContext: String, Identifiable {
 
     /// Features temporarily ungated for TestFlight testing.
     /// Remove items from this set to re-gate them behind Pro.
-    static let temporarilyFree: Set<ProFeatureContext> = [.editMode, .recordOverTrack]
+    static let temporarilyFree: Set<ProFeatureContext> = []
 
     var isFree: Bool { Self.temporarilyFree.contains(self) }
 
