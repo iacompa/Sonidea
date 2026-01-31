@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import BackgroundTasks
 
 @main
 struct SonideaApp: App {
@@ -36,6 +37,11 @@ struct SonideaApp: App {
                     // Set up shared album real-time sync subscriptions
                     Task {
                         await appState.sharedAlbumManager.setupDatabaseSubscriptions()
+                    }
+
+                    // Refresh cached CloudKit user ID on launch (prevents stale ID after account switch)
+                    Task {
+                        await appState.sharedAlbumManager.refreshCachedUserId()
                     }
 
                     // Purge expired shared album trash & evict audio cache on launch
@@ -72,6 +78,11 @@ struct SonideaApp: App {
                             }
                         }
 
+                        // Refresh cached CloudKit user ID on foreground (catches account switches)
+                        Task {
+                            await appState.sharedAlbumManager.refreshCachedUserId()
+                        }
+
                         // Purge expired shared album trash on foreground
                         Task {
                             await appState.sharedAlbumManager.purgeAllExpiredTrash()
@@ -85,6 +96,11 @@ struct SonideaApp: App {
                         // When going to background, verify Live Activity state matches recording state
                         if !appState.recorder.isActive {
                             RecordingLiveActivityManager.shared.endAllActivities()
+                        }
+
+                        // Schedule background sync if iCloud sync is enabled
+                        if appState.appSettings.iCloudSyncEnabled {
+                            appState.syncManager.scheduleBackgroundSync()
                         }
                     }
                 }
@@ -160,6 +176,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Register for remote notifications (for CloudKit silent push)
         application.registerForRemoteNotifications()
+
+        // Register background sync task
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.iacompa.sonidea.sync", using: nil) { task in
+            guard let processingTask = task as? BGProcessingTask else { return }
+            Task { @MainActor in
+                if let syncManager = AppDelegate.syncManager {
+                    processingTask.expirationHandler = {
+                        // Save progress on expiration — performFullSync saves periodically
+                    }
+                    await syncManager.syncNow()
+                    processingTask.setTaskCompleted(success: true)
+                } else {
+                    processingTask.setTaskCompleted(success: false)
+                }
+            }
+        }
 
         return true
     }

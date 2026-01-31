@@ -79,6 +79,8 @@ struct TagManagerView: View {
                         deleteTagsAt(offsets)
                     }
                     .onMove { source, destination in
+                        // Disable reordering during search — filtered indices don't match full tag array
+                        guard searchQuery.isEmpty else { return }
                         appState.moveTag(from: source, to: destination)
                     }
                 }
@@ -287,18 +289,18 @@ struct TagManagerRow: View {
 // MARK: - Tag Preset Colors
 
 private let tagPresetColors: [Color] = [
-    Color(hex: "#FF6B6B")!, // Red
-    Color(hex: "#FF8E72")!, // Coral
-    Color(hex: "#F39C12")!, // Orange
-    Color(hex: "#F1C40F")!, // Yellow
-    Color(hex: "#2ECC71")!, // Green
-    Color(hex: "#4ECDC4")!, // Teal
-    Color(hex: "#3498DB")!, // Blue
-    Color(hex: "#5B7FFF")!, // Indigo
-    Color(hex: "#9B59B6")!, // Purple
-    Color(hex: "#E84393")!, // Pink
-    Color(hex: "#A0522D")!, // Brown
-    Color(hex: "#95A5A6")!, // Gray
+    Color(hex: "#FF6B6B") ?? .red,        // Red
+    Color(hex: "#FF8E72") ?? .orange,      // Coral
+    Color(hex: "#F39C12") ?? .orange,      // Orange
+    Color(hex: "#F1C40F") ?? .yellow,      // Yellow
+    Color(hex: "#2ECC71") ?? .green,       // Green
+    Color(hex: "#4ECDC4") ?? .teal,        // Teal
+    Color(hex: "#3498DB") ?? .blue,        // Blue
+    Color(hex: "#5B7FFF") ?? .indigo,      // Indigo
+    Color(hex: "#9B59B6") ?? .purple,      // Purple
+    Color(hex: "#E84393") ?? .pink,        // Pink
+    Color(hex: "#A0522D") ?? .brown,       // Brown
+    Color(hex: "#95A5A6") ?? .gray,        // Gray
 ]
 
 // MARK: - Create Tag Sheet
@@ -308,7 +310,7 @@ struct CreateTagSheet: View {
     @Environment(AppState.self) private var appState
 
     @State private var tagName = ""
-    @State private var tagColor = Color(hex: "#3498DB")!
+    @State private var tagColor = Color(hex: "#3498DB") ?? .blue
     @State private var showDuplicateError = false
 
     var body: some View {

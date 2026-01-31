@@ -35,7 +35,9 @@ final class RecordingMonitorEffects {
     var compressorRatio: Float = 4.0      // 1:1 to 20:1
 
     // Monitor volume
-    var monitorVolume: Float = 1.0
+    var monitorVolume: Float = 1.0 {
+        didSet { applyMonitorVolume() }
+    }
 
     // MARK: - Audio Nodes
 
@@ -96,8 +98,9 @@ final class RecordingMonitorEffects {
             AudioUnitSetParameter(au, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.01, 0)
             AudioUnitSetParameter(au, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.1, 0)
         } else {
-            // Bypass: set threshold to 0 (no compression)
-            AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 0, 0)
+            // Bypass: set threshold to +40 dB so compressor never engages
+            AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 40, 0)
+            AudioUnitSetParameter(au, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 40, 0)
         }
     }
 

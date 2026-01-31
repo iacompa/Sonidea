@@ -69,6 +69,7 @@ enum SonideaRecordType: String {
     case tag = "Tag"
     case album = "Album"
     case project = "Project"
+    case overdubGroup = "OverdubGroup"
     case tombstone = "Tombstone"  // For tracking deletions
     case syncState = "SyncState"  // For tracking sync metadata
 }
@@ -80,6 +81,31 @@ struct Tombstone: Codable, Identifiable {
     let recordType: String
     let deletedAt: Date
     let deviceId: String
+}
+
+// MARK: - Pending Sync Operation
+
+struct PendingSyncOperation: Codable, Identifiable {
+    let id: UUID
+    let operationType: OperationType
+    let recordType: String      // SonideaRecordType rawValue
+    let recordId: String        // UUID string of the record
+    let createdAt: Date
+    var retryCount: Int
+
+    enum OperationType: String, Codable {
+        case save
+        case delete
+    }
+
+    init(operationType: OperationType, recordType: String, recordId: String) {
+        self.id = UUID()
+        self.operationType = operationType
+        self.recordType = recordType
+        self.recordId = recordId
+        self.createdAt = Date()
+        self.retryCount = 0
+    }
 }
 
 // MARK: - CloudKit Sync Engine
@@ -106,20 +132,17 @@ final class CloudKitSyncEngine {
 
     // MARK: - CloudKit Objects
 
-    private var container: CKContainer {
-        CKContainer(identifier: containerIdentifier)
-    }
-
-    private var privateDatabase: CKDatabase {
-        container.privateCloudDatabase
-    }
+    private let container: CKContainer
+    private let privateDatabase: CKDatabase
 
     // MARK: - State
 
     private var isEnabled = false
     private var syncTask: Task<Void, Never>?
+    private var accountChangeObserver: NSObjectProtocol?
     private var changeToken: CKServerChangeToken?
     private var tombstones: [Tombstone] = []
+    private var pendingOperations: [PendingSyncOperation] = []
     private var deviceId: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
 
     /// Tracks the last synced modifiedAt date per record ID to avoid re-uploading unchanged items
@@ -136,10 +159,14 @@ final class CloudKitSyncEngine {
     private let zoneCreatedKey = "cloudkit.zoneCreated"
     private let subscriptionCreatedKey = "cloudkit.subscriptionCreated"
     private let lastSyncedDatesKey = "cloudkit.lastSyncedDates"
+    private let pendingOperationsKey = "cloudkit.pendingOperations"
 
     // MARK: - Initialization
 
     init() {
+        let c = CKContainer(identifier: "iCloud.com.iacompa.sonidea")
+        self.container = c
+        self.privateDatabase = c.privateCloudDatabase
         loadPersistedState()
     }
 
@@ -168,6 +195,17 @@ final class CloudKitSyncEngine {
             return
         }
 
+        // Observe iCloud account changes
+        accountChangeObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name.CKAccountChanged,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.handleAccountChange()
+            }
+        }
+
         // Setup CloudKit infrastructure
         do {
             try await setupZone()
@@ -185,6 +223,10 @@ final class CloudKitSyncEngine {
         isEnabled = false
         syncTask?.cancel()
         syncTask = nil
+        if let observer = accountChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            accountChangeObserver = nil
+        }
         status = .disabled
     }
 
@@ -214,11 +256,37 @@ final class CloudKitSyncEngine {
         }
     }
 
-    /// Sync on app foreground
+    /// Sync on app foreground — runs full sync to retry any failed uploads
     func syncOnForeground() async {
         guard isEnabled else { return }
         logger.info("Syncing on foreground")
-        await fetchChanges()
+        await performFullSync()
+    }
+
+    /// Handle iCloud account change (sign out, sign in as different user)
+    private func handleAccountChange() async {
+        logger.info("iCloud account changed, re-checking status")
+        do {
+            let accountStatus = try await container.accountStatus()
+            if accountStatus == .available {
+                // Account switched — reset sync state and re-setup
+                changeToken = nil
+                saveChangeToken()
+                lastSyncedDates.removeAll()
+                saveLastSyncedDates()
+                UserDefaults.standard.removeObject(forKey: zoneCreatedKey)
+                UserDefaults.standard.removeObject(forKey: subscriptionCreatedKey)
+
+                try await setupZone()
+                try await setupSubscription()
+                await performFullSync()
+            } else {
+                status = .accountUnavailable
+            }
+        } catch {
+            logger.error("Failed to handle account change: \(error.localizedDescription)")
+            status = .error("iCloud account error")
+        }
     }
 
     // MARK: - Record Operations
@@ -241,6 +309,12 @@ final class CloudKitSyncEngine {
 
         // Add audio file as CKAsset if it exists
         if FileManager.default.fileExists(atPath: recording.fileURL.path) {
+            // Check file size — warn for very large files (>200MB)
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: recording.fileURL.path)[.size] as? Int) ?? 0
+            if fileSize > 200_000_000 {
+                logger.warning("Large audio file (\(fileSize / 1_000_000)MB) for recording \(recording.id) — upload may be slow")
+            }
+
             let asset = CKAsset(fileURL: recording.fileURL)
             record["audioFile"] = asset
 
@@ -481,6 +555,63 @@ final class CloudKitSyncEngine {
         }
     }
 
+    /// Save an overdub group to CloudKit
+    func saveOverdubGroup(_ group: OverdubGroup) async throws {
+        guard isEnabled else { return }
+
+        // Fetch existing record to preserve server change tag, or create new
+        let recordID = CKRecord.ID(recordName: group.id.uuidString, zoneID: zoneID)
+        let record: CKRecord
+        do {
+            record = try await privateDatabase.record(for: recordID)
+        } catch {
+            record = CKRecord(recordType: SonideaRecordType.overdubGroup.rawValue, recordID: recordID)
+        }
+
+        group.populateCKRecord(record)
+
+        do {
+            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            logger.info("Saved overdub group: \(group.id)")
+            updateLastSync()
+        } catch {
+            throw error
+        }
+    }
+
+    /// Delete an overdub group from CloudKit
+    func deleteOverdubGroup(_ groupId: UUID) async throws {
+        guard isEnabled else { return }
+
+        let recordID = CKRecord.ID(recordName: groupId.uuidString, zoneID: zoneID)
+
+        // Create tombstone
+        let tombstone = Tombstone(
+            id: groupId,
+            recordType: SonideaRecordType.overdubGroup.rawValue,
+            deletedAt: Date(),
+            deviceId: deviceId
+        )
+        tombstones.append(tombstone)
+        saveTombstones()
+
+        // Save tombstone record
+        let tombstoneRecord = CKRecord(recordType: SonideaRecordType.tombstone.rawValue, recordID: CKRecord.ID(recordName: "tombstone-\(groupId.uuidString)", zoneID: zoneID))
+        tombstoneRecord["targetId"] = groupId.uuidString
+        tombstoneRecord["targetType"] = SonideaRecordType.overdubGroup.rawValue
+        tombstoneRecord["deletedAt"] = tombstone.deletedAt
+        tombstoneRecord["deviceId"] = deviceId
+
+        do {
+            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            logger.info("Deleted overdub group from CloudKit: \(groupId)")
+            updateLastSync()
+        } catch {
+            logger.error("Failed to delete overdub group: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
     // MARK: - Zone Setup
 
     private func setupZone() async throws {
@@ -533,142 +664,245 @@ final class CloudKitSyncEngine {
         uploadProgress.removeAll()
         status = .syncing(progress: 0, description: "Syncing...")
 
-        do {
-            // Upload local changes — skip items whose modifiedAt hasn't changed since last sync
-            let recordings = appState.recordings
-            let tags = appState.tags
-            let albums = appState.albums
-            let projects = appState.projects
+        // Drain any queued operations from previous failed syncs
+        await drainPendingOperations()
 
-            // Filter to only items that have changed since last synced
-            let recordingsToSync = recordings.filter { recording in
-                guard let lastSynced = lastSyncedDates[recording.id.uuidString] else { return true }
-                return recording.modifiedAt > lastSynced
-            }
-            let projectsToSync = projects.filter { project in
-                guard let lastSynced = lastSyncedDates[project.id.uuidString] else { return true }
-                return project.updatedAt > lastSynced
-            }
-            // Tags and albums are lightweight — always sync them
-            let totalItems = recordingsToSync.count + tags.count + albums.count + projectsToSync.count
-            var completed = 0
+        // Upload local changes — skip items whose modifiedAt hasn't changed since last sync
+        let recordings = appState.recordings
+        let tags = appState.tags
+        let albums = appState.albums
+        let projects = appState.projects
 
-            logger.info("Full sync: \(recordingsToSync.count)/\(recordings.count) recordings, \(projectsToSync.count)/\(projects.count) projects need upload")
+        // Filter to only items that have changed since last synced
+        let recordingsToSync = recordings.filter { recording in
+            guard let lastSynced = lastSyncedDates[recording.id.uuidString] else { return true }
+            return recording.modifiedAt > lastSynced
+        }
+        let projectsToSync = projects.filter { project in
+            guard let lastSynced = lastSyncedDates[project.id.uuidString] else { return true }
+            return project.updatedAt > lastSynced
+        }
+        // Tags and albums are lightweight — always sync them
+        let totalItems = recordingsToSync.count + tags.count + albums.count + projectsToSync.count
+        var completed = 0
+        var quotaExceeded = false
 
-            // Batch upload recordings (only changed ones)
-            for recording in recordingsToSync {
-                status = .syncing(
-                    progress: Double(completed) / Double(max(1, totalItems)),
-                    description: "Uploading \(recording.title)..."
-                )
-                do {
-                    try await withRetry {
-                        try await self.saveRecording(recording)
-                    }
-                    markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
-                } catch {
-                    logger.error("Failed to sync recording after retries: \(error.localizedDescription)")
-                    // Continue with next recording
+        logger.info("Full sync: \(recordingsToSync.count)/\(recordings.count) recordings, \(projectsToSync.count)/\(projects.count) projects need upload")
+
+        // Batch upload recordings (only changed ones)
+        for recording in recordingsToSync {
+            if quotaExceeded { break }
+            status = .syncing(
+                progress: Double(completed) / Double(max(1, totalItems)),
+                description: "Uploading \(recording.title)..."
+            )
+            do {
+                try await withRetry {
+                    try await self.saveRecording(recording)
                 }
-                completed += 1
+                markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
+            } catch let ckError as CKError where ckError.code == .quotaExceeded {
+                logger.error("iCloud storage quota exceeded — stopping uploads")
+                quotaExceeded = true
+            } catch {
+                logger.error("Failed to sync recording after retries: \(error.localizedDescription)")
+                // Continue with next recording
             }
-
-            // Batch upload tags
-            for tag in tags {
-                do {
-                    try await withRetry {
-                        try await self.saveTag(tag)
-                    }
-                } catch {
-                    logger.error("Failed to sync tag after retries: \(error.localizedDescription)")
-                }
-                completed += 1
-                status = .syncing(
-                    progress: Double(completed) / Double(max(1, totalItems)),
-                    description: "Syncing tags..."
-                )
+            completed += 1
+            // Save progress periodically (every 10 items)
+            if completed % 10 == 0 {
+                saveLastSyncedDates()
             }
+        }
 
-            // Batch upload albums
-            for album in albums {
-                do {
-                    try await withRetry {
-                        try await self.saveAlbum(album)
-                    }
-                } catch {
-                    logger.error("Failed to sync album after retries: \(error.localizedDescription)")
-                }
-                completed += 1
-            }
-
-            // Batch upload projects (only changed ones)
-            for project in projectsToSync {
-                do {
-                    try await withRetry {
-                        try await self.saveProject(project)
-                    }
-                    markSynced(id: project.id.uuidString, modifiedAt: project.updatedAt)
-                } catch {
-                    logger.error("Failed to sync project after retries: \(error.localizedDescription)")
-                }
-                completed += 1
-            }
-
-            // Persist the synced dates
+        if quotaExceeded {
             saveLastSyncedDates()
+            status = .error("iCloud storage full — recordings not backed up")
+            return
+        }
 
-            // Fetch remote changes
-            await fetchChanges()
+        // Batch upload tags
+        for tag in tags {
+            do {
+                try await withRetry {
+                    try await self.saveTag(tag)
+                }
+            } catch {
+                logger.error("Failed to sync tag after retries: \(error.localizedDescription)")
+            }
+            completed += 1
+            status = .syncing(
+                progress: Double(completed) / Double(max(1, totalItems)),
+                description: "Syncing tags..."
+            )
+        }
 
+        // Batch upload albums
+        for album in albums {
+            do {
+                try await withRetry {
+                    try await self.saveAlbum(album)
+                }
+            } catch {
+                logger.error("Failed to sync album after retries: \(error.localizedDescription)")
+            }
+            completed += 1
+        }
+
+        // Batch upload projects (only changed ones)
+        for project in projectsToSync {
+            do {
+                try await withRetry {
+                    try await self.saveProject(project)
+                }
+                markSynced(id: project.id.uuidString, modifiedAt: project.updatedAt)
+            } catch {
+                logger.error("Failed to sync project after retries: \(error.localizedDescription)")
+            }
+            completed += 1
+        }
+
+        // Batch upload overdub groups (lightweight — always sync all)
+        if let overdubGroups = appState.overdubGroups as [OverdubGroup]? {
+            for group in overdubGroups {
+                do {
+                    try await withRetry {
+                        try await self.saveOverdubGroup(group)
+                    }
+                } catch {
+                    logger.error("Failed to sync overdub group after retries: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        // Persist the synced dates
+        saveLastSyncedDates()
+
+        // Fetch remote changes
+        let fetchSucceeded = await fetchChanges()
+
+        // Only show "Synced" if fetch succeeded
+        if fetchSucceeded {
             updateLastSync()
             status = .synced(lastSyncDate ?? Date())
-
-        } catch {
-            logger.error("Full sync failed: \(error.localizedDescription)")
-            status = .error(error.localizedDescription)
+        } else {
+            // Uploads succeeded but fetch failed — still persist sync dates
+            // but don't claim we're fully synced
+            status = .error("Failed to download changes")
         }
     }
 
     // MARK: - Fetch Changes
 
-    private func fetchChanges() async {
-        guard let appState = appState else { return }
+    /// Fetch remote changes. Returns `true` on success, `false` on failure.
+    /// Handles `moreComing` pagination and tolerates individual record errors
+    /// so that a single corrupted record does not abort the entire fetch loop.
+    @discardableResult
+    private func fetchChanges() async -> Bool {
+        guard let appState = appState else { return false }
 
         status = .syncing(progress: 0.5, description: "Checking for changes...")
 
-        do {
-            var changedRecords: [CKRecord] = []
-            var deletedRecordIDs: [CKRecord.ID] = []
+        var changedRecords: [CKRecord] = []
+        var deletedRecordIDs: [CKRecord.ID] = []
+        var currentToken = changeToken
+        var pageCount = 0
+        var individualFailureCount = 0
 
-            let changes = try await privateDatabase.recordZoneChanges(
-                inZoneWith: zoneID,
-                since: changeToken
-            )
+        // Pagination loop — CloudKit may split large result sets across multiple pages.
+        // Each page sets `moreComing = true` until the final page.
+        var hasMore = true
+        while hasMore {
+            pageCount += 1
+            hasMore = false
 
-            // Process changed records - extract CKRecord from modification result
-            for (_, result) in changes.modificationResultsByID {
-                if case .success(let modification) = result {
-                    changedRecords.append(modification.record)
+            do {
+                let changes = try await privateDatabase.recordZoneChanges(
+                    inZoneWith: zoneID,
+                    since: currentToken
+                )
+
+                // Process changed records — handle individual record successes and failures
+                for (recordID, result) in changes.modificationResultsByID {
+                    switch result {
+                    case .success(let modification):
+                        changedRecords.append(modification.record)
+                    case .failure(let recordError):
+                        individualFailureCount += 1
+                        logger.error("Failed to fetch record \(recordID.recordName): \(recordError.localizedDescription)")
+                        #if DEBUG
+                        print("[CloudKitSync] fetchChanges: skipping bad record \(recordID.recordName) — \(recordError.localizedDescription)")
+                        #endif
+                    }
                 }
+
+                // Process deletions
+                for deletion in changes.deletions {
+                    deletedRecordIDs.append(deletion.recordID)
+                }
+
+                // Advance the token for the next page (or final persist)
+                currentToken = changes.changeToken
+
+                // Continue if CloudKit indicates more pages are available
+                hasMore = changes.moreComing
+                if hasMore {
+                    logger.info("Fetch page \(pageCount) complete, more pages coming...")
+                }
+
+            } catch let ckError as CKError where ckError.code == .changeTokenExpired {
+                // Token expired — reset and retry with full fetch
+                logger.warning("Change token expired, resetting and retrying full fetch")
+                changeToken = nil
+                saveChangeToken()
+                return await fetchChanges()
+
+            } catch let ckError as CKError where isFatalCKError(ckError) {
+                // Fundamental infrastructure errors — abort entirely
+                logger.error("Fatal CloudKit error during fetch (page \(pageCount)): \(ckError.localizedDescription)")
+                return false
+
+            } catch {
+                // Unexpected non-CK error — abort
+                logger.error("Failed to fetch changes (page \(pageCount)): \(error.localizedDescription)")
+                return false
             }
+        }
 
-            // Process deletions
-            for deletion in changes.deletions {
-                deletedRecordIDs.append(deletion.recordID)
-            }
+        // Apply all accumulated changes to local state
+        await applyRemoteChanges(changedRecords, deletions: deletedRecordIDs, appState: appState)
 
-            // Save new change token
-            changeToken = changes.changeToken
-            saveChangeToken()
+        // Persist token AFTER data is successfully applied
+        changeToken = currentToken
+        saveChangeToken()
 
-            // Apply changes to local state
-            await applyRemoteChanges(changedRecords, deletions: deletedRecordIDs, appState: appState)
+        if individualFailureCount > 0 {
+            logger.warning("Fetched \(changedRecords.count) changes, \(deletedRecordIDs.count) deletions across \(pageCount) page(s) — \(individualFailureCount) individual record(s) failed")
+        } else {
+            logger.info("Fetched \(changedRecords.count) changes, \(deletedRecordIDs.count) deletions across \(pageCount) page(s)")
+        }
 
-            logger.info("Fetched \(changedRecords.count) changes, \(deletedRecordIDs.count) deletions")
+        return true
+    }
 
-        } catch {
-            logger.error("Failed to fetch changes: \(error.localizedDescription)")
-            // Don't update status to error for fetch failures, just log it
+    /// Returns `true` for CKError codes that represent fundamental infrastructure failures
+    /// where continuing the fetch loop is pointless.
+    private func isFatalCKError(_ error: CKError) -> Bool {
+        switch error.code {
+        case .networkUnavailable,
+             .networkFailure,
+             .serviceUnavailable,
+             .notAuthenticated,
+             .zoneNotFound,
+             .userDeletedZone,
+             .badContainer,
+             .missingEntitlement,
+             .managedAccountRestricted,
+             .quotaExceeded,
+             .incompatibleVersion:
+            return true
+        default:
+            return false
         }
     }
 
@@ -681,6 +915,7 @@ final class CloudKitSyncEngine {
         var tagsChanged = false
         var albumsChanged = false
         var projectsChanged = false
+        var overdubGroupsChanged = false
 
         // Apply modifications
         for record in changedRecords {
@@ -693,20 +928,35 @@ final class CloudKitSyncEngine {
                             // Download audio file if needed
                             if let asset = record["audioFile"] as? CKAsset,
                                let assetURL = asset.fileURL {
-                                // Use a temp copy to avoid data loss if copyItem fails
+                                // Safely replace existing audio file with the synced version
+                                let fm = FileManager.default
                                 let backupURL = recording.fileURL.appendingPathExtension("backup")
-                                try? FileManager.default.moveItem(at: recording.fileURL, to: backupURL)
+                                let originalExists = fm.fileExists(atPath: recording.fileURL.path)
+
+                                // Back up original file if it exists
+                                if originalExists {
+                                    try? fm.removeItem(at: backupURL) // Clean up stale backup
+                                    try? fm.moveItem(at: recording.fileURL, to: backupURL)
+                                }
+
                                 do {
-                                    try FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                                    // Remove destination if move failed (original still in place)
+                                    if fm.fileExists(atPath: recording.fileURL.path) {
+                                        try fm.removeItem(at: recording.fileURL)
+                                    }
+                                    try fm.copyItem(at: assetURL, to: recording.fileURL)
                                     // Copy succeeded, remove backup
-                                    try? FileManager.default.removeItem(at: backupURL)
+                                    try? fm.removeItem(at: backupURL)
                                 } catch {
-                                    // Copy failed — restore backup to prevent data loss
-                                    try? FileManager.default.moveItem(at: backupURL, to: recording.fileURL)
+                                    // Copy failed — restore backup if we have one
+                                    if fm.fileExists(atPath: backupURL.path) && !fm.fileExists(atPath: recording.fileURL.path) {
+                                        try? fm.moveItem(at: backupURL, to: recording.fileURL)
+                                    }
                                     logger.error("Failed to copy synced audio file: \(error.localizedDescription)")
                                 }
                             }
                             appState.recordings[localIndex] = recording
+                            markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
                             recordingsChanged = true
                         }
                     } else {
@@ -728,6 +978,7 @@ final class CloudKitSyncEngine {
                                 logger.info("Skipping duplicate recording \(recording.id) — already exists locally")
                             } else {
                                 appState.recordings.append(recording)
+                                markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
                                 recordingsChanged = true
                             }
                         } else {
@@ -766,6 +1017,16 @@ final class CloudKitSyncEngine {
                     projectsChanged = true
                 }
 
+            case SonideaRecordType.overdubGroup.rawValue:
+                if let group = OverdubGroup.from(ckRecord: record) {
+                    if let existingIndex = appState.overdubGroups.firstIndex(where: { $0.id == group.id }) {
+                        appState.overdubGroups[existingIndex] = group
+                    } else {
+                        appState.overdubGroups.append(group)
+                    }
+                    overdubGroupsChanged = true
+                }
+
             case SonideaRecordType.tombstone.rawValue:
                 // Handle tombstone - delete local record
                 // Skip tombstones from this device (already applied locally)
@@ -794,6 +1055,9 @@ final class CloudKitSyncEngine {
                     case SonideaRecordType.project.rawValue:
                         appState.projects.removeAll { $0.id == targetUUID }
                         projectsChanged = true
+                    case SonideaRecordType.overdubGroup.rawValue:
+                        appState.overdubGroups.removeAll { $0.id == targetUUID }
+                        overdubGroupsChanged = true
                     default:
                         break
                     }
@@ -825,17 +1089,39 @@ final class CloudKitSyncEngine {
                     appState.projects.removeAll { $0.id == uuid }
                     projectsChanged = true
                 }
+                if appState.overdubGroups.contains(where: { $0.id == uuid }) {
+                    appState.overdubGroups.removeAll { $0.id == uuid }
+                    overdubGroupsChanged = true
+                }
             }
         }
 
         // Persist changes
-        if recordingsChanged || tagsChanged || albumsChanged || projectsChanged {
+        if recordingsChanged || tagsChanged || albumsChanged || projectsChanged || overdubGroupsChanged {
             appState.applySyncedData(SyncableData(
                 recordings: appState.recordings,
                 tags: appState.tags,
                 albums: appState.albums,
-                projects: appState.projects
+                projects: appState.projects,
+                overdubGroups: appState.overdubGroups
             ))
+            // Persist synced dates so restored recordings aren't re-uploaded
+            saveLastSyncedDates()
+        }
+    }
+
+    // MARK: - Background Sync Scheduling
+
+    /// Schedule a background sync task for when the app is suspended
+    func scheduleBackgroundSync() {
+        let request = BGProcessingTaskRequest(identifier: backgroundTaskIdentifier)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            logger.info("Scheduled background sync task")
+        } catch {
+            logger.error("Failed to schedule background sync: \(error.localizedDescription)")
         }
     }
 
@@ -870,6 +1156,14 @@ final class CloudKitSyncEngine {
         if let dict = UserDefaults.standard.dictionary(forKey: lastSyncedDatesKey) as? [String: Date] {
             lastSyncedDates = dict
         }
+
+        // Load pending operations queue
+        if let data = UserDefaults.standard.data(forKey: pendingOperationsKey) {
+            pendingOperations = (try? JSONDecoder().decode([PendingSyncOperation].self, from: data)) ?? []
+        }
+        // Prune stale pending operations (older than 7 days)
+        let opCutoff = Date().addingTimeInterval(-7 * 86400)
+        pendingOperations.removeAll { $0.createdAt < opCutoff }
     }
 
     private func saveChangeToken() {
@@ -900,24 +1194,127 @@ final class CloudKitSyncEngine {
         status = .synced(lastSyncDate!)
     }
 
+    // MARK: - Pending Operations Queue
+
+    /// Queue a failed operation for retry on next full sync
+    func queuePendingOperation(operationType: PendingSyncOperation.OperationType, recordType: String, recordId: String) {
+        // Avoid duplicates
+        if pendingOperations.contains(where: { $0.recordId == recordId && $0.operationType == operationType }) {
+            return
+        }
+        let op = PendingSyncOperation(operationType: operationType, recordType: recordType, recordId: recordId)
+        pendingOperations.append(op)
+        savePendingOperations()
+        pendingChangesCount = pendingOperations.count
+        logger.info("Queued pending \(operationType.rawValue) for \(recordType) \(recordId)")
+    }
+
+    private func savePendingOperations() {
+        if let data = try? JSONEncoder().encode(pendingOperations) {
+            UserDefaults.standard.set(data, forKey: pendingOperationsKey)
+        }
+        pendingChangesCount = pendingOperations.count
+    }
+
+    /// Drain the pending operations queue — called at the start of performFullSync
+    private func drainPendingOperations() async {
+        guard let appState = appState, !pendingOperations.isEmpty else { return }
+
+        logger.info("Draining \(self.pendingOperations.count) pending operations")
+        var remaining: [PendingSyncOperation] = []
+
+        for var op in pendingOperations {
+            do {
+                switch (op.operationType, op.recordType) {
+                case (.save, SonideaRecordType.recording.rawValue):
+                    if let recording = appState.recordings.first(where: { $0.id.uuidString == op.recordId }) {
+                        try await withRetry { try await self.saveRecording(recording) }
+                        markSynced(id: recording.id.uuidString, modifiedAt: recording.modifiedAt)
+                    }
+                case (.delete, SonideaRecordType.recording.rawValue):
+                    if let uuid = UUID(uuidString: op.recordId) {
+                        try await withRetry { try await self.deleteRecording(uuid) }
+                    }
+                case (.save, SonideaRecordType.tag.rawValue):
+                    if let tag = appState.tags.first(where: { $0.id.uuidString == op.recordId }) {
+                        try await withRetry { try await self.saveTag(tag) }
+                    }
+                case (.delete, SonideaRecordType.tag.rawValue):
+                    if let uuid = UUID(uuidString: op.recordId) {
+                        try await withRetry { try await self.deleteTag(uuid) }
+                    }
+                case (.save, SonideaRecordType.album.rawValue):
+                    if let album = appState.albums.first(where: { $0.id.uuidString == op.recordId }) {
+                        try await withRetry { try await self.saveAlbum(album) }
+                    }
+                case (.delete, SonideaRecordType.album.rawValue):
+                    if let uuid = UUID(uuidString: op.recordId) {
+                        try await withRetry { try await self.deleteAlbum(uuid) }
+                    }
+                case (.save, SonideaRecordType.project.rawValue):
+                    if let project = appState.projects.first(where: { $0.id.uuidString == op.recordId }) {
+                        try await withRetry { try await self.saveProject(project) }
+                    }
+                case (.delete, SonideaRecordType.project.rawValue):
+                    if let uuid = UUID(uuidString: op.recordId) {
+                        try await withRetry { try await self.deleteProject(uuid) }
+                    }
+                case (.save, SonideaRecordType.overdubGroup.rawValue):
+                    if let group = appState.overdubGroups.first(where: { $0.id.uuidString == op.recordId }) {
+                        try await withRetry { try await self.saveOverdubGroup(group) }
+                    }
+                case (.delete, SonideaRecordType.overdubGroup.rawValue):
+                    if let uuid = UUID(uuidString: op.recordId) {
+                        try await withRetry { try await self.deleteOverdubGroup(uuid) }
+                    }
+                default:
+                    break
+                }
+            } catch {
+                op.retryCount += 1
+                if op.retryCount < 5 {
+                    remaining.append(op)
+                } else {
+                    logger.error("Dropping pending operation after 5 retries: \(op.recordType) \(op.recordId)")
+                }
+            }
+        }
+
+        pendingOperations = remaining
+        savePendingOperations()
+    }
+
     // MARK: - Retry Helper
 
-    /// Retry an async operation with exponential backoff
+    /// Retry an async operation with exponential backoff and CKError-aware delays
     private func withRetry<T>(maxAttempts: Int = 3, initialDelay: TimeInterval = 1.0, operation: () async throws -> T) async throws -> T {
         var lastError: Error?
-        for attempt in 0..<maxAttempts {
+        let effectiveMaxAttempts = maxAttempts
+        for attempt in 0..<effectiveMaxAttempts {
             do {
                 return try await operation()
             } catch {
                 lastError = error
-                if attempt < maxAttempts - 1 {
+
+                // Check for rate limiting / zone busy — use server-provided retry delay
+                if let ckError = error as? CKError,
+                   (ckError.code == .requestRateLimited || ckError.code == .zoneBusy) {
+                    let retryAfter = ckError.retryAfterSeconds ?? (initialDelay * pow(2.0, Double(attempt)))
+                    if attempt < effectiveMaxAttempts - 1 {
+                        logger.warning("Rate limited, retrying in \(retryAfter)s (attempt \(attempt + 1))")
+                        try? await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
+                        continue
+                    }
+                }
+
+                if attempt < effectiveMaxAttempts - 1 {
                     let delay = initialDelay * pow(2.0, Double(attempt))
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     logger.warning("Retry attempt \(attempt + 1) after error: \(error.localizedDescription)")
                 }
             }
         }
-        throw lastError!
+        throw lastError ?? CKError(.internalError)
     }
 }
 
@@ -1097,14 +1494,21 @@ extension Tag {
             return nil
         }
 
+        // Note: isProtected is a computed property derived from the tag's ID
+        // (id == Tag.favoriteTagID), so it does not need to be decoded from the
+        // CKRecord. The ID is already restored from the record name above.
         return Tag(id: id, name: name, colorHex: colorHex)
     }
 }
 
 extension Album {
     /// Populate an existing CKRecord with this album's fields.
+    /// Note: Shared album fields (isShared, shareURL, participants, etc.) are managed
+    /// by CloudKit sharing infrastructure separately and are NOT synced here.
     func populateCKRecord(_ record: CKRecord) {
         record["name"] = name
+        record["createdAt"] = createdAt
+        record["isSystem"] = isSystem
     }
 
     func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
@@ -1121,7 +1525,12 @@ extension Album {
             return nil
         }
 
-        return Album(id: id, name: name)
+        return Album(
+            id: id,
+            name: name,
+            createdAt: record["createdAt"] as? Date ?? Date(),
+            isSystem: record["isSystem"] as? Bool ?? false
+        )
     }
 }
 
@@ -1161,6 +1570,65 @@ extension Project {
             notes: record["notes"] as? String ?? "",
             bestTakeRecordingId: (record["bestTakeRecordingId"] as? String).flatMap { UUID(uuidString: $0) },
             sortOrder: record["sortOrder"] as? Int
+        )
+    }
+}
+
+extension OverdubGroup {
+    /// Populate an existing CKRecord with this overdub group's fields.
+    func populateCKRecord(_ record: CKRecord) {
+        record["baseRecordingId"] = baseRecordingId.uuidString
+        record["createdAt"] = createdAt
+
+        // Layer recording IDs as JSON array of strings
+        let layerStrings = layerRecordingIds.map { $0.uuidString }
+        if let data = try? JSONEncoder().encode(layerStrings) {
+            record["layerRecordingIdsJSON"] = String(data: data, encoding: .utf8)
+        }
+
+        // Mix settings as JSON
+        if let data = try? JSONEncoder().encode(mixSettings) {
+            record["mixSettingsJSON"] = String(data: data, encoding: .utf8)
+        }
+    }
+
+    func toCKRecord(zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: id.uuidString, zoneID: zoneID)
+        let record = CKRecord(recordType: SonideaRecordType.overdubGroup.rawValue, recordID: recordID)
+        populateCKRecord(record)
+        return record
+    }
+
+    static func from(ckRecord record: CKRecord) -> OverdubGroup? {
+        guard let idString = record.recordID.recordName as String?,
+              let id = UUID(uuidString: idString),
+              let baseRecordingIdString = record["baseRecordingId"] as? String,
+              let baseRecordingId = UUID(uuidString: baseRecordingIdString),
+              let createdAt = record["createdAt"] as? Date else {
+            return nil
+        }
+
+        // Parse layer recording IDs
+        var layerRecordingIds: [UUID] = []
+        if let layerJSON = record["layerRecordingIdsJSON"] as? String,
+           let data = layerJSON.data(using: .utf8),
+           let layerStrings = try? JSONDecoder().decode([String].self, from: data) {
+            layerRecordingIds = layerStrings.compactMap { UUID(uuidString: $0) }
+        }
+
+        // Parse mix settings
+        var mixSettings = MixSettings()
+        if let mixJSON = record["mixSettingsJSON"] as? String,
+           let data = mixJSON.data(using: .utf8) {
+            mixSettings = (try? JSONDecoder().decode(MixSettings.self, from: data)) ?? MixSettings()
+        }
+
+        return OverdubGroup(
+            id: id,
+            baseRecordingId: baseRecordingId,
+            layerRecordingIds: layerRecordingIds,
+            createdAt: createdAt,
+            mixSettings: mixSettings
         )
     }
 }

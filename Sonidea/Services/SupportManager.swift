@@ -174,6 +174,11 @@ final class SupportManager {
 
     private var transactionListener: Task<Void, Never>?
 
+    // Note: transactionListener runs for app lifetime (SupportManager is a singleton
+    // owned by AppState). No deinit needed — Task is automatically cancelled when
+    // the process exits. Cannot cancel from deinit because @MainActor properties
+    // are inaccessible from nonisolated deinit.
+
     // MARK: - Initialization
 
     init() {

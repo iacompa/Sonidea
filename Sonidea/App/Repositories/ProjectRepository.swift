@@ -140,6 +140,7 @@ enum ProjectRepository {
             recordings[index].projectId = nil
             recordings[index].parentRecordingId = nil
             recordings[index].versionIndex = 1
+            recordings[index].modifiedAt = Date()
         }
 
         if let projectIndex = projects.firstIndex(where: { $0.id == projectId }) {
@@ -209,6 +210,7 @@ enum ProjectRepository {
                 recordings[i].projectId = nil
                 recordings[i].parentRecordingId = nil
                 recordings[i].versionIndex = 1
+                recordings[i].modifiedAt = Date()
             }
         }
         projects.removeAll { $0.id == projectId }

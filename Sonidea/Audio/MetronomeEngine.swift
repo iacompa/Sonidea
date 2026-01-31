@@ -41,9 +41,16 @@ final class MetronomeEngine {
 
     private var sourceNode: AVAudioSourceNode?
     private var sampleRate: Double = 44100
-    private var phase: Double = 0
-    private var sampleIndex: UInt64 = 0
     private var clickActive = false
+
+    /// Shared mutable pointer for the render callback's running sample index.
+    /// Allocated once and reused across source node recreations so that
+    /// start()/stop() can reset it from the main thread.
+    private let renderSampleIndexPtr: UnsafeMutablePointer<UInt64> = {
+        let ptr = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
+        ptr.initialize(to: 0)
+        return ptr
+    }()
 
     // MARK: - Click Parameters (synthesized)
 
@@ -83,7 +90,7 @@ final class MetronomeEngine {
     /// Attach this to the engine's mainMixerNode (NOT to the recording chain).
     func createSourceNode(sampleRate: Double) -> AVAudioSourceNode {
         self.sampleRate = sampleRate
-        self.sampleIndex = 0
+        renderSampleIndexPtr.pointee = 0
         updateRenderParams()
 
         let paramsLock = self.paramsLock
@@ -92,16 +99,27 @@ final class MetronomeEngine {
         let downbeatDur = self.downbeatDuration
         let upbeatDur = self.upbeatDuration
 
-        // sampleIndex is only mutated inside the render callback (single-writer)
-        var renderSampleIndex: UInt64 = 0
+        // Capture the pointer so the render callback can read/write the running sample index.
+        // The pointer is owned by `self` and persists across callbacks and start/stop cycles.
+        let sampleIndexPtr = self.renderSampleIndexPtr
 
         let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let frames = Int(frameCount)
 
+            // SAFETY: If self has been deallocated, the sampleIndexPtr may already be freed.
+            // Return silence immediately WITHOUT touching sampleIndexPtr.
+            guard let strongSelf = self else {
+                for buffer in ablPointer {
+                    guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    for i in 0..<frames { data[i] = 0 }
+                }
+                return noErr
+            }
+
             // Read params under lock
             paramsLock.lock()
-            let params = self?.renderParams ?? MetronomeParams(bpm: 120, volume: 0.7, clickActive: false, beatsPerBar: 4, sampleRate: 44100)
+            let params = strongSelf.renderParams
             paramsLock.unlock()
 
             let sr = params.sampleRate
@@ -109,6 +127,8 @@ final class MetronomeEngine {
             let vol = params.volume
             let active = params.clickActive
             let beatsPerBar = params.beatsPerBar
+
+            let currentSampleIndex = sampleIndexPtr.pointee
 
             guard active, sr > 0, currentBPM > 0 else {
                 // Output silence
@@ -124,8 +144,8 @@ final class MetronomeEngine {
             for buffer in ablPointer {
                 guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
                 for i in 0..<frames {
-                    let sampleInBeat = Double(renderSampleIndex + UInt64(i)).truncatingRemainder(dividingBy: samplesPerBeat)
-                    let beatIndex = Int(Double(renderSampleIndex + UInt64(i)) / samplesPerBeat) % beatsPerBar
+                    let sampleInBeat = Double(currentSampleIndex + UInt64(i)).truncatingRemainder(dividingBy: samplesPerBeat)
+                    let beatIndex = Int(Double(currentSampleIndex + UInt64(i)) / samplesPerBeat) % beatsPerBar
 
                     let isDownbeat = beatIndex == 0
                     let freq: Float = isDownbeat ? downbeatFreq : upbeatFreq
@@ -144,7 +164,7 @@ final class MetronomeEngine {
                 }
             }
 
-            renderSampleIndex += UInt64(frames)
+            sampleIndexPtr.pointee = currentSampleIndex + UInt64(frames)
             return noErr
         }
 
@@ -155,7 +175,7 @@ final class MetronomeEngine {
     // MARK: - Playback Control
 
     func start() {
-        sampleIndex = 0
+        renderSampleIndexPtr.pointee = 0
         clickActive = true
         isPlaying = true
         updateRenderParams()
@@ -165,7 +185,7 @@ final class MetronomeEngine {
         clickActive = false
         isPlaying = false
         isCountingIn = false
-        sampleIndex = 0
+        renderSampleIndexPtr.pointee = 0
         updateRenderParams()
     }
 
@@ -177,7 +197,7 @@ final class MetronomeEngine {
         }
 
         isCountingIn = true
-        sampleIndex = 0
+        renderSampleIndexPtr.pointee = 0
         clickActive = true
         isPlaying = true
 
@@ -188,6 +208,15 @@ final class MetronomeEngine {
             self?.isCountingIn = false
             completion()
         }
+    }
+
+    // Pointer cleanup: renderSampleIndexPtr is a `let` constant (8 bytes),
+    // safe to access from nonisolated deinit. The render callback guards on
+    // `[weak self]` returning nil, so the pointer is not touched after dealloc.
+    // sourceNode is released automatically when the class is deallocated.
+    deinit {
+        renderSampleIndexPtr.deinitialize(count: 1)
+        renderSampleIndexPtr.deallocate()
     }
 
     // MARK: - Tap Tempo

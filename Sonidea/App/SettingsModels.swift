@@ -377,5 +377,8 @@ struct AppSettings: Codable {
     // Auto-sync watch recordings to iPhone
     var watchSyncEnabled: Bool = false
 
+    // First-launch welcome tutorial tracking
+    var hasSeenWelcome: Bool = false
+
     static let `default` = AppSettings()
 }

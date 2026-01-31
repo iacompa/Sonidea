@@ -18,20 +18,35 @@ struct CalendarView: View {
     @State private var currentMonth: Date = Date()
     @State private var selectedDate: Date?
     @State private var selectedRecording: RecordingItem?
+    @State private var cachedRecordingsByDay: [Date: [RecordingItem]] = [:]
 
     private let calendar = Calendar.current
-    private let daysOfWeek = ["S", "M", "T", "W", "T", "F", "S"]
-
-    // Recordings grouped by day
-    private var recordingsByDay: [Date: [RecordingItem]] {
-        Dictionary(grouping: appState.activeRecordings) { recording in
-            calendar.startOfDay(for: recording.createdAt)
-        }
+    private var daysOfWeek: [String] {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        let firstWeekday = Calendar.current.firstWeekday - 1  // 0-indexed
+        return Array(symbols[firstWeekday...]) + Array(symbols[..<firstWeekday])
     }
 
-    // Days in the current month that have recordings
+    // Days in the current month that have recordings (derived from cache)
     private var daysWithRecordings: Set<Date> {
-        Set(recordingsByDay.keys)
+        Set(cachedRecordingsByDay.keys)
+    }
+
+    private func recomputeRecordingsByDay() {
+        // Filter to only the visible month before grouping — avoids O(n) work
+        // across all recordings on every month navigation (P1 perf fix).
+        guard let monthInterval = calendar.dateInterval(of: .month, for: currentMonth) else {
+            cachedRecordingsByDay = [:]
+            return
+        }
+        let monthStart = monthInterval.start
+        let monthEnd = monthInterval.end
+        let monthRecordings = appState.activeRecordings.filter { recording in
+            recording.createdAt >= monthStart && recording.createdAt < monthEnd
+        }
+        cachedRecordingsByDay = Dictionary(grouping: monthRecordings) { recording in
+            calendar.startOfDay(for: recording.createdAt)
+        }
     }
 
     var body: some View {
@@ -89,6 +104,13 @@ struct CalendarView: View {
             }
             .sheet(item: $selectedRecording) { recording in
                 RecordingDetailView(recording: recording)
+            }
+            .onAppear { recomputeRecordingsByDay() }
+            .onChange(of: appState.recordingsContentVersion) { _, _ in
+                recomputeRecordingsByDay()
+            }
+            .onChange(of: currentMonth) { _, _ in
+                recomputeRecordingsByDay()
             }
         }
     }
@@ -173,7 +195,7 @@ struct CalendarView: View {
         let isSelected = selectedDate != nil && calendar.isDate(date, inSameDayAs: selectedDate!)
         let isToday = calendar.isDateInToday(date)
         let hasRecordings = daysWithRecordings.contains(calendar.startOfDay(for: date))
-        let recordingCount = recordingsByDay[calendar.startOfDay(for: date)]?.count ?? 0
+        let recordingCount = cachedRecordingsByDay[calendar.startOfDay(for: date)]?.count ?? 0
 
         return Button {
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -225,7 +247,7 @@ struct CalendarView: View {
     // MARK: - Day Recordings List
 
     private func dayRecordingsList(for date: Date) -> some View {
-        let recordings = recordingsByDay[calendar.startOfDay(for: date)] ?? []
+        let recordings = cachedRecordingsByDay[calendar.startOfDay(for: date)] ?? []
 
         return VStack(spacing: 0) {
             // Header
@@ -314,9 +336,11 @@ struct CalendarView: View {
         var days: [Date?] = []
 
         // Add padding for days before the first of the month
+        // Use locale-aware offset so the grid aligns correctly when firstWeekday != Sunday
         let startOfMonth = monthInterval.start
         let weekdayOfFirst = calendar.component(.weekday, from: startOfMonth)
-        for _ in 1..<weekdayOfFirst {
+        let offset = (weekdayOfFirst - calendar.firstWeekday + 7) % 7
+        for _ in 0..<offset {
             days.append(nil)
         }
 

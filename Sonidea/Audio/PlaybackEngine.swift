@@ -15,7 +15,11 @@ final class PlaybackEngine {
     var isPlaying = false
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
-    var playbackSpeed: Float = 1.0
+    var playbackSpeed: Float = 1.0 {
+        didSet {
+            timePitchNode?.rate = playbackSpeed
+        }
+    }
     var eqSettings: EQSettings = .flat
 
     /// Error state for UI to display
@@ -161,19 +165,8 @@ final class PlaybackEngine {
         // Schedule from current seek position
         let frameCount = AVAudioFrameCount(audioLengthFrames - seekFrame)
         guard frameCount > 0 else {
-            // Already at end, restart from beginning
-            seekFrame = 0
-            currentTime = 0
-            let fullFrameCount = AVAudioFrameCount(audioLengthFrames)
-            player.scheduleSegment(file, startingFrame: 0, frameCount: fullFrameCount, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self = self, self.playbackGeneration == currentGeneration else { return }
-                    self.handlePlaybackFinished()
-                }
-            }
-            player.play()
-            isPlaying = true
-            startTimer()
+            // Already at end, just finish instead of restarting
+            handlePlaybackFinished()
             return
         }
 
@@ -268,7 +261,6 @@ final class PlaybackEngine {
 
     func setSpeed(_ speed: Float) {
         playbackSpeed = max(0.5, min(2.0, speed))
-        timePitchNode?.rate = playbackSpeed
     }
 
     // MARK: - EQ Control
@@ -393,7 +385,10 @@ final class PlaybackEngine {
         let currentFrame = seekFrame + playerTime.sampleTime
         currentTime = Double(currentFrame) / audioSampleRate
 
-        // Clamp to duration
+        // Clamp to valid range
+        if currentTime < 0 {
+            currentTime = 0
+        }
         if currentTime >= duration {
             currentTime = duration
         }
@@ -434,6 +429,9 @@ final class PlaybackEngine {
                     if options.contains(.shouldResume) {
                         play()
                     }
+                } else {
+                    // Options not available but user was playing before interruption — attempt resume
+                    play()
                 }
             }
         @unknown default:

@@ -34,6 +34,9 @@ final class ProofManager {
     /// Pending queue for offline proofs
     private(set) var pendingQueue: [PendingProofItem] = []
 
+    /// Guards against concurrent processPendingQueue() invocations during rapid network flaps
+    private var isProcessingQueue = false
+
     /// Network path monitor for connectivity
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
@@ -451,8 +454,14 @@ final class ProofManager {
         logger.info("Added to pending queue: \(recordingID)")
     }
 
-    /// Process the pending queue when network is available
+    /// Process the pending queue when network is available.
+    /// Guarded by `isProcessingQueue` to prevent duplicate CK records
+    /// when rapid network flaps trigger multiple concurrent invocations.
     func processPendingQueue() async {
+        guard !isProcessingQueue else { return }
+        isProcessingQueue = true
+        defer { isProcessingQueue = false }
+
         guard isNetworkAvailable else { return }
         guard !pendingQueue.isEmpty else { return }
 
@@ -533,7 +542,7 @@ final class ProofManager {
     private func savePendingQueue() {
         do {
             let data = try JSONEncoder().encode(pendingQueue)
-            try data.write(to: pendingQueueURL)
+            try data.write(to: pendingQueueURL, options: [.atomic, .completeFileProtection])
         } catch {
             logger.error("Failed to save pending proof queue: \(error.localizedDescription)")
         }

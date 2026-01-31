@@ -175,17 +175,32 @@ final class iCloudSyncManager {
         updateStatusFromEngine()
     }
 
+    /// Schedule a background sync task
+    func scheduleBackgroundSync() {
+        guard isEnabled else { return }
+        cloudKitEngine.scheduleBackgroundSync()
+    }
+
     // MARK: - Sync Triggers
 
     func onRecordingCreated(_ recording: RecordingItem) {
         guard isEnabled else { return }
         Task {
+            // Request extra background execution time for the upload
+            let bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "SyncNewRecording") {
+                // Expiration handler — nothing to clean up, CloudKit handles interruption
+            }
+            defer {
+                if bgTaskID != .invalid {
+                    UIApplication.shared.endBackgroundTask(bgTaskID)
+                }
+            }
             do {
                 try await cloudKitEngine.saveRecording(recording)
                 updateStatusFromEngine()
             } catch {
                 logger.error("Failed to sync new recording: \(error.localizedDescription)")
-                status = .error(error.localizedDescription)
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Recording", recordId: recording.id.uuidString)
             }
         }
     }
@@ -198,6 +213,7 @@ final class iCloudSyncManager {
                 updateStatusFromEngine()
             } catch {
                 logger.error("Failed to sync recording update: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Recording", recordId: recording.id.uuidString)
             }
         }
     }
@@ -210,6 +226,7 @@ final class iCloudSyncManager {
                 updateStatusFromEngine()
             } catch {
                 logger.error("Failed to sync audio edit: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Recording", recordId: recording.id.uuidString)
             }
         }
     }
@@ -222,6 +239,7 @@ final class iCloudSyncManager {
                 updateStatusFromEngine()
             } catch {
                 logger.error("Failed to sync deletion: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .delete, recordType: "Recording", recordId: recordingId.uuidString)
             }
         }
     }
@@ -234,7 +252,12 @@ final class iCloudSyncManager {
     func onTagCreated(_ tag: Tag) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveTag(tag)
+            do {
+                try await cloudKitEngine.saveTag(tag)
+            } catch {
+                logger.error("Failed to sync new tag: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Tag", recordId: tag.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -242,7 +265,12 @@ final class iCloudSyncManager {
     func onTagUpdated(_ tag: Tag) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveTag(tag)
+            do {
+                try await cloudKitEngine.saveTag(tag)
+            } catch {
+                logger.error("Failed to sync tag update: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Tag", recordId: tag.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -250,7 +278,12 @@ final class iCloudSyncManager {
     func onTagDeleted(_ tagId: UUID) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.deleteTag(tagId)
+            do {
+                try await cloudKitEngine.deleteTag(tagId)
+            } catch {
+                logger.error("Failed to sync tag deletion: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .delete, recordType: "Tag", recordId: tagId.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -258,7 +291,12 @@ final class iCloudSyncManager {
     func onAlbumCreated(_ album: Album) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveAlbum(album)
+            do {
+                try await cloudKitEngine.saveAlbum(album)
+            } catch {
+                logger.error("Failed to sync new album: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Album", recordId: album.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -266,7 +304,12 @@ final class iCloudSyncManager {
     func onAlbumUpdated(_ album: Album) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveAlbum(album)
+            do {
+                try await cloudKitEngine.saveAlbum(album)
+            } catch {
+                logger.error("Failed to sync album update: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Album", recordId: album.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -274,7 +317,12 @@ final class iCloudSyncManager {
     func onAlbumDeleted(_ albumId: UUID) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.deleteAlbum(albumId)
+            do {
+                try await cloudKitEngine.deleteAlbum(albumId)
+            } catch {
+                logger.error("Failed to sync album deletion: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .delete, recordType: "Album", recordId: albumId.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -282,7 +330,12 @@ final class iCloudSyncManager {
     func onProjectCreated(_ project: Project) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveProject(project)
+            do {
+                try await cloudKitEngine.saveProject(project)
+            } catch {
+                logger.error("Failed to sync new project: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Project", recordId: project.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -290,7 +343,12 @@ final class iCloudSyncManager {
     func onProjectUpdated(_ project: Project) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.saveProject(project)
+            do {
+                try await cloudKitEngine.saveProject(project)
+            } catch {
+                logger.error("Failed to sync project update: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "Project", recordId: project.id.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -298,7 +356,51 @@ final class iCloudSyncManager {
     func onProjectDeleted(_ projectId: UUID) {
         guard isEnabled else { return }
         Task {
-            try? await cloudKitEngine.deleteProject(projectId)
+            do {
+                try await cloudKitEngine.deleteProject(projectId)
+            } catch {
+                logger.error("Failed to sync project deletion: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .delete, recordType: "Project", recordId: projectId.uuidString)
+            }
+            updateStatusFromEngine()
+        }
+    }
+
+    func onOverdubGroupCreated(_ group: OverdubGroup) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.saveOverdubGroup(group)
+            } catch {
+                logger.error("Failed to sync new overdub group: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "OverdubGroup", recordId: group.id.uuidString)
+            }
+            updateStatusFromEngine()
+        }
+    }
+
+    func onOverdubGroupUpdated(_ group: OverdubGroup) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.saveOverdubGroup(group)
+            } catch {
+                logger.error("Failed to sync overdub group update: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .save, recordType: "OverdubGroup", recordId: group.id.uuidString)
+            }
+            updateStatusFromEngine()
+        }
+    }
+
+    func onOverdubGroupDeleted(_ groupId: UUID) {
+        guard isEnabled else { return }
+        Task {
+            do {
+                try await cloudKitEngine.deleteOverdubGroup(groupId)
+            } catch {
+                logger.error("Failed to sync overdub group deletion: \(error.localizedDescription)")
+                cloudKitEngine.queuePendingOperation(operationType: .delete, recordType: "OverdubGroup", recordId: groupId.uuidString)
+            }
             updateStatusFromEngine()
         }
     }
@@ -418,6 +520,7 @@ struct SyncableData: Codable {
     var tags: [Tag]
     var albums: [Album]
     var projects: [Project]
+    var overdubGroups: [OverdubGroup]
     var lastModified: Date
     var deviceIdentifier: String
 
@@ -426,6 +529,7 @@ struct SyncableData: Codable {
         tags: [],
         albums: [],
         projects: [],
+        overdubGroups: [],
         lastModified: Date.distantPast,
         deviceIdentifier: ""
     )
@@ -435,6 +539,7 @@ struct SyncableData: Codable {
         tags: [Tag],
         albums: [Album],
         projects: [Project],
+        overdubGroups: [OverdubGroup] = [],
         lastModified: Date = Date(),
         deviceIdentifier: String = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
     ) {
@@ -442,8 +547,20 @@ struct SyncableData: Codable {
         self.tags = tags
         self.albums = albums
         self.projects = projects
+        self.overdubGroups = overdubGroups
         self.lastModified = lastModified
         self.deviceIdentifier = deviceIdentifier
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordings = try container.decode([RecordingItem].self, forKey: .recordings)
+        tags = try container.decode([Tag].self, forKey: .tags)
+        albums = try container.decode([Album].self, forKey: .albums)
+        projects = try container.decode([Project].self, forKey: .projects)
+        overdubGroups = try container.decodeIfPresent([OverdubGroup].self, forKey: .overdubGroups) ?? []
+        lastModified = try container.decode(Date.self, forKey: .lastModified)
+        deviceIdentifier = try container.decode(String.self, forKey: .deviceIdentifier)
     }
 }
 
@@ -457,7 +574,8 @@ extension AppState {
             recordings: recordings,
             tags: tags,
             albums: albums,
-            projects: projects
+            projects: projects,
+            overdubGroups: overdubGroups
         )
     }
 
@@ -467,10 +585,14 @@ extension AppState {
         tags = data.tags
         albums = data.albums
         projects = data.projects
-        saveAllData()
-    }
-
-    private func saveAllData() {
+        overdubGroups = data.overdubGroups
+        // Persist through DataSafetyManager (primary) + UserDefaults (fallback)
+        DataSafetyFileOps.saveSync(recordings, collection: .recordings)
+        DataSafetyFileOps.saveSync(tags, collection: .tags)
+        DataSafetyFileOps.saveSync(albums, collection: .albums)
+        DataSafetyFileOps.saveSync(projects, collection: .projects)
+        DataSafetyFileOps.saveSync(overdubGroups, collection: .overdubGroups)
+        // UserDefaults fallback for transition period
         if let data = try? JSONEncoder().encode(recordings) {
             UserDefaults.standard.set(data, forKey: "savedRecordings")
         }
@@ -490,12 +612,6 @@ extension AppState {
     func triggerSyncForRecording(_ recording: RecordingItem) {
         if appSettings.iCloudSyncEnabled {
             syncManager.onRecordingUpdated(recording)
-        }
-    }
-
-    func triggerSyncForAudioEdit(_ recording: RecordingItem) {
-        if appSettings.iCloudSyncEnabled {
-            syncManager.onAudioEdited(recording)
         }
     }
 
@@ -568,6 +684,24 @@ extension AppState {
     func triggerSyncForProjectDeletion(_ projectId: UUID) {
         if appSettings.iCloudSyncEnabled {
             syncManager.onProjectDeleted(projectId)
+        }
+    }
+
+    func triggerSyncForOverdubGroup(_ group: OverdubGroup) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onOverdubGroupCreated(group)
+        }
+    }
+
+    func triggerSyncForOverdubGroupUpdate(_ group: OverdubGroup) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onOverdubGroupUpdated(group)
+        }
+    }
+
+    func triggerSyncForOverdubGroupDeletion(_ groupId: UUID) {
+        if appSettings.iCloudSyncEnabled {
+            syncManager.onOverdubGroupDeleted(groupId)
         }
     }
 }

@@ -25,7 +25,11 @@ struct UIMetrics: Equatable {
 final class AppState {
     private static let logger = Logger(subsystem: "com.iacompa.sonidea", category: "AppState")
 
-    var recordings: [RecordingItem] = []
+    var recordings: [RecordingItem] = [] {
+        didSet { recordingsContentVersion += 1 }
+    }
+    /// Increments on any recordings mutation; views can observe this to detect content changes
+    private(set) var recordingsContentVersion: Int = 0
     var tags: [Tag] = []
     var albums: [Album] = []
     var projects: [Project] = []
@@ -120,13 +124,17 @@ final class AppState {
         recorder.appSettings = appSettings
         loadRecordButtonPosition()
 
-        // Flush pending debounced saves when app backgrounds
+        // Flush pending debounced saves when app backgrounds.
+        // The closure runs synchronously on .main queue — no Task wrapper —
+        // so the writes complete before the app is suspended.
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            // MainActor.assumeIsolated is safe here because queue: .main
+            // guarantees we're on the main thread already.
+            MainActor.assumeIsolated {
                 self?.flushPendingSaves()
             }
         }
@@ -394,18 +402,11 @@ final class AppState {
 
         recordings.insert(recording, at: 0)
 
-        // Persist asynchronously — recording is already in memory for instant UI update.
-        // Use short delay to avoid blocking main thread with JSON encode + file I/O.
-        Task.detached(priority: .userInitiated) { [recordings] in
-            DataSafetyFileOps.saveSync(recordings, collection: .recordings)
-            if let data = try? JSONEncoder().encode(recordings) {
-                await MainActor.run {
-                    UserDefaults.standard.set(data, forKey: "savedRecordings")
-                }
-            }
-        }
+        // Persist immediately — new recording must not be lost.
+        // Uses the same path as all other mutations to avoid save race conditions.
+        persistRecordings()
 
-        Self.logger.info("Recording added successfully: \(title, privacy: .public)")
+        Self.logger.info("Recording added successfully: \(title, privacy: .private)")
 
         // Trigger iCloud sync for new recording
         triggerSyncForNewRecording(recording)
@@ -531,7 +532,13 @@ final class AppState {
             recording, recordings: &recordings, overdubGroups: &overdubGroups
         )
         for url in result.fileURLsToDelete {
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                #if DEBUG
+                print("Failed to delete file at \(url.lastPathComponent): \(error)")
+                #endif
+            }
         }
         persistRecordings()
         if result.overdubGroupsChanged { persistOverdubGroups() }
@@ -545,7 +552,13 @@ final class AppState {
             recordings: &recordings, overdubGroups: &overdubGroups
         )
         for url in result.fileURLsToDelete {
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                #if DEBUG
+                print("Failed to delete file at \(url.lastPathComponent): \(error)")
+                #endif
+            }
         }
         persistRecordings()
         if result.overdubGroupsChanged { persistOverdubGroups() }
@@ -560,7 +573,13 @@ final class AppState {
         )
         guard !result.removedRecordingIDs.isEmpty else { return }
         for url in result.fileURLsToDelete {
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                #if DEBUG
+                print("Failed to delete file at \(url.lastPathComponent): \(error)")
+                #endif
+            }
         }
         saveRecordings()
         if result.overdubGroupsChanged { saveOverdubGroups() }
@@ -808,7 +827,7 @@ final class AppState {
                     }
                 } catch {
                     // Log error but continue - we'll remove from local state anyway
-                    Self.logger.error("Failed to leave shared album \(album.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("Failed to leave shared album \(album.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
                 }
 
                 // Remove from local state
@@ -1252,7 +1271,15 @@ final class AppState {
 
     // MARK: - Import
 
-    func importRecording(from url: URL, duration: TimeInterval, title: String? = nil, albumID: UUID = Album.draftsID) throws {
+    func importRecording(from url: URL, duration: TimeInterval, title: String? = nil, albumID: UUID = Album.draftsID, createdAt: Date = Date()) throws {
+        // Verify source audio file exists before attempting import
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            #if DEBUG
+            print("[AppState.importRecording] Source audio file does not exist at: \(url.path) — aborting import to prevent ghost recording")
+            #endif
+            return
+        }
+
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
         // Use UUID-based filename to avoid conflicts, preserving original extension
@@ -1266,6 +1293,14 @@ final class AppState {
         }
         try FileManager.default.copyItem(at: url, to: destURL)
 
+        // Verify destination file exists after copy before adding to state
+        guard FileManager.default.fileExists(atPath: destURL.path) else {
+            #if DEBUG
+            print("[AppState.importRecording] Destination file missing after copy at: \(destURL.path) — aborting import to prevent ghost recording")
+            #endif
+            return
+        }
+
         // Use provided title or generate one
         let recordingTitle = title ?? "Recording \(nextRecordingNumber)"
         if title == nil {
@@ -1275,7 +1310,7 @@ final class AppState {
 
         let recording = RecordingItem(
             fileURL: destURL,
-            createdAt: Date(),
+            createdAt: createdAt,
             duration: duration,
             title: recordingTitle,
             albumID: albumID
@@ -1363,6 +1398,11 @@ final class AppState {
     }
 
     private func persistRecordings() {
+        // Cancel any pending debounced save to prevent a stale write from
+        // overwriting this immediate (authoritative) save.
+        pendingSaveRecordings?.cancel()
+        pendingSaveRecordings = nil
+
         // Primary: file-based with checksum and backup rotation
         DataSafetyFileOps.saveSync(recordings, collection: .recordings)
         // Fallback: keep UserDefaults in sync for one release cycle
@@ -1377,10 +1417,14 @@ final class AppState {
         // Load all recordings immediately; prune missing files in the background
         recordings = saved
         Task { [weak self] in
+            // Skip file-pruning while iCloud sync is active — audio files may still be downloading
+            guard let self else { return }
+            if self.syncManager.isSyncing {
+                return
+            }
             let validURLs = await Task.detached {
                 Set(saved.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }.map(\.id))
             }.value
-            guard let self else { return }
             // Only remove recordings from the original snapshot — never touch recordings added after load
             let savedIDs = Set(saved.map(\.id))
             let invalidIDs = savedIDs.subtracting(validURLs)
@@ -1831,6 +1875,7 @@ final class AppState {
         )
         saveOverdubGroups()
         saveRecordings()
+        triggerSyncForOverdubGroup(group)
         return group
     }
 
@@ -1846,6 +1891,9 @@ final class AppState {
         )
         saveOverdubGroups()
         saveRecordings()
+        if let group = overdubGroups.first(where: { $0.id == groupId }) {
+            triggerSyncForOverdubGroupUpdate(group)
+        }
     }
 
     /// Remove a specific layer from its overdub group and move to trash
@@ -1854,6 +1902,7 @@ final class AppState {
               let groupIndex = overdubGroups.firstIndex(where: { $0.id == groupId }) else { return }
         overdubGroups[groupIndex].layerRecordingIds.removeAll { $0 == layer.id }
         saveOverdubGroups()
+        triggerSyncForOverdubGroupUpdate(overdubGroups[groupIndex])
         moveToTrash(layer)
     }
 
@@ -1866,6 +1915,9 @@ final class AppState {
         }
         saveOverdubGroups()
         saveRecordings()
+        if let group = overdubGroups.first(where: { $0.id == groupId }) {
+            triggerSyncForOverdubGroupUpdate(group)
+        }
     }
 
     /// Check if a recording can have overdub layers added
@@ -1883,6 +1935,10 @@ final class AppState {
     func updateLayerOffset(recordingId: UUID, offsetSeconds: Double) {
         OverdubRepository.updateLayerOffset(recordingId: recordingId, offsetSeconds: offsetSeconds, recordings: &recordings)
         saveRecordings()
+        // Sync the recording whose offset changed
+        if let recording = recordings.first(where: { $0.id == recordingId }) {
+            triggerSyncForRecording(recording)
+        }
     }
 
     /// Remove overdub groups whose base recording no longer exists

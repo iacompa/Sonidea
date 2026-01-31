@@ -22,6 +22,11 @@ enum OverdubEngineState: Equatable {
 @MainActor
 @Observable
 final class OverdubEngine {
+    // MARK: - Constants
+
+    /// Maximum number of overdub layers allowed (must match OverdubGroup.maxLayers)
+    static let maxLayers = 3
+
     // MARK: - Observable State
 
     private(set) var state: OverdubEngineState = .idle
@@ -457,6 +462,11 @@ final class OverdubEngine {
             throw OverdubEngineError.engineNotPrepared
         }
 
+        // Enforce maximum layer count (matches UI limit in OverdubGroup.maxLayers)
+        guard layerAudioFiles.count < Self.maxLayers else {
+            throw OverdubEngineError.layerLimitReached
+        }
+
         // Check available disk space (require at least 50MB)
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: documentsURL.path),
@@ -665,9 +675,20 @@ final class OverdubEngine {
                 }
             }
 
-            // Update meter samples on main thread (uses original buffer — read-only)
+            // Compute peak on audio thread (buffer may be recycled before MainActor runs)
+            let chCount = Int(buffer.format.channelCount)
+            let fLen = Int(buffer.frameLength)
+            var meterPeak: Float = 0
+            if let chData = buffer.floatChannelData, fLen > 0 {
+                for ch in 0..<chCount {
+                    for i in 0..<fLen {
+                        let absSample = abs(chData[ch][i])
+                        if absSample > meterPeak { meterPeak = absSample }
+                    }
+                }
+            }
             Task { @MainActor in
-                self?.updateMeterFromBuffer(buffer)
+                self?.updateMeterWithPeak(meterPeak)
             }
         }
 
@@ -692,6 +713,12 @@ final class OverdubEngine {
         recordingStartTime = Date()
         state = .recording
         startTimer()
+
+        // Remove any existing observer before adding a new one to prevent accumulation
+        if let old = interruptionObserver {
+            NotificationCenter.default.removeObserver(old)
+            interruptionObserver = nil
+        }
 
         // Observe audio session interruptions
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -844,10 +871,13 @@ final class OverdubEngine {
         }
     }
 
-    /// Load an entire audio file into a PCM buffer for loop scheduling
+    /// Load an entire audio file into a PCM buffer for loop scheduling.
+    /// Returns nil for files exceeding ~100MB to prevent OOM (loops disabled for very long tracks).
     private func loadFullBuffer(from file: AVAudioFile) -> AVAudioPCMBuffer? {
         let frameCount = AVAudioFrameCount(file.length)
-        guard frameCount > 0,
+        // Cap at ~25M frames (~100MB stereo float32) to prevent OOM on long recordings
+        let maxLoopFrames: AVAudioFrameCount = 25_000_000
+        guard frameCount > 0, frameCount <= maxLoopFrames,
               let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
             return nil
         }
@@ -932,23 +962,7 @@ final class OverdubEngine {
         }
     }
 
-    private func updateMeterFromBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData else { return }
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else { return }
-
-        // True peak detection across all channels for accurate metering
-        var peak: Float = 0
-        let channelCount = Int(buffer.format.channelCount)
-        for ch in 0..<channelCount {
-            for i in 0..<frameLength {
-                let absSample = abs(channelData[ch][i])
-                if absSample > peak {
-                    peak = absSample
-                }
-            }
-        }
-
+    private func updateMeterWithPeak(_ peak: Float) {
         // Convert peak amplitude to dB with -60 dB floor
         let dB = 20 * log10(max(peak, 1e-6))
         let minDB: Float = -60
@@ -1013,6 +1027,7 @@ enum OverdubEngineError: Error, LocalizedError {
     case engineNotPrepared
     case headphonesRequired
     case noInputAvailable
+    case layerLimitReached
     case recordingFailed(String)
 
     var errorDescription: String? {
@@ -1023,6 +1038,8 @@ enum OverdubEngineError: Error, LocalizedError {
             return "Headphones are required for recording over a track to prevent feedback."
         case .noInputAvailable:
             return "No microphone input available. If using Bluetooth headphones, ensure they support hands-free calling (HFP). Some Bluetooth audio devices only support playback."
+        case .layerLimitReached:
+            return "Maximum number of overdub layers (\(OverdubEngine.maxLayers)) reached. Remove an existing layer before recording a new one."
         case .recordingFailed(let reason):
             return reason
         }

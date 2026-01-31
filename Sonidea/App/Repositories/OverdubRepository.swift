@@ -149,9 +149,12 @@ enum OverdubRepository {
             groups.removeAll { !recordingIds.contains($0.baseRecordingId) }
         }
 
+        // Recompute recording IDs after removals above to avoid stale snapshot
+        let currentRecordingIds = Set(recordings.map { $0.id })
+
         // Clean up layer references that point to missing recordings
         for i in groups.indices {
-            groups[i].layerRecordingIds.removeAll { !recordingIds.contains($0) }
+            groups[i].layerRecordingIds.removeAll { !currentRecordingIds.contains($0) }
         }
 
         return removedFileURLs

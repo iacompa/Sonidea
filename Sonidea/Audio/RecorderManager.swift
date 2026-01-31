@@ -79,8 +79,10 @@ final class RecorderManager: NSObject {
     /// Serial queue for writing audio buffers to file — keeps I/O off the real-time render thread
     private let fileWriteQueue = DispatchQueue(label: "com.iacompa.sonidea.recorder.filewrite", qos: .userInitiated)
 
-    // Crash recovery: key for UserDefaults
+    // Crash recovery: keys for UserDefaults
     private let inProgressRecordingKey = "inProgressRecordingPath"
+    private let inProgressMetronomeEnabledKey = "inProgressMetronomeEnabled"
+    private let inProgressMonitorEffectsEnabledKey = "inProgressMonitorEffectsEnabled"
 
     private let maxLiveSamples = 60
 
@@ -109,7 +111,8 @@ final class RecorderManager: NSObject {
 
         // Apply gain: convert dB to linear
         // dB = 20 * log10(linear), so linear = 10^(dB/20)
-        let gainLinear = pow(10, inputSettings.gainDb / 20.0)
+        let clampedGainDb = max(-6.0, min(6.0, inputSettings.gainDb))
+        let gainLinear = pow(10, clampedGainDb / 20.0)
         gainMixerNode?.outputVolume = gainLinear
 
         // Apply limiter settings via AudioUnit parameters
@@ -131,8 +134,8 @@ final class RecorderManager: NSObject {
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.001, 0)
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.05, 0)
             } else {
-                // Bypass by setting threshold to 0 dB with large headroom
-                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 0, 0)
+                // Bypass by setting threshold to +40 dB so the limiter never engages
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 40, 0)
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 40, 0)
             }
         }
@@ -305,6 +308,29 @@ final class RecorderManager: NSObject {
 
     func startRecording() {
         guard recordingState == .idle, !isPreparing else { return }
+
+        // Pre-flight: ensure microphone permission before starting
+        let permissionStatus = AVAudioApplication.shared.recordPermission
+        switch permissionStatus {
+        case .denied:
+            recordingError = "Microphone access denied. Please enable microphone permission in Settings > Privacy > Microphone."
+            return
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { [weak self] granted in
+                Task { @MainActor in
+                    if granted {
+                        self?.startRecording()
+                    } else {
+                        self?.recordingError = "Microphone permission is required to record audio."
+                    }
+                }
+            }
+            return
+        case .granted:
+            break
+        @unknown default:
+            break
+        }
 
         // Pre-flight: ensure enough disk space before starting
         if !hasSufficientDiskSpace() {
@@ -537,9 +563,20 @@ final class RecorderManager: NSObject {
                     }
                 }
 
-                // Update meter samples on main thread (uses original buffer — read-only)
+                // Compute peak on audio thread (buffer may be recycled before MainActor runs)
+                let channelCount = Int(buffer.format.channelCount)
+                let frameLength = Int(buffer.frameLength)
+                var peak: Float = 0
+                if let channelData = buffer.floatChannelData, frameLength > 0 {
+                    for ch in 0..<channelCount {
+                        for i in 0..<frameLength {
+                            let absSample = abs(channelData[ch][i])
+                            if absSample > peak { peak = absSample }
+                        }
+                    }
+                }
                 Task { @MainActor in
-                    self?.updateMeterFromBuffer(buffer)
+                    self?.updateMeterWithPeak(peak)
                 }
             }
 
@@ -691,25 +728,8 @@ final class RecorderManager: NSObject {
     /// Decay rate per buffer callback (~93% retention gives ~300ms decay at 44.1kHz/4096 buffer)
     private let peakDecayFactor: Float = 0.93
 
-    /// Update meter samples from audio buffer (for engine recording)
-    /// Uses true peak detection (not RMS) for accurate, responsive metering.
-    private func updateMeterFromBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData else { return }
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else { return }
-
-        // Find peak amplitude in the buffer (true peak metering)
-        var peak: Float = 0
-        let channelCount = Int(buffer.format.channelCount)
-        for ch in 0..<channelCount {
-            for i in 0..<frameLength {
-                let absSample = abs(channelData[ch][i])
-                if absSample > peak {
-                    peak = absSample
-                }
-            }
-        }
-
+    /// Update meter from a pre-computed peak value (called from audio tap with peak computed on audio thread)
+    private func updateMeterWithPeak(_ peak: Float) {
         // Detect if we're getting silence (potential Bluetooth routing issue)
         if peak < 0.0001 {
             consecutiveSilentBuffers += 1
@@ -892,6 +912,8 @@ final class RecorderManager: NSObject {
             // AVAudioEngine doesn't have a true pause, so we stop it
             // Note: This means pause/resume with engine creates a new segment
             audioEngine?.pause()
+            // Drain the file write queue to ensure all pending audio data is flushed to disk
+            fileWriteQueue.sync {}
         } else {
             // Pause the recorder - this flushes the audio buffer to disk
             audioRecorder?.pause()
@@ -1076,8 +1098,20 @@ final class RecorderManager: NSObject {
                     }
                 }
 
+                // Compute peak on audio thread (buffer may be recycled before MainActor runs)
+                let chCount = Int(buffer.format.channelCount)
+                let fLen = Int(buffer.frameLength)
+                var peak: Float = 0
+                if let chData = buffer.floatChannelData, fLen > 0 {
+                    for ch in 0..<chCount {
+                        for i in 0..<fLen {
+                            let absSample = abs(chData[ch][i])
+                            if absSample > peak { peak = absSample }
+                        }
+                    }
+                }
                 Task { @MainActor in
-                    self?.updateMeterFromBuffer(buffer)
+                    self?.updateMeterWithPeak(peak)
                 }
             }
 
@@ -1209,14 +1243,19 @@ final class RecorderManager: NSObject {
 
     private func markRecordingInProgress(_ fileURL: URL) {
         UserDefaults.standard.set(fileURL.path, forKey: inProgressRecordingKey)
+        UserDefaults.standard.set(metronome.isEnabled, forKey: inProgressMetronomeEnabledKey)
+        UserDefaults.standard.set(monitorEffects.isEnabled, forKey: inProgressMonitorEffectsEnabledKey)
     }
 
     private func clearInProgressRecording() {
         UserDefaults.standard.removeObject(forKey: inProgressRecordingKey)
+        UserDefaults.standard.removeObject(forKey: inProgressMetronomeEnabledKey)
+        UserDefaults.standard.removeObject(forKey: inProgressMonitorEffectsEnabledKey)
     }
 
     /// Check for and recover any in-progress recording from a crash
     /// Returns the file URL if a recoverable recording exists
+    /// Also restores metronome and monitoring effects enabled state
     func checkForRecoverableRecording() -> URL? {
         guard let path = UserDefaults.standard.string(forKey: inProgressRecordingKey) else {
             return nil
@@ -1234,6 +1273,9 @@ final class RecorderManager: NSObject {
         if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
            let size = attrs[.size] as? Int,
            size > 1024 {
+            // Restore metronome and monitoring effects state
+            metronome.isEnabled = UserDefaults.standard.bool(forKey: inProgressMetronomeEnabledKey)
+            monitorEffects.isEnabled = UserDefaults.standard.bool(forKey: inProgressMonitorEffectsEnabledKey)
             return fileURL
         }
 

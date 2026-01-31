@@ -72,14 +72,10 @@ struct IconCatalog {
         // MARK: - Music (first)
         IconDefinition(sfSymbol: "music.note", displayName: "Music", category: .music,
                       classifierLabels: ["music"]),
-        IconDefinition(sfSymbol: "music.note.list", displayName: "Playlist", category: .music),
-        IconDefinition(sfSymbol: "music.quarternote.3", displayName: "Notes", category: .music),
-        IconDefinition(sfSymbol: "guitars.fill", displayName: "Guitar", category: .music,
-                      classifierLabels: ["acoustic_guitar", "electric_guitar", "bass_guitar", "guitar",
-                                        "guitar_strum", "guitar_tapping", "steel_guitar_slide_guitar"]),
-        IconDefinition(sfSymbol: "pianokeys", displayName: "Piano", category: .music,
+        IconDefinition(sfSymbol: "music.note.list", displayName: "Piano", category: .music,
                       classifierLabels: ["piano", "electric_piano", "keyboard_musical", "synthesizer",
                                         "organ", "electronic_organ", "hammond_organ", "harpsichord"]),
+        IconDefinition(sfSymbol: "music.quarternote.3", displayName: "Notes", category: .music),
         IconDefinition(sfSymbol: "cylinder.fill", displayName: "Drums", category: .music,
                       classifierLabels: ["drum", "drum_kit", "bass_drum", "snare_drum", "timpani", "tabla",
                                         "cymbal", "hi_hat", "tambourine", "mallet_percussion", "gong",
@@ -95,9 +91,11 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "earpods", displayName: "Earbuds", category: .music),
         IconDefinition(sfSymbol: "radio.fill", displayName: "Radio", category: .music),
         IconDefinition(sfSymbol: "hifispeaker.2.fill", displayName: "Stereo", category: .music),
-        // String instruments
-        IconDefinition(sfSymbol: "guitars", displayName: "Strings", category: .music,
-                      classifierLabels: ["violin_fiddle", "cello", "double_bass", "bowed_string_instrument",
+        // String instruments (includes guitar classifier labels)
+        IconDefinition(sfSymbol: "guitars", displayName: "Guitar / Strings", category: .music,
+                      classifierLabels: ["acoustic_guitar", "electric_guitar", "bass_guitar", "guitar",
+                                        "guitar_strum", "guitar_tapping", "steel_guitar_slide_guitar",
+                                        "violin_fiddle", "cello", "double_bass", "bowed_string_instrument",
                                         "plucked_string_instrument", "harp", "mandolin", "banjo", "sitar",
                                         "zither", "ukulele"]),
         // Wind instruments

@@ -19,16 +19,16 @@ struct ChannelMixSettings: Codable, Equatable {
     // Custom decoder for backward compatibility — older data lacks isLooped
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        volume = try container.decodeIfPresent(Float.self, forKey: .volume) ?? 1.0
-        pan = try container.decodeIfPresent(Float.self, forKey: .pan) ?? 0.0
+        volume = max(0, min(1.5, try container.decodeIfPresent(Float.self, forKey: .volume) ?? 1.0))
+        pan = max(-1, min(1, try container.decodeIfPresent(Float.self, forKey: .pan) ?? 0.0))
         isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
         isSolo = try container.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
         isLooped = try container.decodeIfPresent(Bool.self, forKey: .isLooped) ?? false
     }
 
     init(volume: Float = 1.0, pan: Float = 0.0, isMuted: Bool = false, isSolo: Bool = false, isLooped: Bool = false) {
-        self.volume = volume
-        self.pan = pan
+        self.volume = max(0, min(1.5, volume))
+        self.pan = max(-1, min(1, pan))
         self.isMuted = isMuted
         self.isSolo = isSolo
         self.isLooped = isLooped
@@ -70,6 +70,7 @@ struct MixSettings: Codable, Equatable {
             return ch.volume
         }
 
-        return (base: baseVol * masterVolume, layers: layerVols.map { $0 * masterVolume })
+        let clampedMaster = max(0, min(1.5, masterVolume))
+        return (base: baseVol * clampedMaster, layers: layerVols.map { $0 * clampedMaster })
     }
 }

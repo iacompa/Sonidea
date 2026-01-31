@@ -33,6 +33,7 @@ enum SharedAlbumError: Error, LocalizedError {
     case downloadNotAllowed
     case commentTooLong
     case fileTooLarge
+    case downloadFailed
 
     var errorDescription: String? {
         switch self {
@@ -70,6 +71,8 @@ enum SharedAlbumError: Error, LocalizedError {
             return "Comment is too long (max 500 characters)."
         case .fileTooLarge:
             return "Recording file is too large to download (max 200MB)."
+        case .downloadFailed:
+            return "Failed to download the recording audio file. Please try again."
         }
     }
 }
@@ -100,17 +103,9 @@ final class SharedAlbumManager {
 
     // MARK: - CloudKit Objects
 
-    private var container: CKContainer {
-        CKContainer(identifier: containerIdentifier)
-    }
-
-    private var privateDatabase: CKDatabase {
-        container.privateCloudDatabase
-    }
-
-    private var sharedDatabase: CKDatabase {
-        container.sharedCloudDatabase
-    }
+    private let container: CKContainer
+    private let privateDatabase: CKDatabase
+    private let sharedDatabase: CKDatabase
 
     // MARK: - Database Routing for Owner vs Non-Owner
 
@@ -156,6 +151,10 @@ final class SharedAlbumManager {
     // MARK: - Initialization
 
     init() {
+        let ckContainer = CKContainer(identifier: "iCloud.com.iacompa.sonidea")
+        self.container = ckContainer
+        self.privateDatabase = ckContainer.privateCloudDatabase
+        self.sharedDatabase = ckContainer.sharedCloudDatabase
         loadPendingOperations()
         startNetworkMonitor()
     }
@@ -168,7 +167,7 @@ final class SharedAlbumManager {
 
     /// Create a new shared album (born-shared, starts empty)
     func createSharedAlbum(name: String) async throws -> Album {
-        logger.info("Creating shared album: \(name)")
+        logger.info("Creating shared album: \(name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -205,9 +204,6 @@ final class SharedAlbumManager {
             record["name"] = name
             record["createdAt"] = album.createdAt
             record["isShared"] = true
-
-            // Save the record
-            try await privateDatabase.save(record)
 
             // Create the share
             let share = CKShare(rootRecord: record)
@@ -256,7 +252,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.notOwner
         }
 
-        logger.info("Leaving shared album: \(album.name)")
+        logger.info("Leaving shared album: \(album.name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -293,7 +289,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.notOwner
         }
 
-        logger.info("Stopping sharing for album: \(album.name)")
+        logger.info("Stopping sharing for album: \(album.name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -323,7 +319,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Adding recording to shared album: \(recording.title) -> \(album.name)")
+        logger.info("Adding recording to shared album: \(recording.title, privacy: .private) -> \(album.name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -404,7 +400,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Deleting recording from shared album: \(recordingId)")
+        logger.info("Deleting recording from shared album: \(recordingId, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -423,7 +419,7 @@ final class SharedAlbumManager {
     func fetchSharedRecordingInfo(for album: Album) async -> [UUID: SharedRecordingItem] {
         guard album.isShared else { return [:] }
 
-        logger.info("Fetching shared recording info for album: \(album.id)")
+        logger.info("Fetching shared recording info for album: \(album.id, privacy: .private)")
 
         let predicate = NSPredicate(value: true)
         let query = CKQuery(recordType: "SharedRecording", predicate: predicate)
@@ -467,6 +463,10 @@ final class SharedAlbumManager {
             }
 
             logger.info("Fetched \(result.count) shared recording info items")
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during recording info fetch: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
+            return [:]
         } catch {
             logger.error("Failed to fetch shared recording info: \(error.localizedDescription)")
         }
@@ -566,7 +566,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.invalidRole
         }
 
-        logger.info("Changing role for participant \(participantId) to \(newRole.rawValue)")
+        logger.info("Changing role for participant \(participantId, privacy: .private) to \(newRole.rawValue)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -606,8 +606,18 @@ final class SharedAlbumManager {
                 try await shareDb.save(share)
                 logger.info("Updated CKShare participant permission")
             } catch {
-                logger.error("Failed to update CKShare permission: \(error.localizedDescription)")
-                // Non-fatal: the role record is already saved
+                // CKShare save failed — revert the role record to prevent permission escalation
+                // (role record says "viewer" but CKShare may still grant readWrite, or vice versa)
+                logger.error("Failed to update CKShare permission: \(error.localizedDescription). Reverting role record.")
+                do {
+                    let revertRecord = try await db.record(for: roleRecordID)
+                    // Delete the role record we just saved so it doesn't conflict with the CKShare state
+                    try await db.deleteRecord(withID: revertRecord.recordID)
+                    logger.info("Reverted role record after CKShare save failure")
+                } catch {
+                    logger.error("Failed to revert role record: \(error.localizedDescription)")
+                }
+                throw SharedAlbumError.networkError(error)
             }
         }
 
@@ -622,7 +632,7 @@ final class SharedAlbumManager {
                 targetParticipantId: participantId,
                 newValue: newRole.displayName
             )
-            try await logActivity(event: event, for: album)
+            try? await logActivity(event: event, for: album)
         }
     }
 
@@ -632,7 +642,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Removing participant \(participantId) from album: \(album.name)")
+        logger.info("Removing participant \(participantId, privacy: .private) from album: \(album.name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -671,7 +681,7 @@ final class SharedAlbumManager {
                     eventType: .participantRemoved,
                     targetParticipantId: participantId
                 )
-                try await logActivity(event: event, for: album)
+                try? await logActivity(event: event, for: album)
             }
         } catch {
             logger.error("Failed to remove participant: \(error.localizedDescription)")
@@ -700,7 +710,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Moving recording to shared album trash: \(localRecording.title)")
+        logger.info("Moving recording to shared album trash: \(localRecording.title, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -728,8 +738,19 @@ final class SharedAlbumManager {
             trashRecord["deletedAt"] = trashItem.deletedAt
             trashRecord["originalCreatedAt"] = trashItem.originalCreatedAt
 
-            // Save trash record and delete original
+            // Fetch original recording to copy the audio CKAsset before deleting
             let recordingRecordID = CKRecord.ID(recordName: localRecording.id.uuidString, zoneID: zoneID)
+            do {
+                let originalRecord = try await db.record(for: recordingRecordID)
+                if let audioAsset = originalRecord["audioFile"] as? CKAsset {
+                    trashRecord["audioFile"] = audioAsset
+                }
+            } catch {
+                logger.warning("Could not fetch original recording to copy audio asset: \(error.localizedDescription)")
+                // Continue without audio — metadata is still preserved in trash
+            }
+
+            // Save trash record and delete original
             try await db.modifyRecords(saving: [trashRecord], deleting: [recordingRecordID])
 
             // Log activity
@@ -756,7 +777,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Restoring recording from trash: \(trashItem.title)")
+        logger.info("Restoring recording from trash: \(trashItem.title, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -773,16 +794,24 @@ final class SharedAlbumManager {
             record["creatorId"] = trashItem.creatorId
             record["creatorDisplayName"] = trashItem.creatorDisplayName
 
-            // Restore audio from original metadata if available
-            if let audioRef = trashItem.audioAssetReference {
+            // Restore audio: first try the CKAsset stored on the trash CKRecord,
+            // then fall back to local audioAssetReference path
+            let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
+            do {
+                let trashCKRecord = try await db.record(for: trashRecordID)
+                if let audioAsset = trashCKRecord["audioFile"] as? CKAsset {
+                    record["audioFile"] = audioAsset
+                }
+            } catch {
+                logger.warning("Could not fetch trash CKRecord to restore audio: \(error.localizedDescription)")
+            }
+            // Fallback: local file path from audioAssetReference
+            if record["audioFile"] == nil, let audioRef = trashItem.audioAssetReference {
                 let audioURL = URL(fileURLWithPath: audioRef)
                 if FileManager.default.fileExists(atPath: audioURL.path) {
                     record["audioFile"] = CKAsset(fileURL: audioURL)
                 }
             }
-
-            // Delete trash record
-            let trashRecordID = CKRecord.ID(recordName: "trash-\(trashItem.id.uuidString)", zoneID: zoneID)
 
             try await db.modifyRecords(saving: [record], deleting: [trashRecordID])
 
@@ -813,7 +842,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Permanently deleting: \(trashItem.title)")
+        logger.info("Permanently deleting: \(trashItem.title, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -848,6 +877,10 @@ final class SharedAlbumManager {
                 }
             }
             return trashItems
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during trash fetch: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
+            return []
         } catch {
             logger.error("Failed to fetch trash items: \(error.localizedDescription)")
             return []
@@ -873,6 +906,9 @@ final class SharedAlbumManager {
             }
             try await db.modifyRecords(saving: [], deleting: recordIDsToDelete)
             logger.info("Purged expired trash items successfully")
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during trash purge: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
         } catch {
             logger.error("Failed to purge trash items: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
@@ -968,6 +1004,10 @@ final class SharedAlbumManager {
                 }
             }
             return events
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during activity fetch: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
+            return []
         } catch {
             logger.error("Failed to fetch activity feed: \(error.localizedDescription)")
             return []
@@ -1066,6 +1106,10 @@ final class SharedAlbumManager {
                 }
             }
             return comments.sorted { $0.createdAt < $1.createdAt }
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during comments fetch: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
+            return []
         } catch {
             logger.error("Failed to fetch comments: \(error.localizedDescription)")
             return []
@@ -1086,7 +1130,7 @@ final class SharedAlbumManager {
         let record = try await db.record(for: recordID)
         let commentAuthorId = record["authorId"] as? String
         guard commentAuthorId == currentUserId else {
-            logger.warning("User \(currentUserId) attempted to delete comment authored by \(commentAuthorId ?? "unknown")")
+            logger.warning("User \(currentUserId, privacy: .private) attempted to delete comment authored by \(commentAuthorId ?? "unknown", privacy: .private)")
             throw SharedAlbumError.permissionDenied
         }
 
@@ -1125,7 +1169,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.permissionDenied
         }
 
-        logger.info("Updating settings for album: \(album.name)")
+        logger.info("Updating settings for album: \(album.name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -1165,6 +1209,10 @@ final class SharedAlbumManager {
             let settingsRecordID = CKRecord.ID(recordName: "settings-\(album.id.uuidString)", zoneID: zoneID)
             let record = try await db.record(for: settingsRecordID)
             return parseSettingsRecord(record)
+        } catch where isZoneOrShareDeletedError(error) {
+            logger.warning("Shared album zone/share no longer exists during settings fetch: \(error.localizedDescription)")
+            handleZoneNotFound(for: album)
+            return nil
         } catch {
             // Settings don't exist yet, return defaults
             return SharedAlbumSettings.default
@@ -1381,7 +1429,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.notOwner
         }
 
-        logger.info("Renaming shared album from \"\(oldName)\" to \"\(newName)\"")
+        logger.info("Renaming shared album from \"\(oldName, privacy: .private)\" to \"\(newName, privacy: .private)\"")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -1427,7 +1475,7 @@ final class SharedAlbumManager {
     func removeUserRecordings(userId: String, album: Album) async throws {
         guard album.isShared else { return }
 
-        logger.info("Removing recordings by user \(userId) from album \(album.name)")
+        logger.info("Removing recordings by user \(userId, privacy: .private) from album \(album.name, privacy: .private)")
 
         let predicate = NSPredicate(format: "creatorId == %@", userId)
         let query = CKQuery(recordType: "SharedRecording", predicate: predicate)
@@ -1444,12 +1492,12 @@ final class SharedAlbumManager {
             }
 
             guard !recordIDsToDelete.isEmpty else {
-                logger.info("No recordings found for user \(userId) in album \(album.name)")
+                logger.info("No recordings found for user \(userId, privacy: .private) in album \(album.name, privacy: .private)")
                 return
             }
 
             try await db.modifyRecords(saving: [], deleting: recordIDsToDelete)
-            logger.info("Removed \(recordIDsToDelete.count) recordings by user \(userId)")
+            logger.info("Removed \(recordIDsToDelete.count) recordings by user \(userId, privacy: .private)")
 
             // Log activity for each deletion
             let currentUserId = await getCurrentUserId() ?? userId
@@ -1476,7 +1524,7 @@ final class SharedAlbumManager {
     func toggleDownloadPermission(recordingId: UUID, album: Album, allow: Bool) async throws {
         guard album.isShared else { return }
 
-        logger.info("Setting allowDownload=\(allow) for recording \(recordingId)")
+        logger.info("Setting allowDownload=\(allow) for recording \(recordingId, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
 
@@ -1492,7 +1540,7 @@ final class SharedAlbumManager {
 
             let recordCreatorId = record["creatorId"] as? String
             guard recordCreatorId == currentUserId else {
-                logger.warning("User \(currentUserId) attempted to toggle download permission on recording owned by \(recordCreatorId ?? "unknown")")
+                logger.warning("User \(currentUserId, privacy: .private) attempted to toggle download permission on recording owned by \(recordCreatorId ?? "unknown", privacy: .private)")
                 throw SharedAlbumError.permissionDenied
             }
 
@@ -1571,7 +1619,7 @@ final class SharedAlbumManager {
 
         guard let asset = record["audioFile"] as? CKAsset,
               let assetURL = asset.fileURL else {
-            throw SharedAlbumError.recordingNotFound
+            throw SharedAlbumError.downloadFailed
         }
 
         // Check file size before copying (max 200MB)
@@ -1597,7 +1645,7 @@ final class SharedAlbumManager {
             throw SharedAlbumError.recordingNotFound
         }
 
-        logger.info("Downloaded shared recording audio to cache: \(recordingId)")
+        logger.info("Downloaded shared recording audio to cache: \(recordingId, privacy: .private)")
         return cachedFile
     }
 
@@ -1724,8 +1772,20 @@ final class SharedAlbumManager {
         let sharedAlbums = appState.albums.filter { $0.isShared }
 
         for album in sharedAlbums {
+            // Check if album was removed from local state (e.g., by a prior iteration's cleanup)
+            guard appState.albums.contains(where: { $0.id == album.id }) else {
+                logger.info("Skipping album that was removed during notification handling: \(album.name, privacy: .private)")
+                continue
+            }
+
             // Refresh recordings
             let sharedInfos = await fetchSharedRecordingInfo(for: album)
+
+            // If the album was cleaned up by handleZoneNotFound during fetch, skip remaining work
+            guard appState.albums.contains(where: { $0.id == album.id }) else {
+                continue
+            }
+
             for (id, info) in sharedInfos {
                 appState.sharedRecordingInfoCache[id] = info
             }
@@ -1786,9 +1846,13 @@ final class SharedAlbumManager {
             logger.info("Dropping \(expiredCount) expired pending operations (older than 7 days)")
         }
 
-        let opsToRetry = validOps
-        pendingOperations.removeAll()
+        // Replace pendingOperations with only the valid (non-expired) ops.
+        // Each operation is removed individually only after it succeeds.
+        pendingOperations = validOps
         savePendingOperations()
+
+        // Iterate over a snapshot; mutate pendingOperations as each op resolves
+        let opsToRetry = validOps
 
         for op in opsToRetry {
             guard let appState = appState else { break }
@@ -1819,21 +1883,31 @@ final class SharedAlbumManager {
                 default:
                     logger.warning("Unknown pending operation type: \(op.operationType)")
                 }
+
+                // Success — remove this operation from the persisted queue
+                pendingOperations.removeAll { $0.id == op.id }
+                savePendingOperations()
                 logger.info("Retried pending operation: \(op.operationType)")
+            } catch where isZoneOrShareDeletedError(error) {
+                // Zone/share deleted — drop the operation immediately and clean up
+                logger.warning("Zone/share deleted during retry of \(op.operationType) — dropping operation and cleaning up album")
+                pendingOperations.removeAll { $0.id == op.id }
+                savePendingOperations()
+                handleZoneNotFound(for: album)
             } catch {
-                // Re-queue if still failing, up to max retries
-                var retryOp = op
-                retryOp.retryCount += 1
-                if retryOp.retryCount < self.maxRetryCount {
-                    logger.error("Retry \(retryOp.retryCount)/\(self.maxRetryCount) failed for \(op.operationType): \(error.localizedDescription)")
-                    pendingOperations.append(retryOp)
-                } else {
-                    logger.error("Dropping operation \(op.operationType) after \(self.maxRetryCount) retries")
+                // Re-queue with incremented retry count, or drop if max retries exceeded
+                if let idx = pendingOperations.firstIndex(where: { $0.id == op.id }) {
+                    pendingOperations[idx].retryCount += 1
+                    if pendingOperations[idx].retryCount >= self.maxRetryCount {
+                        logger.error("Dropping operation \(op.operationType) after \(self.maxRetryCount) retries")
+                        pendingOperations.remove(at: idx)
+                    } else {
+                        logger.error("Retry \(self.pendingOperations[idx].retryCount)/\(self.maxRetryCount) failed for \(op.operationType): \(error.localizedDescription)")
+                    }
                 }
+                savePendingOperations()
             }
         }
-
-        savePendingOperations()
     }
 
     private func savePendingOperations() {
@@ -1866,7 +1940,7 @@ final class SharedAlbumManager {
             let exists = allZones.contains { $0.zoneID.zoneName == "SharedAlbum-\(album.id.uuidString)" }
             if !exists {
                 shareStale = true
-                logger.warning("Shared album no longer exists: \(album.name)")
+                logger.warning("Shared album no longer exists: \(album.name, privacy: .private)")
             }
             return exists
         } catch {
@@ -1876,9 +1950,40 @@ final class SharedAlbumManager {
         }
     }
 
+    /// Check if an error indicates the shared album's zone or share has been deleted
+    /// (e.g., owner deleted the album from another device).
+    private func isZoneOrShareDeletedError(_ error: Error) -> Bool {
+        if error is SharedAlbumError, case SharedAlbumError.shareNoLongerExists = error {
+            return true
+        }
+        if let ckError = error as? CKError {
+            return ckError.code == .zoneNotFound || ckError.code == .unknownItem
+        }
+        return false
+    }
+
+    /// Remove a shared album from local state when the zone/share no longer exists.
+    /// Called when we detect that the owner deleted the album on another device.
+    private func handleZoneNotFound(for album: Album) {
+        logger.warning("Shared album zone deleted by owner — removing from local state: \(album.name, privacy: .private) (id: \(album.id, privacy: .private))")
+        shareStale = true
+
+        // Remove pending operations for this album so they don't retry forever
+        let beforeCount = pendingOperations.count
+        pendingOperations.removeAll { $0.albumId == album.id }
+        if pendingOperations.count != beforeCount {
+            savePendingOperations()
+            logger.info("Cleared \(beforeCount - self.pendingOperations.count) pending operations for deleted shared album")
+        }
+
+        // Remove album and associated recordings from local state
+        appState?.removeSharedAlbum(album)
+    }
+
     // MARK: - Audio Cache Management
 
-    /// Evict cached audio files if total size exceeds limit (LRU)
+    /// Evict cached audio files: delete files not accessed in 30 days,
+    /// then LRU-evict oldest-accessed files if total cache exceeds 500MB.
     func evictAudioCacheIfNeeded() {
         guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
         let cacheBase = cachesDir.appendingPathComponent("SharedAlbumAudio", isDirectory: true)
@@ -1906,6 +2011,28 @@ final class SharedAlbumManager {
             totalSize += entry.size
         }
 
+        // Phase 1: Delete files not accessed in 30 days
+        let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 3600)
+        var staleEvicted: Int64 = 0
+        files.removeAll { file in
+            if file.lastAccessed < thirtyDaysAgo {
+                do {
+                    try fm.removeItem(at: file.url)
+                    staleEvicted += file.size
+                    totalSize -= file.size
+                    logger.debug("Evicted stale cached audio (>30 days): \(file.url.lastPathComponent)")
+                } catch {
+                    logger.error("Failed to evict stale cache file: \(error.localizedDescription)")
+                }
+                return true
+            }
+            return false
+        }
+        if staleEvicted > 0 {
+            logger.info("Evicted \(staleEvicted) bytes of stale (>30 days) cached audio")
+        }
+
+        // Phase 2: LRU eviction if total cache still exceeds 500MB limit
         guard totalSize > maxCacheSizeBytes else { return }
 
         // Sort oldest-accessed first (LRU eviction)
@@ -1923,7 +2050,9 @@ final class SharedAlbumManager {
             }
         }
 
-        logger.info("Evicted \(evicted) bytes from shared album audio cache")
+        if evicted > 0 {
+            logger.info("Evicted \(evicted) bytes from shared album audio cache (LRU)")
+        }
     }
 
     // MARK: - Background Trash Purge
@@ -1937,7 +2066,7 @@ final class SharedAlbumManager {
             do {
                 try await purgeExpiredTrashItems(for: album)
             } catch {
-                logger.error("Failed to purge trash for album \(album.name): \(error.localizedDescription)")
+                logger.error("Failed to purge trash for album \(album.name, privacy: .private): \(error.localizedDescription)")
             }
         }
     }

@@ -149,6 +149,7 @@ enum TagRepository {
         } else {
             updated.tagIDs.append(tag.id)
         }
+        updated.modifiedAt = Date()
         return updated
     }
 

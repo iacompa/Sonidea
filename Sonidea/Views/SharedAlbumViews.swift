@@ -983,6 +983,7 @@ struct SharedAlbumDetailView: View {
     @State private var showProRequired = false
     @State private var showRenameAlert = false
     @State private var renameText = ""
+    @State private var lastFetchTime: Date?
 
     private var recordingsWithLocation: [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
         recordings.compactMap { recording in
@@ -1118,6 +1119,7 @@ struct SharedAlbumDetailView: View {
                 .environment(\.themePalette, palette)
             }
             .onAppear {
+                if let last = lastFetchTime, Date().timeIntervalSince(last) < 60 { return }
                 loadData()
             }
         }
@@ -1465,6 +1467,7 @@ struct SharedAlbumDetailView: View {
                     activityEvents = appState.debugMockActivityFeed()
                     trashItems = appState.debugMockTrashItems()
                     albumSettings = album.sharedSettings ?? .default
+                    lastFetchTime = Date()
                 }
                 #endif
             } else {
@@ -1488,6 +1491,7 @@ struct SharedAlbumDetailView: View {
                     activityEvents = (activity + localEvents).sorted { $0.timestamp > $1.timestamp }
                     trashItems = trash
                     albumSettings = settings ?? .default
+                    lastFetchTime = Date()
                 }
             }
         }

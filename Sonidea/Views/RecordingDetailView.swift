@@ -123,7 +123,7 @@ struct RecordingDetailView: View {
 
     // Waveform height (adaptive for iPad)
     @Environment(\.horizontalSizeClass) private var sizeClass
-    private var compactWaveformHeight: CGFloat { sizeClass == .regular ? 140 : 100 }
+    private var compactWaveformHeight: CGFloat { sizeClass == .regular ? 175 : 125 }
     private var expandedWaveformHeight: CGFloat { sizeClass == .regular ? 350 : 250 }
 
     @State private var isTranscribing = false
@@ -272,7 +272,7 @@ struct RecordingDetailView: View {
                 projectId: snapshotRecording.projectId,
                 parentRecordingId: snapshotRecording.parentRecordingId,
                 versionIndex: snapshotRecording.versionIndex,
-                proofStatusRaw: snapshotRecording.proofStatusRaw,
+                proofStatusRaw: ProofStatus.none.rawValue,
                 proofSHA256: nil,
                 proofCloudCreatedAt: nil,
                 proofCloudRecordName: nil,
@@ -430,6 +430,13 @@ struct RecordingDetailView: View {
                 // This prevents CloudKit crashes from blocking recording playback
             }
             .onDisappear {
+                // Always persist title changes regardless of how user leaves the view
+                // (e.g. swipe-back navigation without tapping Save/Done)
+                saveTitleIfChanged()
+                // Always persist marker changes regardless of how user leaves the view
+                if editedMarkers != currentRecording.markers {
+                    saveMarkersOnly()
+                }
                 savePlaybackPosition()
                 playback.stop()
                 editHistory.clear(currentFileURL: currentRecording.fileURL)  // Clean up undo history
@@ -490,6 +497,9 @@ struct RecordingDetailView: View {
             }
             .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
                 Button("OK") {
+                    playback.clearError()
+                }
+                Button("Go Back", role: .cancel) {
                     playback.clearError()
                     dismiss()
                 }
@@ -824,6 +834,10 @@ struct RecordingDetailView: View {
                                 appliedEchoDamping = 0.3
                                 appliedEchoWetDry = 0.3
                                 showToolsPanel = false
+                                // Persist markers immediately when exiting edit mode
+                                if editedMarkers != currentRecording.markers {
+                                    saveMarkersOnly()
+                                }
                                 isEditingWaveform = false
                             } else {
                                 guard appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree else {
@@ -956,6 +970,7 @@ struct RecordingDetailView: View {
                         progress: playbackProgress,
                         duration: playback.duration > 0 ? playback.duration : currentRecording.duration,
                         isPlaying: playback.isPlaying,
+                        markers: editedMarkers,
                         onSeek: { time in
                             playback.seek(to: time)
                         }
@@ -1081,7 +1096,7 @@ struct RecordingDetailView: View {
                                 .frame(width: 36, height: 36)
                         }
 
-                        // Play/Pause
+                        // Play/Pause - liquid glass 3D style
                         Button {
                             if playback.isPlaying {
                                 playback.pause()
@@ -1095,8 +1110,10 @@ struct RecordingDetailView: View {
                             }
                         } label: {
                             Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 40))
-                                .foregroundColor(palette.accent)
+                                .font(.system(size: 46))
+                                .foregroundStyle(palette.accent)
+                                .shadow(color: palette.accent.opacity(0.35), radius: 5, y: 2)
+                                .shadow(color: .white.opacity(0.15), radius: 1, y: -1)
                         }
 
                         // Skip forward
@@ -1114,32 +1131,39 @@ struct RecordingDetailView: View {
 
                         Spacer()
 
-                        // EQ button
+                        // Mark button (add marker at edit playhead)
                         Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showEQPanel.toggle()
-                            }
+                            addMarkerAtPlayhead()
                         } label: {
-                            Text("EQ")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(showEQPanel ? .white : .purple)
-                                .frame(width: 42, height: 32)
-                                .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
-                                .cornerRadius(7)
+                            HStack(spacing: 3) {
+                                Image(systemName: "flag.fill")
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text("Mark")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(palette.accent)
+                            .frame(height: 32)
+                            .padding(.horizontal, 8)
+                            .background(palette.accent.opacity(0.12))
+                            .cornerRadius(7)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .strokeBorder(palette.accent.opacity(0.25), lineWidth: 1)
+                            )
                         }
                     }
                     .padding(.horizontal, 4)
 
-                    // Edit actions: Trim, Cut, Mark, Precision + More Tools
+                    // Edit actions: Trim, Cut, EQ, Precision + More Tools
                     EditActionsRow(
                         canTrim: canPerformTrim,
                         canCut: canPerformCut,
                         isProcessing: isProcessingEdit,
                         isPrecisionMode: $isPrecisionMode,
                         showToolsPanel: $showToolsPanel,
+                        showEQPanel: $showEQPanel,
                         onTrim: performTrim,
                         onCut: performCut,
-                        onAddMarker: addMarkerAtPlayhead,
                         onMoreTapped: {
                             if appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -1231,7 +1255,7 @@ struct RecordingDetailView: View {
             // Playback controls - only shown when NOT in edit mode
             // (In edit mode, compact controls are positioned right below the waveform)
             if !isEditingWaveform {
-                // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ EQ ]
+                // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ Mark ]
                 HStack(spacing: 16) {
                     // Speed button (left edge)
                     Button {
@@ -1257,13 +1281,15 @@ struct RecordingDetailView: View {
                             .frame(width: 44, height: 44)
                     }
 
-                    // Play/Pause (centered)
+                    // Play/Pause (centered) - liquid glass 3D style
                     Button {
                         playback.togglePlayPause()
                     } label: {
                         Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 56))
-                            .foregroundColor(palette.accent)
+                            .font(.system(size: 62))
+                            .foregroundStyle(palette.accent)
+                            .shadow(color: palette.accent.opacity(0.35), radius: 6, y: 3)
+                            .shadow(color: .white.opacity(0.15), radius: 1, y: -1)
                     }
 
                     // Skip forward
@@ -1278,18 +1304,25 @@ struct RecordingDetailView: View {
 
                     Spacer()
 
-                    // EQ button (right edge)
+                    // Mark button (right edge) - add marker at current playback position
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showEQPanel.toggle()
-                        }
+                        addMarkerAtCurrentPlaybackTime()
                     } label: {
-                        Text("EQ")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(showEQPanel ? .white : .purple)
-                            .frame(width: 48, height: 36)
-                            .background(showEQPanel ? Color.purple : Color.purple.opacity(0.15))
-                            .cornerRadius(8)
+                        HStack(spacing: 4) {
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Mark")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundColor(palette.accent)
+                        .frame(height: 36)
+                        .padding(.horizontal, 10)
+                        .background(palette.accent.opacity(0.12))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(palette.accent.opacity(0.25), lineWidth: 1)
+                        )
                     }
                 }
                 .padding(.horizontal, 8)
@@ -1669,10 +1702,51 @@ struct RecordingDetailView: View {
         impactGenerator.impactOccurred()
     }
 
+    /// Add a marker at the current playback position (non-edit mode).
+    /// Saves immediately to the recording since we're not in edit mode.
+    private func addMarkerAtCurrentPlaybackTime() {
+        let duration = playback.duration > 0 ? playback.duration : currentRecording.duration
+        let markerTime = Swift.max(0, Swift.min(playback.currentTime, duration))
+
+        let newMarker = Marker(time: markerTime)
+        editedMarkers.append(newMarker)
+        editedMarkers = editedMarkers.sortedByTime
+
+        // Persist immediately (we're not in edit mode, no undo needed)
+        saveMarkersOnly()
+
+        // Haptic feedback
+        let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+        impactGenerator.impactOccurred()
+    }
+
+    /// Save only markers to the recording (for non-edit mode marker placement)
+    private func saveMarkersOnly() {
+        var updated = currentRecording
+        updated.markers = editedMarkers
+        currentRecording = updated
+        appState.updateRecording(updated)
+    }
+
+    /// Save title if it was edited (called from onDisappear to catch swipe-back navigation)
+    private func saveTitleIfChanged() {
+        let resolvedTitle = editedTitle.isEmpty ? currentRecording.title : editedTitle
+        guard resolvedTitle != currentRecording.title else { return }
+        var updated = currentRecording
+        updated.title = resolvedTitle
+        updated.modifiedAt = Date()
+        currentRecording = updated
+        appState.updateRecording(updated)
+    }
+
     // MARK: - Audio Edit Tools (Fade, Normalize, Noise Gate)
 
     private func undoLastEdit() {
         if editHistory.canUndo, let snapshot = editHistory.popUndo() {
+            // Push current state to redo stack before restoring
+            let currentSnapshot = createUndoSnapshot(description: "Redo")
+            editHistory.pushRedo(currentSnapshot)
+
             pendingAudioEdit = snapshot.audioFileURL
             pendingDuration = snapshot.duration
             hasAudioEdits = true
@@ -1746,7 +1820,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Reverb")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1770,7 +1843,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Reverb applied"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1780,7 +1852,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Echo")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1803,7 +1874,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Echo applied"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1813,7 +1883,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Compress")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1834,7 +1903,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Compression applied"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1844,7 +1912,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Fade")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1866,7 +1933,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Fade applied"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1876,7 +1942,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Normalize")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1896,7 +1961,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Normalized audio"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1906,7 +1970,6 @@ struct RecordingDetailView: View {
         let undoSnapshot = createUndoSnapshot(description: "Noise Gate")
         editHistory.pushUndo(undoSnapshot)
 
-        isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
         Task {
@@ -1926,7 +1989,6 @@ struct RecordingDetailView: View {
                     skipSilenceResultMessage = "Noise gate applied"
                     showSkipSilenceResult = true
                 }
-                isProcessingEdit = false
             }
         }
     }
@@ -1934,14 +1996,12 @@ struct RecordingDetailView: View {
     private func reloadWaveformForPendingEdit() {
         guard let pendingURL = pendingAudioEdit else { return }
 
-        isLoadingWaveform = true
-        // Clear high-res waveform so it reloads with new audio
-        highResWaveformData = nil
+        // Keep the old waveform visible while the new one loads (no nil-ing, no spinner).
         // Reset skip silence manager for new audio
         skipSilenceManager.clear()
 
         Task {
-            // Clear caches for old URL
+            // Clear caches for old URL so fresh data is extracted
             await WaveformSampler.shared.clearCache(for: currentRecording.fileURL)
             await AudioWaveformExtractor.shared.clearCache(for: currentRecording.fileURL)
 
@@ -1958,10 +2018,10 @@ struct RecordingDetailView: View {
             let waveformData = try? await AudioWaveformExtractor.shared.extractWaveform(from: pendingURL)
 
             await MainActor.run {
+                // Swap in new data seamlessly (old waveform was visible the whole time)
                 waveformSamples = samples
                 waveformMinMaxSamples = minMaxSamples
                 highResWaveformData = waveformData
-                isLoadingWaveform = false
             }
         }
     }
@@ -2420,6 +2480,11 @@ struct RecordingDetailView: View {
             // Location Section
             locationSection
 
+            // Markers
+            if !editedMarkers.isEmpty {
+                markersSection
+            }
+
             // Transcription
             transcriptionSection
 
@@ -2737,6 +2802,61 @@ struct RecordingDetailView: View {
         // Reset playback state
         playback.stop()
         playback.load(url: recording.fileURL)
+    }
+
+    // MARK: - Markers Section
+
+    private var markersSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Markers")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(palette.textSecondary)
+                    .textCase(.uppercase)
+                Spacer()
+                if editedMarkers.count > 1 {
+                    Button("Clear All") {
+                        editedMarkers.removeAll()
+                        saveMarkersOnly()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.red)
+                }
+            }
+
+            MetadataCard {
+                ForEach(Array(editedMarkers.sortedByTime.enumerated()), id: \.element.id) { index, marker in
+                    CardRow(showDivider: index < editedMarkers.count - 1, action: {
+                        playback.seek(to: marker.time)
+                        if isEditingWaveform {
+                            editPlayheadPosition = marker.time
+                        }
+                    }) {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                        Text(marker.label ?? "Marker \(index + 1)")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textPrimary)
+                        Spacer()
+                        Text(formatTime(marker.time))
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundColor(palette.textSecondary)
+                        Button {
+                            editedMarkers.removeAll { $0.id == marker.id }
+                            saveMarkersOnly()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(palette.textSecondary.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Transcription Section
@@ -3081,11 +3201,11 @@ struct RecordingDetailView: View {
         updated.markers = editedMarkers
 
         // Handle audio edits - update file URL and duration
+        var oldAudioURLToCleanup: URL? = nil
         if let pendingURL = pendingAudioEdit, let newDuration = pendingDuration {
-            // Clean up old file if different
             let oldURL = currentRecording.fileURL
             if oldURL != pendingURL {
-                AudioEditor.shared.cleanupOldFile(at: oldURL)
+                oldAudioURLToCleanup = oldURL
             }
 
             // Create updated recording with new audio file
@@ -3121,17 +3241,25 @@ struct RecordingDetailView: View {
                 locationProofStatusRaw: updated.locationProofStatusRaw,
                 markers: editedMarkers
             )
-
-            // Clear waveform cache for old URL
-            Task {
-                await WaveformSampler.shared.clearCache(for: oldURL)
-            }
         }
+
+        // Mark as modified so iCloud sync picks up the changes
+        updated.modifiedAt = Date()
 
         // Clear edit history after saving (preserve the active audio file)
         editHistory.clear(currentFileURL: updated.fileURL)
 
+        // Save new state to AppState FIRST, then clean up old file
         appState.updateRecording(updated)
+        currentRecording = updated
+
+        // Clean up old audio file AFTER state is saved to prevent data loss
+        if let oldURL = oldAudioURLToCleanup {
+            AudioEditor.shared.cleanupOldFile(at: oldURL)
+            Task {
+                await WaveformSampler.shared.clearCache(for: oldURL)
+            }
+        }
     }
 
     private func saveEQSettings() {
@@ -3288,6 +3416,9 @@ struct RecordingDetailView: View {
                 showShareSheet = true
             } catch {
                 isExporting = false
+                #if DEBUG
+                print("Export failed: \(error.localizedDescription)")
+                #endif
             }
         }
     }

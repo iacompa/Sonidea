@@ -4,6 +4,10 @@
 //
 //  Created by Michael Ramos on 1/22/26.
 //
+//  NOTE: This file is UNUSED. The app uses PlaybackEngine instead.
+//  Kept in the project to avoid Xcode project file issues.
+//  Safe to remove in a future cleanup pass.
+//
 
 import AVFoundation
 import Foundation

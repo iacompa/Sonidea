@@ -186,6 +186,12 @@ struct ThemePalette: Equatable {
     // Each theme has a curated color to ensure good contrast with waveform bars
     let waveformSelectionBackground: Color
 
+    // Waveform bar & background colors
+    // Bars default to a high-contrast neutral color (not the accent color).
+    // Only switch to accent/colored when the user creates a selection.
+    let waveformBarColor: Color           // Neutral high-contrast bar color
+    let waveformBackground: Color         // Dedicated waveform area background
+
     // Convenience accessors for toolbar text colors
     var effectiveToolbarTextPrimary: Color {
         toolbarTextPrimary ?? textPrimary
@@ -234,7 +240,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
         playheadColor: Color.accentColor,
-        waveformSelectionBackground: Color.accentColor.opacity(0.15)  // Subtle blue tint
+        waveformSelectionBackground: Color.accentColor.opacity(0.15),  // Subtle blue tint
+        waveformBarColor: Color.fromHex("#48484A"),  // Medium-dark gray bars (visible but not harsh)
+        waveformBackground: Color.fromHex("#E6E6EB")  // ~10% darker than white bg
     )
 
     // MARK: - System Dark Palette
@@ -276,7 +284,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
         playheadColor: Color.white,
-        waveformSelectionBackground: Color.accentColor.opacity(0.20)  // Slightly more visible on dark
+        waveformSelectionBackground: Color.accentColor.opacity(0.20),  // Slightly more visible on dark
+        waveformBarColor: Color.fromHex("#8E8E93"),  // Medium gray bars (not too bright)
+        waveformBackground: Color.fromHex("#0A0A0C")  // ~10% darker than black bg
     )
 
     // MARK: - Angst Robot (Purple) Palette
@@ -318,7 +328,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
         playheadColor: Color.fromHex("#9B8CFF"),  // Light purple
-        waveformSelectionBackground: Color.fromHex("#9B8CFF").opacity(0.18)  // Light purple selection
+        waveformSelectionBackground: Color.fromHex("#9B8CFF").opacity(0.18),  // Light purple selection
+        waveformBarColor: Color.fromHex("#7E76A0"),  // Medium purple-tinted bars
+        waveformBackground: Color.fromHex("#1F183C")  // ~10% darker than #221B43
     )
 
     // MARK: - Cream (Russian White) Palette
@@ -360,7 +372,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
         playheadColor: Color.fromHex("#C4956A"),  // Warm amber
-        waveformSelectionBackground: Color.fromHex("#C4956A").opacity(0.12)  // Subtle amber on light bg
+        waveformSelectionBackground: Color.fromHex("#C4956A").opacity(0.12),  // Subtle amber on light bg
+        waveformBarColor: Color.fromHex("#7A6B58"),  // Medium warm brown bars
+        waveformBackground: Color.fromHex("#DDD9CF")  // ~10% darker than #F6F1E6
     )
 
     // MARK: - Logic Pro Palette (Light toolbar + Dark canvas)
@@ -423,7 +437,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: Color.fromHex("#1C1C1E"),   // dark text on light toolbar
         toolbarTextSecondary: Color.fromHex("#3A3A3C"),
         playheadColor: Color.fromHex("#7B8AF4"),  // Periwinkle
-        waveformSelectionBackground: Color.fromHex("#7B8AF4").opacity(0.20)  // Periwinkle selection
+        waveformSelectionBackground: Color.fromHex("#7B8AF4").opacity(0.20),  // Periwinkle selection
+        waveformBarColor: Color.fromHex("#9E9EA1"),  // Medium gray bars (halfway bright)
+        waveformBackground: Color.fromHex("#292929")  // ~10% darker than #2E2E2E
     )
 
     // MARK: - Fruity (FL Studio) Palette
@@ -486,7 +502,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: Color.fromHex("#F2F5F7"),
         toolbarTextSecondary: Color.fromHex("#C9D2D8"),
         playheadColor: Color.fromHex("#F29A2E"),  // FL orange
-        waveformSelectionBackground: Color.fromHex("#F29A2E").opacity(0.15)  // Subtle orange selection
+        waveformSelectionBackground: Color.fromHex("#F29A2E").opacity(0.15),  // Subtle orange selection
+        waveformBarColor: Color.fromHex("#858B92"),  // Medium cool-gray bars
+        waveformBackground: Color.fromHex("#1C262E")  // ~10% darker than #1F2A33
     )
 
     // MARK: - AVID (Pro Tools) Palette
@@ -549,7 +567,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: Color.fromHex("#E9EEF4"),
         toolbarTextSecondary: Color.fromHex("#AEBBCC"),
         playheadColor: Color.fromHex("#29D3C3"),  // Teal/mint
-        waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18)  // Teal selection
+        waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18),  // Teal selection
+        waveformBarColor: Color.fromHex("#787F8A"),  // Medium blue-gray bars
+        waveformBackground: Color.fromHex("#0E0F12")  // ~10% darker than #0F1114
     )
 
     // MARK: - Dynamite (Charcoal + Red/Blue) Palette
@@ -601,7 +621,9 @@ struct ThemePalette: Equatable {
         toolbarTextPrimary: nil,
         toolbarTextSecondary: nil,
         playheadColor: Color.fromHex("#2786BE"),            // Blue playhead (matches Sonidea logo)
-        waveformSelectionBackground: Color.fromHex("#F62E38").opacity(0.20)  // Red selection (swapped)
+        waveformSelectionBackground: Color.fromHex("#F62E38").opacity(0.20),  // Red selection (swapped)
+        waveformBarColor: Color.fromHex("#8A8A8A"),  // Medium gray bars
+        waveformBackground: Color.fromHex("#323232")  // ~10% darker than #383838
     )
 }
 

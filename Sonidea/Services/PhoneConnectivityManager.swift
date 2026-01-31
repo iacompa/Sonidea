@@ -79,6 +79,12 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
 
         let duration = metadata["duration"] as? TimeInterval ?? 0
         let title = metadata["title"] as? String ?? "Watch Recording"
+        let createdAt: Date = {
+            if let timestamp = metadata["createdAt"] as? TimeInterval {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+            return Date()
+        }()
 
         // Copy file synchronously to a stable location BEFORE dispatching to main.
         // WCSession may delete the file at file.fileURL after this delegate returns,
@@ -131,11 +137,16 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
                     from: stableURL,
                     duration: duration,
                     title: title,
-                    albumID: Album.watchRecordingsID
+                    albumID: Album.watchRecordingsID,
+                    createdAt: createdAt
                 )
 
                 // Mark as imported
                 importedUUIDs.append(uuidString)
+                // Trim to last 500 entries to prevent unbounded growth
+                if importedUUIDs.count > 500 {
+                    importedUUIDs = Array(importedUUIDs.suffix(500))
+                }
                 UserDefaults.standard.set(importedUUIDs, forKey: self.importedUUIDsKey)
 
                 #if DEBUG

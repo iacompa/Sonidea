@@ -152,8 +152,9 @@ actor AudioWaveformExtractor {
     private let logger = Logger(subsystem: "com.iacompa.sonidea", category: "WaveformExtractor")
 
     // Cache for extracted waveforms (limited to prevent unbounded memory growth)
-    private var waveformCache: [URL: WaveformData] = [:]
-    private var silenceCache: [URL: [SilenceRange]] = [:]
+    // Each entry stores the file's modification date at cache time for staleness detection
+    private var waveformCache: [URL: (data: WaveformData, modDate: Date?)] = [:]
+    private var silenceCache: [URL: (ranges: [SilenceRange], modDate: Date?)] = [:]
     private var cacheAccessOrder: [URL] = []
     private let maxCacheEntries = 20
 
@@ -173,7 +174,25 @@ actor AudioWaveformExtractor {
     private let silenceExitHoldMs: Double = 30.0        // Debounce: must stay non-silent for 30ms to exit silence (reduced for better transient detection)
     private let mergeGapMs: Double = 40.0               // Merge silence regions separated by gaps < 40ms (reduced from 120ms to avoid swallowing short audio)
 
+    // MARK: - File Modification Date
+
+    /// Get the file's modification date for cache staleness detection.
+    /// When the file is edited (trim, fade, normalize, etc.), the modification date changes,
+    /// so the old in-memory cache entry is automatically invalidated.
+    private func fileModificationDate(for url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
     // MARK: - Disk Cache
+
+    /// Whether disk cache cleanup has already run this session
+    private static var hasPerformedCleanup = false
+
+    /// Maximum age for disk cache files (30 days)
+    private static let maxCacheAgeDays: TimeInterval = 30 * 24 * 60 * 60
+
+    /// Maximum total disk cache size in bytes (50 MB)
+    private static let maxDiskCacheSizeBytes: UInt64 = 50 * 1024 * 1024
 
     /// Directory for persisted waveform cache files
     private var diskCacheDirectory: URL {
@@ -184,8 +203,10 @@ actor AudioWaveformExtractor {
     }
 
     /// Disk cache URL for an audio file
+    /// Uses full path hash to avoid collisions between files with same name in different directories
     private func diskCacheURL(for audioURL: URL) -> URL {
-        let name = audioURL.deletingPathExtension().lastPathComponent
+        let hashValue = audioURL.path.utf8.reduce(5381) { ($0 &<< 5) &+ $0 &+ Int($1) }
+        let name = "\(audioURL.deletingPathExtension().lastPathComponent)_\(String(abs(hashValue), radix: 16))"
         return diskCacheDirectory.appendingPathComponent("\(name).waveform")
     }
 
@@ -221,6 +242,71 @@ actor AudioWaveformExtractor {
         }
     }
 
+    // MARK: - Disk Cache Cleanup
+
+    /// Cleans up stale disk cache entries in the background.
+    /// Removes files older than 30 days, then enforces a 50MB total size limit (LRU eviction).
+    /// Called once per app session to avoid repeated filesystem scans.
+    private func cleanupDiskCacheIfNeeded() {
+        guard !Self.hasPerformedCleanup else { return }
+        Self.hasPerformedCleanup = true
+
+        let cacheDir = diskCacheDirectory
+        let maxAge = Self.maxCacheAgeDays
+        let maxSize = Self.maxDiskCacheSizeBytes
+        let log = logger
+
+        DispatchQueue.global(qos: .utility).async {
+            let fileManager = FileManager.default
+            let resourceKeys: Set<URLResourceKey> = [.contentModificationDateKey, .totalFileAllocatedSizeKey]
+
+            guard let fileURLs = try? fileManager.contentsOfDirectory(
+                at: cacheDir,
+                includingPropertiesForKeys: Array(resourceKeys),
+                options: .skipsHiddenFiles
+            ) else {
+                return
+            }
+
+            let now = Date()
+            var survivingFiles: [(url: URL, modDate: Date, size: UInt64)] = []
+
+            // Pass 1: Remove files older than 30 days, collect the rest
+            for fileURL in fileURLs {
+                guard let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys) else {
+                    continue
+                }
+
+                let modDate = resourceValues.contentModificationDate ?? .distantPast
+                let fileSize = UInt64(resourceValues.totalFileAllocatedSize ?? 0)
+
+                if now.timeIntervalSince(modDate) > maxAge {
+                    try? fileManager.removeItem(at: fileURL)
+                    log.debug("Disk cache cleanup: removed stale file \(fileURL.lastPathComponent)")
+                } else {
+                    survivingFiles.append((url: fileURL, modDate: modDate, size: fileSize))
+                }
+            }
+
+            // Pass 2: Enforce max total size (LRU — delete oldest first)
+            let totalSize = survivingFiles.reduce(UInt64(0)) { $0 + $1.size }
+            if totalSize > maxSize {
+                // Sort oldest first for LRU eviction
+                survivingFiles.sort { $0.modDate < $1.modDate }
+
+                var currentSize = totalSize
+                for file in survivingFiles {
+                    guard currentSize > maxSize else { break }
+                    try? fileManager.removeItem(at: file.url)
+                    currentSize -= file.size
+                    log.debug("Disk cache cleanup: evicted \(file.url.lastPathComponent) for size limit")
+                }
+
+                log.info("Disk cache cleanup: reduced from \(totalSize / 1024)KB to \(currentSize / 1024)KB")
+            }
+        }
+    }
+
     // MARK: - Cache Eviction
 
     /// Evict oldest entries when cache exceeds the max size
@@ -236,17 +322,28 @@ actor AudioWaveformExtractor {
 
     /// Extract waveform data with LOD pyramid (chunked reading, disk + memory cache)
     func extractWaveform(from url: URL) async throws -> WaveformData {
-        // 1. Check memory cache (instant)
+        // 0. One-time disk cache cleanup per app session (runs on background queue)
+        cleanupDiskCacheIfNeeded()
+
+        // 1. Check memory cache (instant) — validate mod date to detect edits
         if let cached = waveformCache[url] {
-            cacheAccessOrder.removeAll { $0 == url }
-            cacheAccessOrder.append(url)
-            return cached
+            let currentModDate = fileModificationDate(for: url)
+            let isStale = (cached.modDate != nil && currentModDate != nil && cached.modDate != currentModDate)
+            if !isStale {
+                cacheAccessOrder.removeAll { $0 == url }
+                cacheAccessOrder.append(url)
+                return cached.data
+            }
+            // Stale entry — remove and re-extract
+            waveformCache.removeValue(forKey: url)
+            silenceCache.removeValue(forKey: url)
         }
 
         // 2. Check disk cache (fast — avoids re-reading the audio file)
         if let diskCached = loadFromDiskCache(for: url) {
+            let modDate = fileModificationDate(for: url)
             evictCacheIfNeeded()
-            waveformCache[url] = diskCached
+            waveformCache[url] = (data: diskCached, modDate: modDate)
             cacheAccessOrder.removeAll { $0 == url }
             cacheAccessOrder.append(url)
             return diskCached
@@ -322,8 +419,9 @@ actor AudioWaveformExtractor {
         )
 
         // 5. Cache in memory + persist to disk
+        let modDate = fileModificationDate(for: url)
         evictCacheIfNeeded()
-        waveformCache[url] = waveformData
+        waveformCache[url] = (data: waveformData, modDate: modDate)
         cacheAccessOrder.removeAll { $0 == url }
         cacheAccessOrder.append(url)
         saveToDiskCache(waveformData, for: url)
@@ -348,9 +446,15 @@ actor AudioWaveformExtractor {
     ///   - minDuration: Minimum silence duration to keep (default: 0.5s, applied after roll)
     /// - Returns: Array of silence ranges ready for removal
     func detectSilence(from url: URL, threshold: Float? = nil, minDuration: TimeInterval? = nil) async throws -> [SilenceRange] {
-        // Check cache first
+        // Check cache first — validate mod date to detect edits
         if let cached = silenceCache[url] {
-            return cached
+            let currentModDate = fileModificationDate(for: url)
+            let isStale = (cached.modDate != nil && currentModDate != nil && cached.modDate != currentModDate)
+            if !isStale {
+                return cached.ranges
+            }
+            // Stale entry — remove and re-detect
+            silenceCache.removeValue(forKey: url)
         }
 
         logger.info("Detecting silence for: \(url.lastPathComponent)")
@@ -366,17 +470,7 @@ actor AudioWaveformExtractor {
             return []
         }
 
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw WaveformError.bufferCreationFailed
-        }
-
-        try audioFile.read(into: buffer)
-
-        guard let floatChannelData = buffer.floatChannelData else {
-            throw WaveformError.noAudioData
-        }
-
-        let length = Int(buffer.frameLength)
+        let length = Int(frameCount)
 
         // Use provided thresholds or defaults
         let silenceThreshold = threshold ?? silenceThresholdDB         // -45 dBFS to enter silence
@@ -397,6 +491,66 @@ actor AudioWaveformExtractor {
 
         logger.debug("Silence detection: threshold=\(silenceThreshold)dB, hysteresis=\(nonSilenceThreshold)dB, window=\(self.rmsWindowMs)ms, hop=\(self.rmsHopMs)ms, enterHold=\(enterHoldCount), exitHold=\(exitHoldCount)")
 
+        // ============================================================
+        // PRE-COMPUTE dBFS values using chunked I/O (avoids OOM on long recordings)
+        // For a 1-hour recording at 48kHz with 10ms window/5ms hop,
+        // this array is ~720K floats (~2.8MB) — far less than loading the entire file.
+        // ============================================================
+
+        var dBFSValues = [Float](repeating: -96.0, count: frameCount2)
+
+        let silenceChunkFrameCount = 65536
+        // Read extra frames per chunk to cover analysis windows at chunk boundaries
+        let overlapFrames = windowSizeSamples
+        let bufferCapacity = AVAudioFrameCount(silenceChunkFrameCount + overlapFrames)
+        guard let chunkBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: bufferCapacity) else {
+            throw WaveformError.bufferCreationFailed
+        }
+
+        var chunkStartSample = 0
+        while chunkStartSample < length {
+            let readEnd = min(length, chunkStartSample + silenceChunkFrameCount + overlapFrames)
+            let readCount = AVAudioFrameCount(readEnd - chunkStartSample)
+
+            audioFile.framePosition = AVAudioFramePosition(chunkStartSample)
+            try audioFile.read(into: chunkBuffer, frameCount: readCount)
+
+            guard let floatChannelData = chunkBuffer.floatChannelData else { break }
+            let actualFrames = Int(chunkBuffer.frameLength)
+
+            // Process analysis windows whose start falls in [chunkStartSample, chunkStartSample + silenceChunkFrameCount)
+            let firstFrameIndex = chunkStartSample == 0 ? 0 : (chunkStartSample + hopSizeSamples - 1) / hopSizeSamples
+
+            for frameIndex in firstFrameIndex..<frameCount2 {
+                let sampleStart = frameIndex * hopSizeSamples
+                if sampleStart >= chunkStartSample + silenceChunkFrameCount { break }
+
+                let sampleEnd = min(sampleStart + windowSizeSamples, length)
+                let localStart = sampleStart - chunkStartSample
+                let localEnd = sampleEnd - chunkStartSample
+
+                guard localEnd <= actualFrames else { break }
+                let sampleCount = localEnd - localStart
+                guard sampleCount > 0 else { continue }
+
+                var maxChannelRMS: Float = 0
+                for ch in 0..<channelCount {
+                    let channelData = floatChannelData[ch]
+                    var sumSquares: Float = 0
+                    for i in localStart..<localEnd {
+                        let sample = channelData[i]
+                        sumSquares += sample * sample
+                    }
+                    let channelRMS = sqrt(sumSquares / Float(sampleCount))
+                    maxChannelRMS = max(maxChannelRMS, channelRMS)
+                }
+
+                dBFSValues[frameIndex] = maxChannelRMS > 0.000001 ? 20.0 * log10(maxChannelRMS) : -96.0
+            }
+
+            chunkStartSample += silenceChunkFrameCount
+        }
+
         #if DEBUG
         // Debug: collect dB statistics to verify detection is working correctly
         var debugDBValues: [Float] = []
@@ -405,7 +559,7 @@ actor AudioWaveformExtractor {
         #endif
 
         // ============================================================
-        // STEP 1: Detect silence using RMS→dBFS + hysteresis + debounce
+        // STEP 1: Detect silence using pre-computed dBFS + hysteresis + debounce
         // ============================================================
 
         enum SilenceState {
@@ -420,27 +574,7 @@ actor AudioWaveformExtractor {
         var silenceStartTime: TimeInterval?
 
         for frameIndex in 0..<frameCount2 {
-            let sampleStart = frameIndex * hopSizeSamples
-            let sampleEnd = min(sampleStart + windowSizeSamples, length)
-            let sampleCount = sampleEnd - sampleStart
-
-            guard sampleCount > 0 else { continue }
-
-            // Calculate max-channel RMS (handles stereo better than single channel)
-            var maxChannelRMS: Float = 0
-            for ch in 0..<channelCount {
-                let channelData = floatChannelData[ch]
-                var sumSquares: Float = 0
-                for i in sampleStart..<sampleEnd {
-                    let sample = channelData[i]
-                    sumSquares += sample * sample
-                }
-                let channelRMS = sqrt(sumSquares / Float(sampleCount))
-                maxChannelRMS = max(maxChannelRMS, channelRMS)
-            }
-
-            // Convert RMS to dBFS: dBFS = 20 * log10(rms), floor at -96 dBFS
-            let dBFS: Float = maxChannelRMS > 0.000001 ? 20.0 * log10(maxChannelRMS) : -96.0
+            let dBFS = dBFSValues[frameIndex]
 
             #if DEBUG
             // Collect debug stats (sample every 10th frame to avoid too much data)
@@ -578,8 +712,8 @@ actor AudioWaveformExtractor {
             }
         }
 
-        // Cache the result
-        silenceCache[url] = silenceRanges
+        // Cache the result with modification date for staleness detection
+        silenceCache[url] = (ranges: silenceRanges, modDate: fileModificationDate(for: url))
 
         let totalSilence = silenceRanges.reduce(0.0) { $0 + $1.duration }
         logger.info("Detected \(silenceRanges.count) removable silence ranges (from \(rawSilenceRanges.count) raw), total: \(String(format: "%.1f", totalSilence))s")
@@ -637,13 +771,18 @@ actor AudioWaveformExtractor {
 
     /// Pre-warm the cache for an audio URL (call after recording finishes)
     func precomputeWaveform(for url: URL) async {
-        // Skip if already cached
-        guard waveformCache[url] == nil else { return }
+        // Skip if already cached (and not stale)
+        if let cached = waveformCache[url] {
+            let currentModDate = fileModificationDate(for: url)
+            let isStale = (cached.modDate != nil && currentModDate != nil && cached.modDate != currentModDate)
+            if !isStale { return }
+        }
         guard loadFromDiskCache(for: url) == nil else {
             // Load disk cache into memory
             if let diskCached = loadFromDiskCache(for: url) {
+                let modDate = fileModificationDate(for: url)
                 evictCacheIfNeeded()
-                waveformCache[url] = diskCached
+                waveformCache[url] = (data: diskCached, modDate: modDate)
                 cacheAccessOrder.removeAll { $0 == url }
                 cacheAccessOrder.append(url)
             }

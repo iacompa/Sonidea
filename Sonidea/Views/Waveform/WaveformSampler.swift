@@ -19,22 +19,46 @@ struct WaveformSamplePair: Codable, Equatable {
 final class WaveformSampler {
     static let shared = WaveformSampler()
 
-    private var cache: [URL: [Float]] = [:]
-    private var minMaxCache: [URL: [WaveformSamplePair]] = [:]
-    private let cacheKey = "waveformCache"
-    private let minMaxCacheKey = "waveformMinMaxCache"
+    /// Cache key combines URL + file modification date so edits auto-invalidate
+    private var cache: [String: [Float]] = [:]
+    private var minMaxCache: [String: [WaveformSamplePair]] = [:]
     private let maxCacheEntries = 20
-    private var accessOrder: [URL] = []
+    private var accessOrder: [String] = []
+    private var saveDebounceTask: Task<Void, Never>?
+    private var saveMinMaxDebounceTask: Task<Void, Never>?
+
+    private static var cacheDirectory: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("WaveformCache", isDirectory: true)
+    }
 
     private init() {
+        // Ensure cache directory exists
+        try? FileManager.default.createDirectory(at: Self.cacheDirectory, withIntermediateDirectories: true)
         loadCache()
+        // Clean up legacy UserDefaults cache
+        UserDefaults.standard.removeObject(forKey: "waveformCache")
+        UserDefaults.standard.removeObject(forKey: "waveformMinMaxCache")
+    }
+
+    // MARK: - Cache Key
+
+    /// Build a cache key that includes the file's modification date.
+    /// When the file is edited (trim, fade, normalize, etc.), the modification date changes,
+    /// so the old cache entry is automatically missed and fresh samples are extracted.
+    private func cacheKey(for url: URL) -> String {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let modDate = attrs[.modificationDate] as? Date {
+            return "\(url.absoluteString)|\(modDate.timeIntervalSince1970)"
+        }
+        return url.absoluteString
     }
 
     // MARK: - LRU Helpers
 
-    private func touchCache(_ url: URL) {
-        accessOrder.removeAll { $0 == url }
-        accessOrder.append(url)
+    private func touchCache(_ key: String) {
+        accessOrder.removeAll { $0 == key }
+        accessOrder.append(key)
     }
 
     private func evictIfNeeded() {
@@ -48,9 +72,11 @@ final class WaveformSampler {
     // MARK: - Public API
 
     func samples(for url: URL, targetSampleCount: Int = 200) async -> [Float] {
+        let key = cacheKey(for: url)
+
         // Check memory cache first
-        if let cached = cache[url] {
-            touchCache(url)
+        if let cached = cache[key] {
+            touchCache(key)
             return resample(cached, to: targetSampleCount)
         }
 
@@ -60,8 +86,8 @@ final class WaveformSampler {
         }
 
         // Cache in memory
-        cache[url] = samples
-        touchCache(url)
+        cache[key] = samples
+        touchCache(key)
         evictIfNeeded()
         saveCache() // TODO: debounce cache persistence
 
@@ -70,9 +96,11 @@ final class WaveformSampler {
 
     /// Get min/max sample pairs for true waveform rendering
     func minMaxSamples(for url: URL, targetSampleCount: Int = 200) async -> [WaveformSamplePair] {
+        let key = cacheKey(for: url)
+
         // Check memory cache first
-        if let cached = minMaxCache[url] {
-            touchCache(url)
+        if let cached = minMaxCache[key] {
+            touchCache(key)
             return resampleMinMax(cached, to: targetSampleCount)
         }
 
@@ -82,8 +110,8 @@ final class WaveformSampler {
         }
 
         // Cache in memory
-        minMaxCache[url] = samples
-        touchCache(url)
+        minMaxCache[key] = samples
+        touchCache(key)
         evictIfNeeded()
         saveMinMaxCache() // TODO: debounce cache persistence
 
@@ -91,8 +119,13 @@ final class WaveformSampler {
     }
 
     func clearCache(for url: URL) {
-        cache.removeValue(forKey: url)
-        minMaxCache.removeValue(forKey: url)
+        let prefix = url.absoluteString
+        let keysToRemove = cache.keys.filter { $0 == prefix || $0.hasPrefix("\(prefix)|") }
+        for key in keysToRemove {
+            cache.removeValue(forKey: key)
+            minMaxCache.removeValue(forKey: key)
+            accessOrder.removeAll { $0 == key }
+        }
         saveCache()
         saveMinMaxCache()
     }
@@ -115,49 +148,51 @@ final class WaveformSampler {
                 }
 
                 let format = audioFile.processingFormat
-                let frameCount = AVAudioFrameCount(audioFile.length)
+                let totalFrames = Int(audioFile.length)
 
-                guard frameCount > 0,
-                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                guard totalFrames > 0 else {
                     continuation.resume(returning: nil)
                     return
                 }
 
-                do {
-                    try audioFile.read(into: buffer)
-                } catch {
+                // Downsample to ~1000 buckets using chunked I/O (avoids OOM on long recordings)
+                let storageSampleCount = min(1000, totalFrames)
+                let samplesPerBucket = max(1, totalFrames / storageSampleCount)
+
+                var samples = [Float](repeating: 0, count: storageSampleCount)
+
+                let chunkFrameCount: AVAudioFrameCount = 65536
+                guard let chunkBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
                     continuation.resume(returning: nil)
                     return
                 }
 
-                guard let floatChannelData = buffer.floatChannelData else {
-                    continuation.resume(returning: nil)
-                    return
-                }
+                audioFile.framePosition = 0
+                var globalFrameOffset = 0
 
-                let channelData = floatChannelData[0]
-                let length = Int(buffer.frameLength)
+                while globalFrameOffset < totalFrames {
+                    let framesToRead = AVAudioFrameCount(min(Int(chunkFrameCount), totalFrames - globalFrameOffset))
+                    do {
+                        try audioFile.read(into: chunkBuffer, frameCount: framesToRead)
+                    } catch {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    guard let floatChannelData = chunkBuffer.floatChannelData else { break }
+                    let channelData = floatChannelData[0]
+                    let actualFrames = Int(chunkBuffer.frameLength)
 
-                // Downsample to ~500 samples for storage efficiency
-                let storageSampleCount = min(1000, length)
-                let samplesPerBucket = max(1, length / storageSampleCount)
-
-                var samples: [Float] = []
-                samples.reserveCapacity(storageSampleCount)
-
-                for i in 0..<storageSampleCount {
-                    let start = i * samplesPerBucket
-                    let end = min(start + samplesPerBucket, length)
-
-                    var maxAmplitude: Float = 0
-                    for j in start..<end {
-                        let amplitude = abs(channelData[j])
-                        if amplitude > maxAmplitude {
-                            maxAmplitude = amplitude
+                    for i in 0..<actualFrames {
+                        let globalIndex = globalFrameOffset + i
+                        let bucketIndex = globalIndex / samplesPerBucket
+                        guard bucketIndex < storageSampleCount else { break }
+                        let amplitude = abs(channelData[i])
+                        if amplitude > samples[bucketIndex] {
+                            samples[bucketIndex] = amplitude
                         }
                     }
 
-                    samples.append(maxAmplitude)
+                    globalFrameOffset += actualFrames
                 }
 
                 // Normalize to 0...1
@@ -181,66 +216,67 @@ final class WaveformSampler {
                 }
 
                 let format = audioFile.processingFormat
-                let frameCount = AVAudioFrameCount(audioFile.length)
+                let totalFrames = Int(audioFile.length)
 
-                guard frameCount > 0,
-                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                guard totalFrames > 0 else {
                     continuation.resume(returning: nil)
                     return
                 }
 
-                do {
-                    try audioFile.read(into: buffer)
-                } catch {
+                // Downsample to ~1000 sample pairs using chunked I/O (avoids OOM on long recordings)
+                let storageSampleCount = min(1000, totalFrames)
+                let samplesPerBucket = max(1, totalFrames / storageSampleCount)
+
+                var minValues = [Float](repeating: 0, count: storageSampleCount)
+                var maxValues = [Float](repeating: 0, count: storageSampleCount)
+
+                let chunkFrameCount: AVAudioFrameCount = 65536
+                guard let chunkBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
                     continuation.resume(returning: nil)
                     return
                 }
 
-                guard let floatChannelData = buffer.floatChannelData else {
-                    continuation.resume(returning: nil)
-                    return
-                }
+                audioFile.framePosition = 0
+                var globalFrameOffset = 0
 
-                let channelData = floatChannelData[0]
-                let length = Int(buffer.frameLength)
+                while globalFrameOffset < totalFrames {
+                    let framesToRead = AVAudioFrameCount(min(Int(chunkFrameCount), totalFrames - globalFrameOffset))
+                    do {
+                        try audioFile.read(into: chunkBuffer, frameCount: framesToRead)
+                    } catch {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    guard let floatChannelData = chunkBuffer.floatChannelData else { break }
+                    let channelData = floatChannelData[0]
+                    let actualFrames = Int(chunkBuffer.frameLength)
 
-                // Downsample to ~500 sample pairs for storage efficiency
-                let storageSampleCount = min(1000, length)
-                let samplesPerBucket = max(1, length / storageSampleCount)
-
-                var samples: [WaveformSamplePair] = []
-                samples.reserveCapacity(storageSampleCount)
-
-                for i in 0..<storageSampleCount {
-                    let start = i * samplesPerBucket
-                    let end = min(start + samplesPerBucket, length)
-
-                    var minValue: Float = 0
-                    var maxValue: Float = 0
-
-                    for j in start..<end {
-                        let sample = channelData[j]
-                        if sample < minValue {
-                            minValue = sample
+                    for i in 0..<actualFrames {
+                        let globalIndex = globalFrameOffset + i
+                        let bucketIndex = globalIndex / samplesPerBucket
+                        guard bucketIndex < storageSampleCount else { break }
+                        let sample = channelData[i]
+                        if sample < minValues[bucketIndex] {
+                            minValues[bucketIndex] = sample
                         }
-                        if sample > maxValue {
-                            maxValue = sample
+                        if sample > maxValues[bucketIndex] {
+                            maxValues[bucketIndex] = sample
                         }
                     }
 
-                    samples.append(WaveformSamplePair(min: minValue, max: maxValue))
+                    globalFrameOffset += actualFrames
                 }
 
-                // Normalize to -1...1 range
-                var peakAmplitude: Float = 0.001  // Avoid division by zero
-                for pair in samples {
-                    peakAmplitude = Swift.max(peakAmplitude, abs(pair.min), abs(pair.max))
+                // Build pairs and normalize to -1...1 range
+                var peakAmplitude: Float = 0.001
+                for i in 0..<storageSampleCount {
+                    peakAmplitude = Swift.max(peakAmplitude, abs(minValues[i]), abs(maxValues[i]))
                 }
 
-                let normalizedSamples = samples.map { pair in
+                let normalizedSamples = (0..<storageSampleCount).map { i in
                     WaveformSamplePair(
-                        min: pair.min / peakAmplitude,
-                        max: pair.max / peakAmplitude
+                        min: minValues[i] / peakAmplitude,
+                        max: maxValues[i] / peakAmplitude
                     )
                 }
 
@@ -340,48 +376,68 @@ final class WaveformSampler {
         }
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (file-based with debounce)
 
     private func saveCache() {
-        // Convert URL keys to strings for encoding
-        var stringKeyedCache: [String: [Float]] = [:]
-        for (url, samples) in cache {
-            stringKeyedCache[url.absoluteString] = samples
-        }
-
-        if let data = try? JSONEncoder().encode(stringKeyedCache) {
-            UserDefaults.standard.set(data, forKey: cacheKey)
+        saveDebounceTask?.cancel()
+        saveDebounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self.persistEnvelopeCache()
         }
     }
 
     private func saveMinMaxCache() {
-        var stringKeyedCache: [String: [WaveformSamplePair]] = [:]
-        for (url, samples) in minMaxCache {
-            stringKeyedCache[url.absoluteString] = samples
+        saveMinMaxDebounceTask?.cancel()
+        saveMinMaxDebounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self.persistMinMaxCache()
         }
+    }
 
-        if let data = try? JSONEncoder().encode(stringKeyedCache) {
-            UserDefaults.standard.set(data, forKey: minMaxCacheKey)
+    private func persistEnvelopeCache() {
+        let fileURL = Self.cacheDirectory.appendingPathComponent("envelope.json")
+        if let data = try? JSONEncoder().encode(cache) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    private func persistMinMaxCache() {
+        let fileURL = Self.cacheDirectory.appendingPathComponent("minmax.json")
+        if let data = try? JSONEncoder().encode(minMaxCache) {
+            try? data.write(to: fileURL, options: .atomic)
         }
     }
 
     private func loadCache() {
-        // Load envelope cache
-        if let data = UserDefaults.standard.data(forKey: cacheKey),
+        // Load envelope cache from Caches directory
+        // Keys are now "url|modDate" strings; legacy "url" keys are migrated on load
+        let envelopeFile = Self.cacheDirectory.appendingPathComponent("envelope.json")
+        if let data = try? Data(contentsOf: envelopeFile),
            let stringKeyedCache = try? JSONDecoder().decode([String: [Float]].self, from: data) {
-            for (urlString, samples) in stringKeyedCache {
-                if let url = URL(string: urlString) {
-                    cache[url] = samples
+            for (key, samples) in stringKeyedCache {
+                if key.contains("|") {
+                    // New format: already includes modification date
+                    cache[key] = samples
+                } else if let url = URL(string: key) {
+                    // Legacy format: bare URL string — re-key with current mod date
+                    cache[cacheKey(for: url)] = samples
                 }
             }
         }
 
-        // Load min/max cache
-        if let data = UserDefaults.standard.data(forKey: minMaxCacheKey),
+        // Load min/max cache from Caches directory
+        let minMaxFile = Self.cacheDirectory.appendingPathComponent("minmax.json")
+        if let data = try? Data(contentsOf: minMaxFile),
            let stringKeyedCache = try? JSONDecoder().decode([String: [WaveformSamplePair]].self, from: data) {
-            for (urlString, samples) in stringKeyedCache {
-                if let url = URL(string: urlString) {
-                    minMaxCache[url] = samples
+            for (key, samples) in stringKeyedCache {
+                if key.contains("|") {
+                    // New format: already includes modification date
+                    minMaxCache[key] = samples
+                } else if let url = URL(string: key) {
+                    // Legacy format: bare URL string — re-key with current mod date
+                    minMaxCache[cacheKey(for: url)] = samples
                 }
             }
         }

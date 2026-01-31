@@ -32,7 +32,7 @@ final class WaveformTimeline {
 
     /// Duration currently visible based on zoom
     var visibleDuration: TimeInterval {
-        duration / Double(max(zoomScale, 0.01))
+        duration / Double(max(zoomScale, 1.0))
     }
 
     /// Seconds per point (pixel) at current zoom - useful for determining precision
@@ -256,7 +256,7 @@ struct ProWaveformEditor: View {
     }
 
     // Constants
-    private let timeRulerHeight: CGFloat = 22  // Apple Voice Memos-style compact ruler
+    private let timeRulerHeight: CGFloat = 28  // Apple Voice Memos-style compact ruler
     private let handleWidth: CGFloat = 16
     private let handleHitArea: CGFloat = 44
 
@@ -417,7 +417,7 @@ struct ProWaveformEditor: View {
                 .simultaneousGesture(zoomGesture)
             }
             .frame(height: waveformHeight)
-            .background(palette.inputBackground.opacity(0.3))
+            .background(palette.waveformBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             // Playhead overlay - rendered outside clipped container to prevent edge clipping
             .overlay {
@@ -743,6 +743,9 @@ struct ProWaveformEditor: View {
                     tappedTime = max(0, min(tappedTime, duration))
                     tappedTime = timeline.quantize(tappedTime)
                     playheadPosition = tappedTime
+                    // Clear any active selection on tap
+                    selectionStart = 0
+                    selectionEnd = 0
                     onSeek(tappedTime)
                     impactGenerator.impactOccurred(intensity: 0.4)
                 }
@@ -760,6 +763,9 @@ struct ProWaveformEditor: View {
                 // Use zoom-adaptive quantization
                 tappedTime = timeline.quantize(tappedTime)
                 playheadPosition = tappedTime
+                // Clear any active selection when tapping to set playhead
+                selectionStart = 0
+                selectionEnd = 0
                 impactGenerator.impactOccurred(intensity: 0.4)
             }
     }
@@ -824,8 +830,8 @@ struct WaveformBarsView: View {
 
             // Theme colors
             let gridColor: Color = colorScheme == .dark ? .white.opacity(0.08) : .black.opacity(0.06)
-            // DAW-style waveform: always use accent color for high visibility on all themes
-            let waveformColor = palette.accent
+            // High-contrast neutral bars by default; accent color only when selection is active
+            let neutralBarColor = palette.waveformBarColor
 
             // === 1. Draw Grid (aligned with time ruler) ===
 
@@ -903,16 +909,14 @@ struct WaveformBarsView: View {
                 let yTop = centerY - amplitude
                 let yBottom = centerY + amplitude
 
-                // DAW-style coloring:
-                // - Always use accent color for high contrast on all themes
-                // - When a selection exists, dim unselected bars to 80% opacity
-                // - When no selection, full brightness everywhere
+                // Neutral bars always. Selected region switches to accent color.
+                // Non-selected bars stay unchanged (no dimming).
                 let barColor: Color
                 if hasActiveSelection {
                     let isInSelection = x >= selStartX && x <= selEndX
-                    barColor = isInSelection ? waveformColor : waveformColor.opacity(0.5)
+                    barColor = isInSelection ? palette.accent : neutralBarColor
                 } else {
-                    barColor = waveformColor
+                    barColor = neutralBarColor
                 }
 
                 var linePath = Path()
@@ -1020,6 +1024,21 @@ struct PlayheadLineView: View {
                     .frame(width: 16, height: 16)
                     .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
                     .offset(y: -height / 2 + 8)
+
+                // Time readout (shown while dragging)
+                if isDragging {
+                    Text(PlayheadLineView.formatPlayheadTime(playheadPosition))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(palette.playheadColor)
+                                .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+                        )
+                        .offset(y: -height / 2 - 14)
+                }
             }
             // Use .position() to center the playhead exactly at x
             .frame(width: hitTargetWidth, height: height)
@@ -1069,6 +1088,14 @@ struct PlayheadLineView: View {
                 isDragging = false
                 impactGenerator.impactOccurred(intensity: 0.3)
             }
+    }
+
+    /// Format time as mm:ss.ms for playhead readout
+    static func formatPlayheadTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        let hundredths = Int((time - Double(Int(time))) * 100)
+        return String(format: "%d:%02d.%02d", minutes, seconds, hundredths)
     }
 }
 

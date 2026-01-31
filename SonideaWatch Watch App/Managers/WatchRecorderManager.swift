@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Foundation
+import WatchKit
 
 @MainActor
 @Observable
@@ -22,6 +23,12 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     private var timer: Timer?
     private var meterTimer: Timer?
     private var recordingStartTime: Date?
+    private var extendedSession: WKExtendedRuntimeSession?
+    private var interruptionObserver: NSObjectProtocol?
+
+    // Cleanup handled by stopRecording() which invalidates extendedSession
+    // and removes interruptionObserver. No deinit needed since @MainActor
+    // properties cannot be accessed from nonisolated deinit.
 
     /// Cached file timestamp formatter
     private static let fileTimestamp: DateFormatter = {
@@ -34,6 +41,17 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     // MARK: - Start Recording
 
     func startRecording() -> Bool {
+        // --- Microphone permission pre-check ---
+        let permissionStatus = AVAudioSession.sharedInstance().recordPermission
+        if permissionStatus == .denied {
+            #if DEBUG
+            print("WatchRecorder: Microphone permission denied")
+            #endif
+            return false
+        }
+        // Note: .undetermined is unlikely on watchOS (permission is granted at install via
+        // Info.plist), but if it occurs the audio session setup below will trigger the prompt.
+
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default)
@@ -69,6 +87,33 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             recordingStartTime = Date()
             startTimer()
             startMeterTimer()
+
+            // --- Start extended runtime session for wrist-down protection ---
+            let extSession = WKExtendedRuntimeSession()
+            extSession.start()
+            extendedSession = extSession
+
+            // --- Register audio session interruption observer ---
+            if interruptionObserver == nil {
+                interruptionObserver = NotificationCenter.default.addObserver(
+                    forName: AVAudioSession.interruptionNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    guard let self else { return }
+                    guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                          let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+                    if type == .began {
+                        // Auto-save on interruption (phone call, Siri, etc.) to prevent data loss
+                        Task { @MainActor [weak self] in
+                            guard let self, self.isRecording else { return }
+                            _ = self.stopRecording()
+                        }
+                    }
+                }
+            }
+
             return true
         } catch {
             #if DEBUG
@@ -84,6 +129,17 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         stopTimer()
         stopMeterTimer()
         currentLevel = 0
+
+        // Invalidate extended runtime session
+        extendedSession?.invalidate()
+        extendedSession = nil
+
+        // Remove interruption observer
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            interruptionObserver = nil
+        }
+
         guard let recorder = audioRecorder, recorder.isRecording else {
             isRecording = false
             return nil

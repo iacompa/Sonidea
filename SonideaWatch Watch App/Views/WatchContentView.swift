@@ -6,6 +6,7 @@
 //  Record button hides when navigated into playback detail.
 //
 
+import AVFoundation
 import SwiftUI
 import WatchKit
 
@@ -20,6 +21,7 @@ struct WatchContentView: View {
     @State private var isPulsing = false
     @State private var navigationPath = NavigationPath()
     @State private var showSyncInfo = false
+    @State private var showMicDeniedAlert = false
 
     private let buttonDiameter: CGFloat = 56
     private let buttonPadding: CGFloat = 10
@@ -130,6 +132,11 @@ struct WatchContentView: View {
         .background(palette.background.ignoresSafeArea())
         .onChange(of: recorder.isRecording) { _, newValue in
             isPulsing = newValue
+        }
+        .alert("Microphone Access", isPresented: $showMicDeniedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Sonidea needs microphone access to record. Please enable it in Settings > Privacy & Security > Microphone on your iPhone.")
         }
     }
 
@@ -355,6 +362,10 @@ struct WatchContentView: View {
         } else {
             if !recorder.startRecording() {
                 WKInterfaceDevice.current().play(.failure)
+                // Check if failure is due to microphone permission denial
+                if AVAudioSession.sharedInstance().recordPermission == .denied {
+                    showMicDeniedAlert = true
+                }
             }
         }
     }

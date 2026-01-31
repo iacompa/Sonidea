@@ -54,7 +54,6 @@ enum FadeCurve: String, CaseIterable, Identifiable {
 }
 
 /// Audio editing operations for trim and cut
-@MainActor
 final class AudioEditor {
     static let shared = AudioEditor()
 
@@ -120,15 +119,18 @@ final class AudioEditor {
                 settings: sourceFile.fileFormat.settings
             )
 
-            // Read the selected segment
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            // Read and write in chunks to avoid OOM on long recordings
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
                 throw AudioEditorError.editFailed("Failed to allocate audio buffer")
             }
             sourceFile.framePosition = startFrame
-            try sourceFile.read(into: buffer, frameCount: frameCount)
-
-            // Write to output
-            try outputFile.write(from: buffer)
+            var remaining = AVAudioFrameCount(frameCount)
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, remaining)
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+                try outputFile.write(from: buffer)
+                remaining -= buffer.frameLength
+            }
 
             let newDuration = Double(frameCount) / sampleRate
 
@@ -214,24 +216,33 @@ final class AudioEditor {
                 settings: sourceFile.fileFormat.settings
             )
 
-            // Write part before cut
-            if beforeFrameCount > 0 {
-                guard let beforeBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: beforeFrameCount) else {
-                    throw AudioEditorError.editFailed("Failed to allocate audio buffer")
-                }
-                sourceFile.framePosition = 0
-                try sourceFile.read(into: beforeBuffer, frameCount: beforeFrameCount)
-                try outputFile.write(from: beforeBuffer)
+            // Reusable chunk buffer for both segments
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
             }
 
-            // Write part after cut
-            if afterFrameCount > 0 {
-                guard let afterBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: afterFrameCount) else {
-                    throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            // Write part before cut (chunked)
+            if beforeFrameCount > 0 {
+                sourceFile.framePosition = 0
+                var remaining = beforeFrameCount
+                while remaining > 0 {
+                    let framesToRead = min(chunkFrameCount, remaining)
+                    try sourceFile.read(into: buffer, frameCount: framesToRead)
+                    try outputFile.write(from: buffer)
+                    remaining -= buffer.frameLength
                 }
+            }
+
+            // Write part after cut (chunked)
+            if afterFrameCount > 0 {
                 sourceFile.framePosition = afterFrameStart
-                try sourceFile.read(into: afterBuffer, frameCount: afterFrameCount)
-                try outputFile.write(from: afterBuffer)
+                var remaining = afterFrameCount
+                while remaining > 0 {
+                    let framesToRead = min(chunkFrameCount, remaining)
+                    try sourceFile.read(into: buffer, frameCount: framesToRead)
+                    try outputFile.write(from: buffer)
+                    remaining -= buffer.frameLength
+                }
             }
 
             let newDuration = Double(totalOutputFrames) / sampleRate
@@ -355,22 +366,29 @@ final class AudioEditor {
                 settings: sourceFile.fileFormat.settings
             )
 
-            // Write each keep range to output
+            // Write each keep range to output using chunked I/O to avoid OOM on long recordings
             var totalOutputFrames: AVAudioFrameCount = 0
+            let chunkFrameCount: AVAudioFrameCount = 65536
 
             for range in keepRanges {
                 let startFrame = AVAudioFramePosition(range.start * sampleRate)
                 let endFrame = AVAudioFramePosition(range.end * sampleRate)
-                let frameCount = AVAudioFrameCount(endFrame - startFrame)
+                let rangeFrameCount = AVAudioFrameCount(endFrame - startFrame)
 
-                if frameCount > 0 {
-                    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                if rangeFrameCount > 0 {
+                    let bufferCapacity = min(chunkFrameCount, rangeFrameCount)
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: bufferCapacity) else {
                         throw AudioEditorError.editFailed("Failed to allocate audio buffer")
                     }
                     sourceFile.framePosition = startFrame
-                    try sourceFile.read(into: buffer, frameCount: frameCount)
-                    try outputFile.write(from: buffer)
-                    totalOutputFrames += frameCount
+                    var framesRemaining = rangeFrameCount
+                    while framesRemaining > 0 {
+                        let framesToRead = min(chunkFrameCount, framesRemaining)
+                        try sourceFile.read(into: buffer, frameCount: framesToRead)
+                        try outputFile.write(from: buffer)
+                        framesRemaining -= framesToRead
+                        totalOutputFrames += framesToRead
+                    }
                 }
             }
 
@@ -904,7 +922,10 @@ final class AudioEditor {
 
             // Feedback coefficient from desired RT60 decay time
             // RT60 = time for reverb to decay by 60dB
-            let maxCombSec = Float(combDelays.max()!) / Float(sampleRate)
+            guard let maxCombDelay = combDelays.max() else {
+                throw AudioEditorError.editFailed("Internal error: empty comb delay array")
+            }
+            let maxCombSec = Float(maxCombDelay) / Float(sampleRate)
             let rt60 = max(0.1, decay)
             let feedback = min(0.99, max(0.3, powf(10.0, -3.0 * maxCombSec / rt60)))
 

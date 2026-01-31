@@ -50,6 +50,10 @@ final class SilenceRMSMeter {
 
     // MARK: - Public API
 
+    /// Maximum frames to load into memory (~10 minutes at 48kHz = ~28.8M frames, ~115MB of Float data).
+    /// Files longer than this are not loaded; updateRMS() will be a no-op.
+    private static let maxLoadableFrames: AVAudioFrameCount = 28_800_000
+
     /// Load audio file for RMS analysis
     func loadAudio(from url: URL) {
         do {
@@ -60,9 +64,23 @@ final class SilenceRMSMeter {
             sampleRate = format.sampleRate
             duration = Double(file.length) / sampleRate
 
+            let totalFrames = AVAudioFrameCount(file.length)
+
+            // Guard against OOM: skip loading files that exceed the memory cap.
+            // A 1-hour recording at 48kHz = ~172M frames = ~1.3GB of Float data.
+            guard totalFrames <= Self.maxLoadableFrames else {
+                #if DEBUG
+                print("SilenceRMSMeter: File too large to load (\(totalFrames) frames, limit \(Self.maxLoadableFrames)). RMS meter disabled for this file.")
+                #endif
+                audioBuffer = nil
+                currentDBFS = -96.0
+                isBelowThreshold = true
+                smoothedRMS = 0
+                return
+            }
+
             // Read entire file into buffer for fast random access
-            let frameCount = AVAudioFrameCount(file.length)
-            audioBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+            audioBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: totalFrames)
 
             if let buffer = audioBuffer {
                 try file.read(into: buffer)

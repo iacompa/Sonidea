@@ -102,14 +102,20 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
     /// Max duration to analyze before stopping
     private let maxDuration: TimeInterval
 
+    /// Lock protecting all mutable state accessed from SoundAnalysis background callbacks
+    private let lock = NSLock()
+
     /// Track all icon matches with their max confidence (keyed by SF Symbol)
     private var iconConfidences: [String: Float] = [:]
 
     /// Track if we've logged available classifications (debug, once)
     private static var hasLoggedClassifications = false
 
-    /// Completion callback
+    /// Completion callback (guarded by hasDelivered to ensure single invocation)
     var onComplete: ((AudioClassificationResult) -> Void)?
+
+    /// Prevent double delivery (didFailWithError + requestDidComplete can both fire)
+    private var hasDelivered = false
 
     /// Track analyzed time
     private var lastAnalyzedTime: TimeInterval = 0
@@ -130,6 +136,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
             Self.hasLoggedClassifications = true
         }
         #endif
+
+        lock.lock()
+        defer { lock.unlock() }
 
         // Track time progress
         lastAnalyzedTime = classification.timeRange.start.seconds + classification.timeRange.duration.seconds
@@ -159,16 +168,27 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
     }
 
     private func deliverResult() {
+        lock.lock()
+        guard !hasDelivered else {
+            lock.unlock()
+            return
+        }
+        hasDelivered = true
+
+        // Snapshot mutable state under the lock, then release before calling onComplete
+        let snapshotConfidences = iconConfidences
+        lock.unlock()
+
         // Filter predictions >= threshold and sort by confidence descending
         let threshold = IconPrediction.suggestionThreshold
-        let qualifiedPredictions = iconConfidences
+        let qualifiedPredictions = snapshotConfidences
             .filter { $0.value >= threshold }
             .sorted { $0.value > $1.value }
             .prefix(3)  // Max 3 suggestions
             .map { IconPrediction(iconSymbol: $0.key, confidence: $0.value) }
 
         // Find best overall match (may be below threshold)
-        let bestMatch = iconConfidences.max { $0.value < $1.value }
+        let bestMatch = snapshotConfidences.max { $0.value < $1.value }
 
         if let best = bestMatch, best.value > 0 {
             let presetIcon = PresetIcon(rawValue: best.key) ?? .waveform

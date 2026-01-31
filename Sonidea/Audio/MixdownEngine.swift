@@ -18,7 +18,6 @@ struct MixdownResult {
     let error: Error?
 }
 
-@MainActor
 final class MixdownEngine {
 
     /// Bounce an overdub group to a stereo WAV file.
@@ -50,7 +49,7 @@ final class MixdownEngine {
         }
     }
 
-    nonisolated private func performBounce(
+    private func performBounce(
         baseFileURL: URL,
         layerFileURLs: [URL],
         layerOffsets: [TimeInterval],
@@ -142,7 +141,9 @@ final class MixdownEngine {
             }
 
             // Read buffers for each source
-            let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: baseFormat.channelCount, interleaved: false)!
+            guard let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: baseFormat.channelCount, interleaved: false) else {
+                throw NSError(domain: "MixdownEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to create audio format (sampleRate: \(sampleRate), channels: \(baseFormat.channelCount))"])
+            }
             guard let baseBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: chunkSize) else {
                 throw NSError(domain: "MixdownEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create base buffer"])
             }

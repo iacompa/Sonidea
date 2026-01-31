@@ -85,6 +85,7 @@ enum AlbumRepository {
             return nil
         }
         recordings[index].albumID = album?.id ?? Album.draftsID
+        recordings[index].modifiedAt = Date()
         return recordings[index]
     }
 

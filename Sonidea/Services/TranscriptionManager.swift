@@ -117,26 +117,34 @@ final class TranscriptionManager {
         return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { continuation in
+                    // Thread-safe flag to prevent double-resume of the continuation.
+                    // The recognition callback fires on an arbitrary queue, while
+                    // the cancellation handler runs on the cancelling thread.
+                    let resumeLock = NSLock()
                     var hasResumed = false
-                    let task = recognizer.recognitionTask(with: request) { result, error in
-                        guard !hasResumed else { return }
 
+                    func safeResume(with result: Result<String, Error>) {
+                        resumeLock.lock()
+                        defer { resumeLock.unlock() }
+                        guard !hasResumed else { return }
+                        hasResumed = true
+                        continuation.resume(with: result)
+                    }
+
+                    let task = recognizer.recognitionTask(with: request) { result, error in
                         if let error = error {
-                            hasResumed = true
-                            continuation.resume(throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
+                            safeResume(with: .failure(TranscriptionError.recognitionFailed(error.localizedDescription)))
                             return
                         }
 
                         guard let result = result else {
-                            hasResumed = true
-                            continuation.resume(throwing: TranscriptionError.recognitionFailed("No result returned"))
+                            safeResume(with: .failure(TranscriptionError.recognitionFailed("No result returned")))
                             return
                         }
 
                         if result.isFinal {
-                            hasResumed = true
                             let transcript = result.bestTranscription.formattedString
-                            continuation.resume(returning: transcript)
+                            safeResume(with: .success(transcript))
                         }
                     }
 
@@ -149,10 +157,7 @@ final class TranscriptionManager {
                             }
                         } onCancel: {
                             task.cancel()
-                            if !hasResumed {
-                                hasResumed = true
-                                continuation.resume(throwing: TranscriptionError.timeout)
-                            }
+                            safeResume(with: .failure(TranscriptionError.timeout))
                         }
                     }
                 }

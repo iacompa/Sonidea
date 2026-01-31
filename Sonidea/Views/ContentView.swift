@@ -56,6 +56,7 @@ struct ContentView: View {
     @State private var currentRoute: AppRoute = .recordings
     @State private var showSearch = false
     @State private var showSettings = false
+    @State private var showWelcomeTutorial = false
     @State private var showTipJar = false
     @State private var showRecoveryAlert = false
     @State private var showSaveErrorAlert = false
@@ -141,6 +142,12 @@ struct ContentView: View {
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
+        .sheet(isPresented: $showWelcomeTutorial) {
+            WelcomeTutorialSheet()
+                .environment(appState)
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
+        }
         .iPadSheet(isPresented: $showTipJar) {
             TipJarView()
                 .environment(appState)
@@ -183,6 +190,13 @@ struct ContentView: View {
                 if case .success = result {
                     state.onRecordingSaved()
                 }
+            }
+            // Show welcome tutorial on first launch
+            if !appState.appSettings.hasSeenWelcome {
+                showWelcomeTutorial = true
+                var settings = appState.appSettings
+                settings.hasSeenWelcome = true
+                appState.appSettings = settings
             }
             // Check if we should show the move hint
             checkAndShowMoveHint()
@@ -1919,19 +1933,21 @@ struct SearchCalendarView: View {
     @State private var selectedDate: Date?
 
     private let calendar = Calendar.current
-    private let daysOfWeek = ["S", "M", "T", "W", "T", "F", "S"]
+    private var daysOfWeek: [String] {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        let firstWeekday = Calendar.current.firstWeekday - 1
+        return Array(symbols[firstWeekday...]) + Array(symbols[..<firstWeekday])
+    }
 
     private var recordingsByDay: [Date: [RecordingItem]] {
-        let filtered: [RecordingItem]
-        if searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
-            filtered = appState.activeRecordings
-        } else {
-            let query = searchQuery.lowercased()
-            filtered = appState.activeRecordings.filter { recording in
-                recording.title.lowercased().contains(query) ||
-                recording.transcript.lowercased().contains(query)
-            }
-        }
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespaces)
+        let filtered = SearchService.searchRecordings(
+            query: trimmed,
+            recordings: appState.activeRecordings,
+            tags: appState.tags,
+            albums: appState.albums,
+            projects: appState.projects
+        )
         return Dictionary(grouping: filtered) { recording in
             calendar.startOfDay(for: recording.createdAt)
         }
@@ -2249,17 +2265,16 @@ struct SearchTimelineView: View {
     @Binding var selectedRecording: RecordingItem?
 
     private var timelineGroups: [TimelineGroup] {
-        // Filter out trashed recordings, then apply search query
-        var activeRecordings = appState.recordings.filter { !$0.isTrashed }
-        if !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
-            let query = searchQuery.lowercased()
-            activeRecordings = activeRecordings.filter { recording in
-                recording.title.lowercased().contains(query) ||
-                recording.transcript.lowercased().contains(query)
-            }
-        }
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespaces)
+        let filtered = SearchService.searchRecordings(
+            query: trimmed,
+            recordings: appState.activeRecordings,
+            tags: appState.tags,
+            albums: appState.albums,
+            projects: appState.projects
+        )
         let items = TimelineBuilder.buildTimeline(
-            recordings: activeRecordings,
+            recordings: filtered,
             projects: appState.projects
         )
         return TimelineBuilder.groupByDay(items)
@@ -3287,11 +3302,14 @@ struct SettingsSheetView: View {
                     HStack {
                         Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
                             .tint(palette.toggleOnTint)
-                            .onChange(of: appState.appSettings.autoSelectIcon) { _, enabled in
+                            .onChange(of: appState.appSettings.autoSelectIcon) { oldValue, enabled in
                                 if enabled && !appState.supportManager.canUseProFeatures {
                                     appState.appSettings.autoSelectIcon = false
                                     proUpgradeContext = .autoIcons
+                                    return
                                 }
+                                // Avoid acting on programmatic revert (false -> false)
+                                guard oldValue != enabled else { return }
                             }
 
                         Button {
@@ -3466,6 +3484,8 @@ struct SettingsSheetView: View {
                             proUpgradeContext = .watchSync
                             return
                         }
+                        // Avoid acting on programmatic revert (false -> false)
+                        guard oldValue != enabled else { return }
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -4083,7 +4103,12 @@ struct SettingsSheetView: View {
                 appState.onExportSuccess()
             } catch {
                 isExporting = false
-                exportProgress = ""
+                exportProgress = "Export failed: \(error.localizedDescription)"
+                // Auto-clear error message after 3 seconds
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if exportProgress.hasPrefix("Export failed") { exportProgress = "" }
+                }
             }
         }
     }
@@ -4107,7 +4132,11 @@ struct SettingsSheetView: View {
                 appState.onExportSuccess()
             } catch {
                 isExporting = false
-                exportProgress = ""
+                exportProgress = "Export failed: \(error.localizedDescription)"
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if exportProgress.hasPrefix("Export failed") { exportProgress = "" }
+                }
             }
         }
     }
@@ -4343,6 +4372,182 @@ struct MicrophoneSelectorSheet: View {
 
 // MARK: - Guide View
 
+// MARK: - Sonidea Overview Guide
+
+struct SonideaOverviewView: View {
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        InfoGuideView(
+            title: "What is Sonidea?",
+            intro: "Sonidea is a professional voice memo app built for creators, musicians, journalists, students, and anyone who records audio. It goes far beyond basic recording \u{2014} think of it as a mobile studio in your pocket.",
+            sections: [
+                InfoGuideSection(
+                    headline: "Record",
+                    bullets: [
+                        "Tap the floating button anywhere to start recording instantly",
+                        "Choose quality presets: Standard, High, Lossless, or WAV",
+                        "Adjust input gain and use a built-in limiter to prevent clipping",
+                        "Pause and resume without losing your place",
+                        "Record in mono (built-in mic) or stereo (external mic)"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Edit",
+                    bullets: [
+                        "Tap Edit on any recording to open the waveform editor",
+                        "Trim, cut, and splice audio with visual precision",
+                        "Apply fade in/out, normalize, noise gate, compression, reverb, and echo",
+                        "Zoom and pan the waveform for sample-level accuracy",
+                        "Full undo/redo support \u{2014} experiment without worry"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Organize",
+                    bullets: [
+                        "Create albums to group related recordings",
+                        "Add color-coded tags for quick filtering",
+                        "Use projects to track multiple takes and mark your best version",
+                        "Search by title, notes, transcript, tags, album, or location",
+                        "Browse recordings by calendar, timeline, or map view"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Collaborate",
+                    bullets: [
+                        "Create shared albums and invite up to 5 people via iCloud",
+                        "Participants can add, comment on, and listen to recordings",
+                        "Role-based permissions: admin, member, or viewer",
+                        "Overdub lets you layer recordings over existing tracks",
+                        "Mix and bounce multi-track sessions to stereo"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Playback & EQ",
+                    bullets: [
+                        "4-band parametric EQ to shape your sound on playback",
+                        "Adjustable playback speed (0.5x to 2x)",
+                        "Skip silence detection to jump past quiet sections",
+                        "Drop markers at key moments and jump back to them anytime",
+                        "Skip forward/back with configurable intervals"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Export & Sync",
+                    bullets: [
+                        "Export in Original, WAV, M4A (AAC), or ALAC format",
+                        "Bulk export albums as ZIP files",
+                        "iCloud sync keeps everything in sync across iPhone, iPad, and Apple Watch",
+                        "Record on Apple Watch and recordings auto-transfer to your phone",
+                        "Tamper-evident proof receipts with SHA-256 timestamps"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Personalize",
+                    bullets: [
+                        "7 studio-inspired themes: System, Angst Robot, Cream, Logic Pro, Fruity, AVID, and Dynamite",
+                        "Auto-icon detection classifies your recordings by sound type",
+                        "Movable floating record button \u{2014} drag it anywhere on screen",
+                        "GPS tagging to remember where you recorded"
+                    ]
+                )
+            ],
+            tip: "Explore the guides below for step-by-step details on each feature."
+        )
+    }
+}
+
+// MARK: - Welcome Tutorial Popup
+
+struct WelcomeTutorialSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // App icon area
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(palette.accent)
+                        .padding(.top, 20)
+
+                    Text("Welcome to Sonidea")
+                        .font(.title.bold())
+                        .foregroundStyle(palette.textPrimary)
+
+                    Text("A professional voice memo app with editing, collaboration, and studio-grade tools.")
+                        .font(.body)
+                        .foregroundStyle(palette.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+
+                    // Feature highlights
+                    VStack(spacing: 16) {
+                        WelcomeFeatureRow(icon: "mic.fill", color: .red, title: "Record", description: "Multiple quality presets, gain control, and limiter")
+                        WelcomeFeatureRow(icon: "waveform.and.scissors", color: .blue, title: "Edit", description: "Trim, cut, fade, normalize, noise gate, and more")
+                        WelcomeFeatureRow(icon: "folder.fill", color: .orange, title: "Organize", description: "Albums, tags, projects, and smart search")
+                        WelcomeFeatureRow(icon: "person.2.fill", color: .green, title: "Collaborate", description: "Shared albums, overdub, and multi-track mixing")
+                        WelcomeFeatureRow(icon: "paintpalette.fill", color: .purple, title: "Personalize", description: "7 studio-inspired themes and auto-icon detection")
+                    }
+                    .padding(.horizontal, 20)
+
+                    Spacer(minLength: 20)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Get Started") {
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(palette.accent)
+                }
+            }
+            .navigationTitle("Sonidea")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+struct WelcomeFeatureRow: View {
+    @Environment(\.themePalette) private var palette
+    let icon: String
+    let color: Color
+    let title: String
+    let description: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundStyle(color)
+                .frame(width: 40, height: 40)
+                .background(color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.textPrimary)
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(palette.textSecondary)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(palette.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Guide View
+
 struct GuideView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
@@ -4355,6 +4560,23 @@ struct GuideView: View {
                         .font(.subheadline)
                         .foregroundStyle(palette.textSecondary)
                         .listRowBackground(palette.cardBackground)
+                }
+
+                // Overview section at the top
+                Section {
+                    NavigationLink {
+                        SonideaOverviewView()
+                    } label: {
+                        GuideRow(
+                            icon: "sparkles",
+                            title: "What is Sonidea?",
+                            subtitle: "A complete overview of everything you can do"
+                        )
+                    }
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("Overview")
+                        .foregroundStyle(palette.textSecondary)
                 }
 
                 Section {
@@ -4725,6 +4947,8 @@ struct TrashItemRow: View {
     @Environment(AppState.self) private var appState
     let recording: RecordingItem
 
+    @State private var showDeleteConfirmation = false
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
@@ -4748,7 +4972,7 @@ struct TrashItemRow: View {
             }
             .buttonStyle(.plain)
 
-            Button { appState.permanentlyDelete(recording) } label: {
+            Button { showDeleteConfirmation = true } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.red)
             }
@@ -4756,6 +4980,12 @@ struct TrashItemRow: View {
             .padding(.leading, 8)
         }
         .padding(.vertical, 4)
+        .alert("Permanently Delete?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { appState.permanentlyDelete(recording) }
+        } message: {
+            Text("\"\(recording.title)\" will be permanently deleted. This cannot be undone.")
+        }
     }
 }
 
