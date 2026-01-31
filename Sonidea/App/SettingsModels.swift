@@ -377,6 +377,7 @@ struct AppSettings: Codable {
     // Metronome / click track
     var metronomeEnabled: Bool = false
     var metronomeBPM: Double = 120
+    var metronomeVolume: Float = 0.8
 
     // Auto-sync watch recordings to iPhone
     var watchSyncEnabled: Bool = false

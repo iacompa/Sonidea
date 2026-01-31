@@ -590,9 +590,11 @@ final class RecorderManager: NSObject {
             applyInputSettings()
 
             // Attach metronome click source to main mixer (NOT to recording chain)
-            // Click goes: ClickSourceNode -> MainMixerNode -> Output (speakers)
-            // Recording tap is on LimiterNode, so click is not captured
-            if metronome.isEnabled {
+            // Click goes: ClickSourceNode -> MainMixerNode -> Output (headphones)
+            // Recording tap is on LimiterNode, so click is not captured.
+            // Metronome requires headphones to prevent mic picking up the click.
+            let headphonesConnected = AudioSessionManager.shared.isHeadphoneMonitoringActive()
+            if metronome.isEnabled && headphonesConnected {
                 let clickNode = metronome.createSourceNode(sampleRate: inputFormat.sampleRate)
                 engine.attach(clickNode)
                 let monoFormat = AVAudioFormat(
@@ -602,6 +604,13 @@ final class RecorderManager: NSObject {
                     interleaved: false
                 )!
                 engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
+                #if DEBUG
+                print("🎵 [RecorderManager] Metronome attached — headphones detected")
+                #endif
+            } else if metronome.isEnabled {
+                #if DEBUG
+                print("🎵 [RecorderManager] Metronome skipped — no headphones detected")
+                #endif
             }
 
             // Attach monitoring effects chain (hear effects, record clean)
@@ -615,13 +624,23 @@ final class RecorderManager: NSObject {
                 engine.connect(nodes.mixer, to: nodes.eq, format: effectiveTapFormat)
                 engine.connect(nodes.eq, to: nodes.compressor, format: effectiveTapFormat)
                 engine.connect(nodes.compressor, to: engine.mainMixerNode, format: effectiveTapFormat)
+            } else {
+                // Complete the engine graph even without monitoring effects.
+                // Connect limiter → silent mixer → mainMixerNode so the engine
+                // properly pulls audio through the recording chain (needed for
+                // the tap to reliably receive buffers). Volume 0 prevents feedback.
+                let silentMixer = AVAudioMixerNode()
+                engine.attach(silentMixer)
+                silentMixer.outputVolume = 0
+                engine.connect(limiter, to: silentMixer, format: effectiveTapFormat)
+                engine.connect(silentMixer, to: engine.mainMixerNode, format: effectiveTapFormat)
             }
 
             // Start the engine
             try engine.start()
 
-            // Start metronome if enabled
-            if metronome.isEnabled {
+            // Start metronome if enabled and headphones are connected
+            if metronome.isEnabled && headphonesConnected {
                 metronome.start()
             }
 
@@ -842,6 +861,21 @@ final class RecorderManager: NSObject {
         // Use wall clock duration for instant stop response.
         // Wall clock is what the user sees during recording and is accurate enough.
         let duration: TimeInterval = accumulatedDuration
+
+        // Discard very short recordings (< 0.3s) — user likely tapped stop immediately.
+        // Clean up the file and return nil so the caller silently discards.
+        if duration < 0.3 {
+            #if DEBUG
+            print("ℹ️ [RecorderManager] Recording too short (\(String(format: "%.2f", duration))s), discarding")
+            #endif
+            try? FileManager.default.removeItem(at: fileURL)
+            resetState()
+            clearInProgressRecording()
+            AudioSessionManager.shared.deactivateRecording()
+            RecordingLiveActivityManager.shared.endActivity()
+            return nil
+        }
+
         let createdAt = Date()
 
         // Capture location data

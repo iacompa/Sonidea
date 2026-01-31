@@ -730,10 +730,11 @@ struct ContentView: View {
 
         guard let rawData = appState.recorder.stopRecording() else {
             #if DEBUG
-            print("❌ [ContentView] stopRecording() returned nil - no data to save")
+            print("ℹ️ [ContentView] stopRecording() returned nil - recording too short or no data")
             #endif
-            saveErrorMessage = "Recording failed: No audio data was captured. Please check your microphone permissions and try again."
-            showSaveErrorAlert = true
+            // Silently discard — either the recording was too short or no data was captured.
+            // Mic permission is checked at record start, so this is not an error state.
+            currentRoute = .recordings
             return
         }
 
@@ -3262,6 +3263,27 @@ struct SettingsSheetView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(palette.accent)
+
+                            Divider()
+
+                            HStack {
+                                Text("Volume")
+                                    .foregroundStyle(palette.textPrimary)
+                                Spacer()
+                                Text("\(Int(appState.appSettings.metronomeVolume * 100))%")
+                                    .foregroundStyle(palette.textSecondary)
+                                    .monospacedDigit()
+                            }
+                            HStack(spacing: 8) {
+                                Image(systemName: "speaker.fill")
+                                    .foregroundStyle(palette.textSecondary)
+                                    .font(.caption)
+                                Slider(value: $appState.appSettings.metronomeVolume, in: 0.1...1.0, step: 0.05)
+                                    .tint(palette.accent)
+                                Image(systemName: "speaker.wave.3.fill")
+                                    .foregroundStyle(palette.textSecondary)
+                                    .font(.caption)
+                            }
                         }
                         .listRowBackground(palette.cardBackground)
                     }
@@ -3287,7 +3309,7 @@ struct SettingsSheetView: View {
                             Text("Screen will stay on while recording.")
                         }
                         if appState.appSettings.metronomeEnabled {
-                            Text("Click track: \(Int(appState.appSettings.metronomeBPM)) BPM")
+                            Text("Click track: \(Int(appState.appSettings.metronomeBPM)) BPM · \(Int(appState.appSettings.metronomeVolume * 100))% vol. Requires headphones — click plays through headphones only and is not recorded.")
                         }
                     }
                     .foregroundColor(palette.textSecondary)
@@ -4523,7 +4545,7 @@ struct WelcomeTutorialSheet: View {
                     // Feature highlights
                     VStack(spacing: 16) {
                         WelcomeFeatureRow(icon: "mic.fill", color: .red, title: "Record", description: "Multiple quality presets, gain control, and limiter")
-                        WelcomeFeatureRow(icon: "waveform.and.scissors", color: .blue, title: "Edit", description: "Trim, cut, fade, normalize, noise gate, and more")
+                        WelcomeFeatureRow(icon: "scissors", color: .blue, title: "Edit", description: "Trim, cut, fade, normalize, noise gate, and more")
                         WelcomeFeatureRow(icon: "folder.fill", color: .orange, title: "Organize", description: "Albums, tags, projects, and smart search")
                         WelcomeFeatureRow(icon: "person.2.fill", color: .green, title: "Collaborate", description: "Shared albums, overdub, and multi-track mixing")
                         WelcomeFeatureRow(icon: "paintpalette.fill", color: .purple, title: "Personalize", description: "7 studio-inspired themes and auto-icon detection")
@@ -4632,7 +4654,7 @@ struct GuideView: View {
                         EditingInfoView()
                     } label: {
                         GuideRow(
-                            icon: "waveform.and.scissors",
+                            icon: "scissors",
                             title: "Editing",
                             subtitle: "Trim, cut, and remove silence"
                         )

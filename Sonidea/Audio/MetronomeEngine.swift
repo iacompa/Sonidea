@@ -35,7 +35,7 @@ final class MetronomeEngine {
     var beatsPerBar: Int = 4 { didSet { updateRenderParams() } }
     var beatUnit: Int = 4  // 4=quarter, 8=eighth
     var countInBars: Int = 0  // 0=no count-in, 1, or 2
-    var volume: Float = 0.7 { didSet { updateRenderParams() } }
+    var volume: Float = 0.8 { didSet { updateRenderParams() } }
 
     // MARK: - Runtime State
 
@@ -56,12 +56,12 @@ final class MetronomeEngine {
         return ptr
     }()
 
-    // MARK: - Click Parameters (synthesized)
+    // MARK: - Click Parameters (wood block synthesis)
 
-    private let downbeatFrequency: Float = 1000  // Hz
-    private let upbeatFrequency: Float = 800     // Hz
-    private let downbeatDuration: Float = 0.015  // 15ms
-    private let upbeatDuration: Float = 0.010    // 10ms
+    private let downbeatFrequency: Float = 500   // Hz — low wood block
+    private let upbeatFrequency: Float = 700     // Hz — high wood block
+    private let downbeatDuration: Float = 0.030  // 30ms
+    private let upbeatDuration: Float = 0.020    // 20ms
 
     // MARK: - Thread-Safe Render Parameters
 
@@ -75,7 +75,7 @@ final class MetronomeEngine {
     }
 
     private let paramsLock = NSLock()
-    private var renderParams = MetronomeParams(bpm: 120, volume: 0.7, clickActive: false, beatsPerBar: 4, sampleRate: 44100)
+    private var renderParams = MetronomeParams(bpm: 120, volume: 0.8, clickActive: false, beatsPerBar: 4, sampleRate: 44100)
 
     /// Copy current MainActor properties into the lock-protected renderParams.
     private func updateRenderParams() {
@@ -157,10 +157,28 @@ final class MetronomeEngine {
                     let durSamples = Double(dur) * sr
 
                     if sampleInBeat < durSamples {
-                        // Sine burst with exponential decay
+                        // Wood block synthesis: fundamental + inharmonic overtones + noise transient
                         let t = Float(sampleInBeat / sr)
-                        let decay = expf(-t * 200) // Fast exponential decay
-                        let sample = sinf(2.0 * .pi * freq * t) * decay * vol
+
+                        // Noise transient for the initial "knock" (~2ms)
+                        let noiseDecay = expf(-t * 2000)
+                        // Simple deterministic pseudo-noise from sample position
+                        let noisePhase = sinf(Float(sampleInBeat) * 137.5) * cosf(Float(sampleInBeat) * 251.3)
+                        let noise = noisePhase * noiseDecay * 0.4
+
+                        // Fundamental tone with fast decay
+                        let fundDecay = expf(-t * 250)
+                        let fundamental = sinf(2.0 * .pi * freq * t) * fundDecay
+
+                        // Inharmonic overtone 1 (~2.7x fundamental — wood resonance)
+                        let oh1Decay = expf(-t * 400)
+                        let overtone1 = sinf(2.0 * .pi * freq * 2.7 * t) * oh1Decay * 0.35
+
+                        // Inharmonic overtone 2 (~5.4x fundamental — brightness)
+                        let oh2Decay = expf(-t * 600)
+                        let overtone2 = sinf(2.0 * .pi * freq * 5.4 * t) * oh2Decay * 0.15
+
+                        let sample = (noise + fundamental + overtone1 + overtone2) * vol
                         data[i] = sample
                     } else {
                         data[i] = 0

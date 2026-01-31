@@ -53,6 +53,7 @@ final class AppState {
             recorder.appSettings = appSettings
             recorder.metronome.isEnabled = appSettings.metronomeEnabled
             recorder.metronome.bpm = appSettings.metronomeBPM
+            recorder.metronome.volume = appSettings.metronomeVolume
         }
     }
 
@@ -126,6 +127,7 @@ final class AppState {
         recorder.appSettings = appSettings
         recorder.metronome.isEnabled = appSettings.metronomeEnabled
         recorder.metronome.bpm = appSettings.metronomeBPM
+        recorder.metronome.volume = appSettings.metronomeVolume
         loadRecordButtonPosition()
 
         // Flush pending debounced saves when app backgrounds.
