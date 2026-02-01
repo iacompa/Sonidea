@@ -22,7 +22,21 @@ struct WatchThemePalette: Equatable {
 // MARK: - Watch Theme Resolver
 
 enum WatchTheme {
+    /// Cache of already-constructed palettes keyed by theme raw value.
+    /// Avoids allocating a new `WatchThemePalette` struct (and parsing
+    /// hex strings) on every access.
+    private static var paletteCache: [String: WatchThemePalette] = [:]
+
     static func palette(for themeRawValue: String) -> WatchThemePalette {
+        if let cached = paletteCache[themeRawValue] {
+            return cached
+        }
+        let result = buildPalette(for: themeRawValue)
+        paletteCache[themeRawValue] = result
+        return result
+    }
+
+    private static func buildPalette(for themeRawValue: String) -> WatchThemePalette {
         switch themeRawValue {
         case "angstRobot":
             return WatchThemePalette(

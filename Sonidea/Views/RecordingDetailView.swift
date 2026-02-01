@@ -390,7 +390,8 @@ struct RecordingDetailView: View {
                             TopBarSuggestedIcons(
                                 mainIcon: editedIconSymbol,
                                 secondaryIcons: editedSecondaryIcons,
-                                tintColor: editedIconColor
+                                tintColor: editedIconColor,
+                                hasCustomColor: currentRecording.iconColorHex != nil
                             )
                         }
                         .accessibilityLabel(suggestedIconsAccessibilityLabel)
@@ -581,6 +582,8 @@ struct RecordingDetailView: View {
                     secondaryIcons: $editedSecondaryIcons,
                     tintColor: editedIconColor,
                     suggestions: currentRecording.iconPredictions ?? [],
+                    iconSource: currentRecording.iconSource,
+                    hasIconName: currentRecording.iconName != nil,
                     onIconChanged: {
                         iconWasModified = true
                     },
@@ -4023,6 +4026,7 @@ struct TopBarSuggestedIcons: View {
     let mainIcon: String
     let secondaryIcons: [String]
     let tintColor: Color
+    var hasCustomColor: Bool = false
 
     /// Icons to display: main icon first, then up to 2 secondary icons
     private var displayIcons: [(symbol: String, isMain: Bool)] {
@@ -4042,7 +4046,8 @@ struct TopBarSuggestedIcons: View {
                 TopBarIconItem(
                     symbol: item.symbol,
                     isMain: item.isMain,
-                    tintColor: tintColor
+                    tintColor: tintColor,
+                    hasCustomColor: hasCustomColor
                 )
             }
         }
@@ -4055,62 +4060,30 @@ private struct TopBarIconItem: View {
     let symbol: String
     let isMain: Bool
     let tintColor: Color
+    var hasCustomColor: Bool = false
 
     @Environment(\.themePalette) private var palette
-    @Environment(\.colorScheme) private var colorScheme
 
-    /// Icon size: main icon slightly larger
-    private var iconSize: CGFloat {
-        isMain ? 16 : 14
-    }
+    private var iconSize: CGFloat { isMain ? 16 : 14 }
+    private var chipSize: CGFloat { isMain ? 32 : 28 }
 
-    /// Chip size
-    private var chipSize: CGFloat {
-        isMain ? 32 : 28
-    }
-
-    /// Background that always contrasts with the icon's tint color
-    private var chipBackground: Color {
-        let uiColor = UIColor(tintColor)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
-        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
-
-        if colorScheme == .dark {
-            // On dark themes, use a lighter chip so dark icons stand out
-            return luminance < 0.4 ? Color.white.opacity(0.15) : tintColor.opacity(0.15)
-        } else {
-            // On light themes, use a darker chip so light icons stand out
-            return luminance > 0.7 ? Color.black.opacity(0.1) : tintColor.opacity(0.15)
-        }
-    }
-
-    private var chipBorder: Color {
-        let uiColor = UIColor(tintColor)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
-        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
-
-        if colorScheme == .dark && luminance < 0.4 {
-            return Color.white.opacity(0.2)
-        } else if colorScheme == .light && luminance > 0.7 {
-            return Color.black.opacity(0.15)
-        }
-        return tintColor.opacity(0.3)
+    /// Use the custom tint color when user has set one, otherwise use theme text color
+    private var iconForeground: Color {
+        hasCustomColor ? tintColor : palette.textPrimary
     }
 
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: iconSize, weight: isMain ? .semibold : .regular))
-            .foregroundColor(tintColor)
+            .foregroundColor(iconForeground)
             .frame(width: chipSize, height: chipSize)
             .background(
                 Circle()
-                    .fill(chipBackground)
+                    .fill(palette.surface)
             )
             .overlay(
                 Circle()
-                    .strokeBorder(chipBorder, lineWidth: 1)
+                    .strokeBorder(palette.stroke.opacity(0.3), lineWidth: 1)
             )
     }
 }
@@ -4123,6 +4096,8 @@ struct IconPickerSheet: View {
     @Binding var secondaryIcons: [String]    // Up to 2 secondary icons
     let tintColor: Color
     let suggestions: [IconPrediction]
+    var iconSource: IconSource? = nil       // How the current icon was chosen
+    var hasIconName: Bool = false            // Whether an icon has been set at all
     let onIconChanged: () -> Void            // Called when main icon changes
     let onSecondaryIconsChanged: () -> Void  // Called when secondary icons change
 
@@ -4200,6 +4175,39 @@ struct IconPickerSheet: View {
         }
     }
 
+    /// Label describing how the current icon was set
+    private var iconSourceLabel: String {
+        if !hasIconName {
+            return "Default icon"
+        }
+        switch iconSource {
+        case .auto:
+            return "AI-selected icon"
+        case .user:
+            return "User-selected icon"
+        case .none:
+            return "Default icon"
+        }
+    }
+
+    private var iconSourceIcon: String {
+        if !hasIconName { return "circle.dashed" }
+        switch iconSource {
+        case .auto: return "sparkles"
+        case .user: return "hand.tap.fill"
+        case .none: return "circle.dashed"
+        }
+    }
+
+    private var iconSourceColor: Color {
+        if !hasIconName { return palette.textTertiary }
+        switch iconSource {
+        case .auto: return palette.accent
+        case .user: return palette.accent
+        case .none: return palette.textTertiary
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -4207,14 +4215,24 @@ struct IconPickerSheet: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        // Instruction note
+                        // Instruction note + icon source badge
                         if searchText.isEmpty {
-                            HStack(spacing: 8) {
-                                Image(systemName: "hand.tap")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(palette.textTertiary)
-                                VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "hand.tap")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(palette.textTertiary)
                                     Text("Tap to set main icon. Press & hold to add up to 2 extra icons (3 total).")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textSecondary)
+                                }
+
+                                // Icon source note
+                                HStack(spacing: 6) {
+                                    Image(systemName: iconSourceIcon)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(iconSourceColor)
+                                    Text(iconSourceLabel)
                                         .font(.caption)
                                         .foregroundColor(palette.textSecondary)
                                 }
@@ -4467,12 +4485,12 @@ private struct MainIconGridItem: View {
                         .font(.system(size: 22))
                         .foregroundColor(isMainIcon ? .white : palette.textPrimary)
                         .frame(width: 44, height: 44)
-                        .background(isMainIcon ? tintColor : palette.surface)
+                        .background(isMainIcon ? palette.accent : palette.surface)
                         .cornerRadius(10)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
                                 .stroke(
-                                    isMainIcon ? tintColor : (suggestionType != .none ? palette.accent : Color.clear),
+                                    isMainIcon ? palette.accent : (suggestionType != .none ? palette.accent : Color.clear),
                                     lineWidth: isMainIcon ? 2 : suggestionBorderWidth
                                 )
                         )
@@ -4483,7 +4501,7 @@ private struct MainIconGridItem: View {
                                     .font(.system(size: 8, weight: .bold))
                                     .foregroundColor(.white)
                                     .padding(3)
-                                    .background(tintColor)
+                                    .background(palette.accent)
                                     .clipShape(Circle())
                                     .offset(x: 4, y: -4)
                             }

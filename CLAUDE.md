@@ -83,9 +83,9 @@ Xcode project: `Sonidea.xcodeproj`
 Edit mode, shared albums, tags, iCloud sync, auto-icons, overdub, projects & versioning, watch auto-sync, metronome/click track, live recording effects, mixer & mixdown
 
 ## Temporarily Free Features (for TestFlight testing)
-Edit mode and Overdub — controlled via `ProFeatureContext.temporarilyFree` set in `ProFeatureGate.swift`. To re-gate behind Pro, remove `.editMode` and/or `.recordOverTrack` from that set.
+Edit mode, Overdub, and Auto Icons — controlled via `ProFeatureContext.temporarilyFree` set in `ProFeatureGate.swift`. To re-gate behind Pro, remove `.editMode`, `.recordOverTrack`, and/or `.autoIcons` from that set.
 
-**APP STORE CONNECT REMINDER:** Before every submission to App Store Connect, check if `.editMode` and `.recordOverTrack` should be re-gated behind Pro by removing them from `ProFeatureContext.temporarilyFree` in `ProFeatureGate.swift`.
+**APP STORE CONNECT REMINDER:** Before every submission to App Store Connect, check if `.editMode`, `.recordOverTrack`, and `.autoIcons` should be re-gated behind Pro by removing them from `ProFeatureContext.temporarilyFree` in `ProFeatureGate.swift`. Always ask the user before submitting.
 
 ## Free Features (previously Pro)
 Recording quality (all presets: Standard, High, Lossless, WAV) — available to all users
@@ -567,3 +567,68 @@ Replaced slider-based EQ band controls with Logic Pro-style rotary knobs in `EQG
 | File | Changes |
 |------|---------|
 | `EQGraphView.swift` | -LogSlider, -bandControls(for:), +EQKnob, +EQBandTab, +Arc, +bandTabs, +knobControls(for:), selectedBand default 0 |
+
+## Knob Controls for All Audio Effects + Haptics (latest session)
+
+### Knob Sensitivity Fix
+- **Bug**: Drag gesture read `normalized` (computed from current `value`) each frame, but `value` was already updated by previous frames, creating exponential/compounding sensitivity — moving 1cm would jump to 100%.
+- **Fix**: Added `@State private var dragStartNormalized: Double?` that captures the starting normalized value once per drag gesture, then computes delta from that fixed base. Reset on `.onEnded`.
+- **Sensitivity**: 500pt vertical drag for full range (was 150pt, then 300pt).
+
+### Haptic Feedback
+- 20 detent positions across the knob range
+- `UIImpactFeedbackGenerator(style: .light)` fires when crossing a detent boundary
+- `@State private var lastDetent: Int` tracks current detent to avoid repeat haptics
+
+### Compression Knobs (`AudioEditToolsPanel.swift`)
+- Replaced `compressControls` sliders with 3 `EQKnob` views in HStack: Gain, Reduction, Mix
+- All knobs use `palette.accent` color
+
+### Echo Knobs (`AudioEditToolsPanel.swift`)
+- Replaced `echoControls` sliders with 4 `EQKnob` views in 2x2 grid
+- Top row: Delay (0.01-1.0s) + Feedback (0-0.9)
+- Bottom row: Damping (0-1.0) + Wet/Dry (0-1.0)
+
+### Reverb Knobs (`AudioEditToolsPanel.swift`)
+- Replaced `reverbControls` sliders with 5 `EQKnob` views in 3+2 layout
+- Top row: Room Size (0-1.0) + Pre-Delay (0-0.1s) + Decay (0.1-5.0s)
+- Bottom row: Damping (0-1.0) + Wet/Dry (0-1.0) + spacer
+
+### Band Tabs Removed
+- Removed Low/Low-Mid/Hi-Mid/High band selector tabs from EQ view
+- Band selection via tapping points on graph only
+
+### Toast Notifications Removed for Effects
+- Removed "effect applied/removed" toast notifications from all effect operations (compression, reverb, echo, fade, normalize, noise gate)
+- Kept toast notifications for Trim and Cut operations only (less frequent, more destructive)
+
+## Icon Consistency & Source Tracking (latest session)
+
+### Icon Rendering Unified Across Views
+- **Problem**: Icons rendered differently in recordings list, detail panel, and icon picker. Default dark gray (`#3A3A3C`) icons were invisible on dark themes.
+- **Solution**: Standardized all icon views to use `palette.surface` background with `palette.textPrimary` foreground (for default icons) or custom color (for user-set colors).
+
+### Changes
+- **`RecordingIconTile`** (RecordingsListView.swift): Background changed to `palette.surface`, foreground to `palette.textPrimary` (or custom `iconColorHex` color), border to `palette.stroke`
+- **`TopBarIconItem`** (RecordingDetailView.swift): Added `hasCustomColor: Bool` flag. Default icons use `palette.textPrimary` on `palette.surface`. Custom-colored icons use their actual color. Removed luminance-based chip background logic.
+- **`TopBarSuggestedIcons`**: Updated to pass `hasCustomColor` parameter through to `TopBarIconItem`
+- **`MainIconGridItem`**: Selected icon now uses `palette.accent` background instead of `tintColor` (which could be invisible dark gray)
+- **Star badge**: Uses `palette.accent` background
+
+### Icon Source Note in Picker
+- **`IconPickerSheet`**: Added `iconSource: IconSource?` and `hasIconName: Bool` parameters
+- Shows contextual note below instruction text: "Default icon" (gray), "AI-selected icon" (purple), or "User-selected icon" (blue)
+- Each note has matching SF Symbol icon (circle.dashed, sparkles, hand.tap)
+
+### Auto Icons Temporarily Free
+- Added `.autoIcons` to `ProFeatureContext.temporarilyFree` set for TestFlight testing
+- **REMINDER**: Re-gate `.autoIcons` behind Pro before App Store submission
+
+### Files Modified
+| File | Changes |
+|------|---------|
+| `RecordingsListView.swift` | `RecordingIconTile` icon styling unified with palette |
+| `RecordingDetailView.swift` | `TopBarIconItem` + `MainIconGridItem` + `IconPickerSheet` updates |
+| `AudioEditToolsPanel.swift` | Compression, echo, reverb controls converted to knobs |
+| `EQGraphView.swift` | Band tabs removed, knob sensitivity fix, haptic feedback |
+| `ProFeatureGate.swift` | `.autoIcons` added to `temporarilyFree` |

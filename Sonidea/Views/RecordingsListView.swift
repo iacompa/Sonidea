@@ -766,18 +766,27 @@ struct RecordingIconTile: View {
     let recording: RecordingItem
     let colorScheme: ColorScheme
 
+    @Environment(\.themePalette) private var palette
+
+    /// Icon tint: user color if set, otherwise theme text
+    private var iconColor: Color {
+        if let hex = recording.iconColorHex, let c = Color(hex: hex) {
+            return c
+        }
+        return palette.textPrimary
+    }
+
     var body: some View {
         Image(systemName: recording.displayIconSymbol)
             .font(.system(size: 24))
-            .foregroundColor(recording.iconSymbolColor(for: colorScheme))
+            .foregroundColor(iconColor)
             .frame(width: 44, height: 44)
-            .background(recording.iconTileBackground(for: colorScheme))
+            .background(palette.surface)
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(recording.iconTileBorder(for: colorScheme), lineWidth: 1)
+                    .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
             )
-            // Prevent any inherited opacity/highlight from affecting this view
             .compositingGroup()
     }
 }

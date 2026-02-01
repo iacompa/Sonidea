@@ -20,11 +20,14 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
     private var audioRecorder: AVAudioRecorder?
     private var recordingURL: URL?
+    /// Single consolidated timer for both duration and audio metering updates.
     private var timer: Timer?
-    private var meterTimer: Timer?
     private var recordingStartTime: Date?
     private var extendedSession: WKExtendedRuntimeSession?
     private var interruptionObserver: NSObjectProtocol?
+    /// Counter to throttle duration updates (every 5th tick = 0.5s) while
+    /// metering runs at full 0.1s cadence.
+    private var timerTickCount: Int = 0
 
     // Cleanup handled by stopRecording() which invalidates extendedSession
     // and removes interruptionObserver. No deinit needed since @MainActor
@@ -63,7 +66,7 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             return false
         }
 
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let documentsPath = WatchRecordingItem.documentsDirectory
         let filename = "watch_\(Self.fileTimestamp.string(from: Date())).m4a"
         let url = documentsPath.appendingPathComponent(filename)
 
@@ -86,7 +89,6 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             currentLevel = 0
             recordingStartTime = Date()
             startTimer()
-            startMeterTimer()
 
             // --- Start extended runtime session for wrist-down protection ---
             let extSession = WKExtendedRuntimeSession()
@@ -127,7 +129,6 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
     func stopRecording() -> (URL, TimeInterval)? {
         stopTimer()
-        stopMeterTimer()
         currentLevel = 0
 
         // Invalidate extended runtime session
@@ -162,37 +163,39 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         return (url, duration)
     }
 
-    // MARK: - Timer
+    // MARK: - Consolidated Timer (duration + metering)
 
+    /// Single timer at 0.1s for metering; duration updated every 5th tick (0.5s).
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self, let start = self.recordingStartTime else { return }
-            self.currentDuration = Date().timeIntervalSince(start)
+        timerTickCount = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+
+            // --- Audio metering (every tick = 0.1s) ---
+            if let recorder = self.audioRecorder, recorder.isRecording {
+                recorder.updateMeters()
+                // averagePower returns dB: -160 (silence) to 0 (max)
+                let dB = recorder.averagePower(forChannel: 0)
+                // Normalize to 0.0–1.0 range with a floor at -50 dB
+                let normalized = max(0, (dB + 50) / 50)
+                self.currentLevel = normalized
+            }
+
+            // --- Duration update (every 5th tick = 0.5s) ---
+            self.timerTickCount += 1
+            if self.timerTickCount >= 5 {
+                self.timerTickCount = 0
+                if let start = self.recordingStartTime {
+                    self.currentDuration = Date().timeIntervalSince(start)
+                }
+            }
         }
     }
 
     private func stopTimer() {
         timer?.invalidate()
         timer = nil
-    }
-
-    // MARK: - Audio Metering
-
-    private func startMeterTimer() {
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self, let recorder = self.audioRecorder, recorder.isRecording else { return }
-            recorder.updateMeters()
-            // averagePower returns dB: -160 (silence) to 0 (max)
-            let dB = recorder.averagePower(forChannel: 0)
-            // Normalize to 0.0–1.0 range with a floor at -50 dB
-            let normalized = max(0, (dB + 50) / 50)
-            self.currentLevel = normalized
-        }
-    }
-
-    private func stopMeterTimer() {
-        meterTimer?.invalidate()
-        meterTimer = nil
+        timerTickCount = 0
     }
 
     // MARK: - AVAudioRecorderDelegate
@@ -205,7 +208,6 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         }
         isRecording = false
         stopTimer()
-        stopMeterTimer()
         currentLevel = 0
     }
 }
