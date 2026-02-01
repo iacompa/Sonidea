@@ -466,6 +466,44 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 | `AppState.swift` | File-pruning sync guard, overdub group sync triggers, dead code removal |
 | `SonideaApp.swift` | BGTaskScheduler registration, background sync scheduling on app backgrounding |
 
+## CRITICAL: iOS 26 Padding Bug — DO NOT USE .padding() for horizontal margins in RecordingDetailView
+
+### The Bug
+On iOS 26 (Tahoe), `.padding()` on a VStack inside a ScrollView inside a NavigationStack **presented as a sheet** does **NOT** reduce the VStack's content width. Content renders edge-to-edge no matter what. This is a confirmed SwiftUI regression.
+
+### What DOES NOT WORK (do not attempt these again):
+- `.padding(.horizontal, N)` on the VStack — **BROKEN**, any value, even 32pt, VStack still renders full width
+- `.padding()` (default) on the VStack — **BROKEN**
+- `.scenePadding(.horizontal)` on the VStack — **BROKEN**
+- `.contentMargins(.horizontal, 16, for: .scrollContent)` on the ScrollView — **BROKEN**
+- `.safeAreaPadding(.horizontal, 16)` on the ScrollView — **BROKEN**
+- `.padding(.horizontal, N)` on the ScrollView itself — **BROKEN**
+
+A debug `.border()` placed before `.padding(.horizontal, 32)` confirmed the VStack occupies the full screen width despite the padding modifier being present. This was verified with screenshots.
+
+### What DOES WORK (the only fix):
+Use `GeometryReader` to measure the available width, then constrain the VStack with an explicit `.frame(width:)`:
+```swift
+GeometryReader { outerProxy in
+    ZStack {
+        palette.background.ignoresSafeArea()
+        ScrollView {
+            VStack(spacing: 24) { ... }
+                .frame(width: max(0, outerProxy.size.width - 32))
+                .padding(.vertical, 16)
+        }
+    }
+}
+```
+**This is the ONLY approach that constrains horizontal content width in sheet-presented NavigationStack > ScrollView > VStack on iOS 26.** Do not replace this with `.padding()` — it will silently break and content will go edge-to-edge again.
+
+### Layout Rules for RecordingDetailView
+- The `GeometryReader` + `.frame(width:)` provides 16pt margins on each side (32pt total subtracted)
+- Do NOT add `.padding(.horizontal)` to the VStack — it does nothing
+- Child views that need extra inward spacing should use their own `.padding(.horizontal, N)`
+- Playback controls use `HStack(spacing: 12)` with NO Spacers — buttons are grouped together, not pushed to edges
+- The `.padding(.vertical, 16)` on the VStack DOES work correctly (only horizontal is broken)
+
 **Remaining work:**
 - Shared album methods (~400 lines) still live directly in AppState due to CloudKit async coupling
 - No integration tests or UI tests

@@ -170,7 +170,6 @@ struct RecordingDetailView: View {
     private let originalIconColorHex: String?
 
     // EQ panel state
-    @State private var showEQPanel = false
     @State private var localEQSettings: EQSettings
 
     // Location search state
@@ -341,26 +340,28 @@ struct RecordingDetailView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                palette.background.ignoresSafeArea()
-
-                ScrollView {
-                    VStack(spacing: 24) {
-                        playbackSection
-                        Rectangle()
-                            .fill(palette.separator)
-                            .frame(height: 1)
-                        metadataSection
+            GeometryReader { outerProxy in
+                ZStack {
+                    palette.background.ignoresSafeArea()
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            playbackSection
+                            Rectangle()
+                                .fill(palette.separator)
+                                .frame(height: 1)
+                            metadataSection
+                        }
+                        .frame(width: max(0, outerProxy.size.width - 32))
+                        .padding(.vertical, 16)
                     }
-                    .padding()
-                }
-                .scrollDismissesKeyboard(.interactively)
+                    .scrollDismissesKeyboard(.interactively)
                 .simultaneousGesture(
                     TapGesture().onEnded {
                         // Tap outside to dismiss keyboard (uses simultaneousGesture to not block child buttons)
                         isNotesFocused = false
                     }
                 )
+                }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -488,6 +489,10 @@ struct RecordingDetailView: View {
                 if isEditingWaveform && oldValue == true && newValue == false {
                     editPlayheadPosition = playback.currentTime
                 }
+            }
+            .onChange(of: localEQSettings) {
+                // Apply EQ to playback immediately (no debounce) for real-time audio feedback
+                playback.setEQ(localEQSettings)
             }
             .onChange(of: silenceMode) { _, newMode in
                 // Clear RMS meter when leaving highlight mode
@@ -1048,6 +1053,11 @@ struct RecordingDetailView: View {
                                 applyEcho(delay: delay, feedback: feedback, damping: damping, wetDry: wetDry)
                             },
                             onRemoveEcho: { removeEcho() },
+                            eqSettings: $localEQSettings,
+                            onEQChanged: {
+                                // Debounced by panel (400ms) — only saves to disk
+                                saveEQSettings()
+                            },
                             onClose: {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                     showToolsPanel = false
@@ -1161,7 +1171,6 @@ struct RecordingDetailView: View {
                         isProcessing: isProcessingEdit,
                         isPrecisionMode: $isPrecisionMode,
                         showToolsPanel: $showToolsPanel,
-                        showEQPanel: $showEQPanel,
                         onTrim: performTrim,
                         onCut: performCut,
                         onMoreTapped: {
@@ -1256,8 +1265,8 @@ struct RecordingDetailView: View {
             // (In edit mode, compact controls are positioned right below the waveform)
             if !isEditingWaveform {
                 // [ Speed ]  [ -15 ]  [ Play ]  [ +15 ]  [ Mark ]
-                HStack(spacing: 16) {
-                    // Speed button (left edge)
+                HStack(spacing: 12) {
+                    // Speed button
                     Button {
                         cycleSpeed()
                     } label: {
@@ -1268,8 +1277,6 @@ struct RecordingDetailView: View {
                             .background(Color.blue.opacity(0.15))
                             .cornerRadius(8)
                     }
-
-                    Spacer()
 
                     // Skip backward
                     Button {
@@ -1302,9 +1309,7 @@ struct RecordingDetailView: View {
                             .frame(width: 44, height: 44)
                     }
 
-                    Spacer()
-
-                    // Mark button (right edge) - add marker at current playback position
+                    // Mark button - add marker at current playback position
                     Button {
                         addMarkerAtCurrentPlaybackTime()
                     } label: {
@@ -1326,18 +1331,11 @@ struct RecordingDetailView: View {
                     }
                     .fixedSize()
                 }
-                .padding(.horizontal, 8)
             }
 
             Text(currentRecording.formattedDate)
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
-
-            // Collapsible EQ Panel (between date and New Version/Overdub buttons)
-            if showEQPanel {
-                eqPanel
-                    .padding(.top, 4)
-            }
 
             // Inline Version Recorder (New Version / Overdub buttons)
             inlineVersionRecorder
@@ -1676,23 +1674,28 @@ struct RecordingDetailView: View {
         return []
     }
 
+    /// Minimum time gap (in seconds) between markers to prevent duplicates.
+    private static let markerMinimumGap: TimeInterval = 0.5
+
+    /// Check if a marker can be placed at the given time without being too close to an existing marker.
+    private func canPlaceMarker(at time: TimeInterval) -> Bool {
+        !editedMarkers.contains { abs($0.time - time) < Self.markerMinimumGap }
+    }
+
     private func addMarkerAtPlayhead() {
-        // Marker placement uses the edit playhead position (tap-to-set cursor)
-        // The editPlayheadPosition is controlled by:
-        // - Tapping anywhere on the waveform
-        // - Tapping a marker (sets playhead to marker time)
-        // - Dragging the playhead cursor
-        //
-        // This ensures deterministic, user-controlled marker placement.
-        // The playhead position is already quantized to 0.01s in all input sources,
-        // so we use it directly without re-quantization.
+        let duration = pendingDuration ?? playback.duration
+        let markerTime = Swift.max(0, Swift.min(editPlayheadPosition, duration))
+
+        // Prevent duplicate markers at the same (or very close) position
+        guard canPlaceMarker(at: markerTime) else {
+            let notificationGenerator = UINotificationFeedbackGenerator()
+            notificationGenerator.notificationOccurred(.warning)
+            return
+        }
 
         // Push current state to undo stack before adding marker
         let undoSnapshot = createUndoSnapshot(description: "Add Marker")
         editHistory.pushUndo(undoSnapshot)
-
-        let duration = pendingDuration ?? playback.duration
-        let markerTime = Swift.max(0, Swift.min(editPlayheadPosition, duration))
 
         let newMarker = Marker(time: markerTime)
         editedMarkers.append(newMarker)
@@ -1708,6 +1711,13 @@ struct RecordingDetailView: View {
     private func addMarkerAtCurrentPlaybackTime() {
         let duration = playback.duration > 0 ? playback.duration : currentRecording.duration
         let markerTime = Swift.max(0, Swift.min(playback.currentTime, duration))
+
+        // Prevent duplicate markers at the same (or very close) position
+        guard canPlaceMarker(at: markerTime) else {
+            let notificationGenerator = UINotificationFeedbackGenerator()
+            notificationGenerator.notificationOccurred(.warning)
+            return
+        }
 
         let newMarker = Marker(time: markerTime)
         editedMarkers.append(newMarker)
@@ -2312,27 +2322,6 @@ struct RecordingDetailView: View {
         return String(format: "%d:%02d.%02d", minutes, seconds, centiseconds)
     }
 
-    // MARK: - EQ Panel
-
-    @ViewBuilder
-    private var eqPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ParametricEQView(
-                settings: $localEQSettings,
-                onSettingsChanged: {
-                    // Apply EQ changes in real-time to playback
-                    playback.setEQ(localEQSettings)
-                    // Save to recording
-                    saveEQSettings()
-                }
-            )
-        }
-        .padding(16)
-        .background(palette.inputBackground)
-        .cornerRadius(12)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
     // MARK: - Metadata Section
 
     private var metadataSection: some View {
@@ -2771,6 +2760,7 @@ struct RecordingDetailView: View {
 
     @ViewBuilder
     private var overdubGroupSection: some View {
+        let recordingLookup = Dictionary(uniqueKeysWithValues: appState.recordings.map { ($0.id, $0) })
         VStack(alignment: .leading, spacing: 8) {
             // Header
             Text("OVERDUB GROUP")
@@ -2782,7 +2772,7 @@ struct RecordingDetailView: View {
                 VStack(spacing: 0) {
                     if let group = appState.overdubGroup(for: currentRecording) {
                         // Base recording row
-                        if let baseRecording = appState.recordings.first(where: { $0.id == group.baseRecordingId }) {
+                        if let baseRecording = recordingLookup[group.baseRecordingId] {
                             OverdubMemberRow(
                                 recording: baseRecording,
                                 role: "Base",
@@ -2798,7 +2788,7 @@ struct RecordingDetailView: View {
 
                         // Layer rows
                         ForEach(Array(group.layerRecordingIds.enumerated()), id: \.element) { index, layerId in
-                            if let layerRecording = appState.recordings.first(where: { $0.id == layerId }) {
+                            if let layerRecording = recordingLookup[layerId] {
                                 OverdubMemberRow(
                                     recording: layerRecording,
                                     role: "Layer \(index + 1)",
@@ -2832,7 +2822,8 @@ struct RecordingDetailView: View {
     // MARK: - Markers Section
 
     private var markersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let sorted = editedMarkers.sortedByTime
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Markers")
                     .font(.caption)
@@ -2851,7 +2842,7 @@ struct RecordingDetailView: View {
             }
 
             MetadataCard {
-                ForEach(Array(editedMarkers.sortedByTime.enumerated()), id: \.element.id) { index, marker in
+                ForEach(Array(sorted.enumerated()), id: \.element.id) { index, marker in
                     CardRow(showDivider: index < editedMarkers.count - 1, action: {
                         playback.seek(to: marker.time)
                         if isEditingWaveform {
