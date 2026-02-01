@@ -3374,7 +3374,7 @@ struct SettingsSheetView: View {
                         Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
                             .tint(palette.toggleOnTint)
                             .onChange(of: appState.appSettings.autoSelectIcon) { oldValue, enabled in
-                                if enabled && !appState.supportManager.canUseProFeatures {
+                                if enabled && !appState.supportManager.canUseProFeatures && !ProFeatureContext.autoIcons.isFree {
                                     appState.appSettings.autoSelectIcon = false
                                     proUpgradeContext = .autoIcons
                                     return

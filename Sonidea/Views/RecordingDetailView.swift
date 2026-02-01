@@ -167,6 +167,8 @@ struct RecordingDetailView: View {
     @State private var editedIconColor: Color
     // Track if icon color was explicitly modified by user (to avoid lossy round-trip conversion)
     @State private var iconColorWasModified = false
+    // Track if user reset color to default (sets iconColorHex to nil on save)
+    @State private var iconColorWasReset = false
     private let originalIconColorHex: String?
 
     // EQ panel state
@@ -237,7 +239,9 @@ struct RecordingDetailView: View {
         snapshotRecording.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
         snapshotRecording.notes = editedNotes
         snapshotRecording.locationLabel = editedLocationLabel
-        if iconColorWasModified {
+        if iconColorWasReset {
+            snapshotRecording.iconColorHex = nil
+        } else if iconColorWasModified {
             snapshotRecording.iconColorHex = editedIconColor.toHex()
         }
         if iconWasModified {
@@ -391,7 +395,7 @@ struct RecordingDetailView: View {
                                 mainIcon: editedIconSymbol,
                                 secondaryIcons: editedSecondaryIcons,
                                 tintColor: editedIconColor,
-                                hasCustomColor: currentRecording.iconColorHex != nil
+                                hasCustomColor: !iconColorWasReset && (iconColorWasModified || currentRecording.iconColorHex != nil)
                             )
                         }
                         .accessibilityLabel(suggestedIconsAccessibilityLabel)
@@ -572,6 +576,10 @@ struct RecordingDetailView: View {
             .sheet(isPresented: $showIconColorPicker) {
                 IconColorPickerSheet(selectedColor: $editedIconColor, onColorChanged: {
                     iconColorWasModified = true
+                    iconColorWasReset = false
+                }, onResetColor: {
+                    iconColorWasReset = true
+                    iconColorWasModified = false
                 })
                 .presentationDetents([.height(320)])
                 .presentationDragIndicator(.visible)
@@ -3184,7 +3192,9 @@ struct RecordingDetailView: View {
         // IMPORTANT: Only update iconColorHex if user explicitly changed it via ColorPicker
         // This prevents lossy Color -> hex round-trip conversion from changing the color
         // when user edits other fields (title, notes, tags, album, EQ, etc.)
-        if iconColorWasModified {
+        if iconColorWasReset {
+            updated.iconColorHex = nil
+        } else if iconColorWasModified {
             updated.iconColorHex = editedIconColor.toHex()
         }
         // Only update iconName if user explicitly changed it via IconPicker
@@ -3932,6 +3942,7 @@ struct IconColorPickerSheet: View {
 
     @Binding var selectedColor: Color
     let onColorChanged: () -> Void
+    var onResetColor: (() -> Void)? = nil
 
     private let presetColors: [Color] = [
         .red, .orange, .yellow, .green, .mint, .teal,
@@ -3992,6 +4003,31 @@ struct IconColorPickerSheet: View {
                             }
                     }
                     .padding(.horizontal)
+
+                    // Reset to default
+                    if let onResetColor {
+                        Button {
+                            onResetColor()
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Reset to Default")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .foregroundColor(palette.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(palette.surface)
+                            .cornerRadius(10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(palette.stroke.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .padding(.horizontal)
+                    }
 
                     Spacer()
                 }
@@ -4072,6 +4108,11 @@ private struct TopBarIconItem: View {
         hasCustomColor ? tintColor : palette.textPrimary
     }
 
+    /// Background: 20% of custom color when set, otherwise theme surface
+    private var chipBackground: Color {
+        hasCustomColor ? tintColor.opacity(0.2) : palette.surface
+    }
+
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: iconSize, weight: isMain ? .semibold : .regular))
@@ -4079,7 +4120,7 @@ private struct TopBarIconItem: View {
             .frame(width: chipSize, height: chipSize)
             .background(
                 Circle()
-                    .fill(palette.surface)
+                    .fill(chipBackground)
             )
             .overlay(
                 Circle()

@@ -224,8 +224,8 @@ final class AppState {
         var settingsChanged = false
         var settings = appSettings
 
-        // Auto-select icon is a Pro feature
-        if settings.autoSelectIcon {
+        // Auto-select icon is a Pro feature (skip if temporarily free)
+        if settings.autoSelectIcon && !ProFeatureContext.autoIcons.isFree {
             settings.autoSelectIcon = false
             settingsChanged = true
         }
@@ -466,8 +466,8 @@ final class AppState {
             }
         }
 
-        // Auto-classify icon if enabled (Pro feature)
-        if appSettings.autoSelectIcon && supportManager.canUseProFeatures {
+        // Auto-classify icon if enabled (Pro feature, or temporarily free)
+        if appSettings.autoSelectIcon && (supportManager.canUseProFeatures || ProFeatureContext.autoIcons.isFree) {
             Task {
                 await autoClassifyIcon(recording: recording)
             }

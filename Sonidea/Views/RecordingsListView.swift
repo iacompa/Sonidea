@@ -776,12 +776,20 @@ struct RecordingIconTile: View {
         return palette.textPrimary
     }
 
+    /// Background: 20% of custom color when set, otherwise theme surface
+    private var chipBackground: Color {
+        if let hex = recording.iconColorHex, let c = Color(hex: hex) {
+            return c.opacity(0.2)
+        }
+        return palette.surface
+    }
+
     var body: some View {
         Image(systemName: recording.displayIconSymbol)
             .font(.system(size: 24))
             .foregroundColor(iconColor)
             .frame(width: 44, height: 44)
-            .background(palette.surface)
+            .background(chipBackground)
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
