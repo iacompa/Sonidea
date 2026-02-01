@@ -22,8 +22,9 @@ final class LocationManager: NSObject {
         didSet {
             if searchQuery.isEmpty {
                 searchResults = []
+                searchDebounceTask?.cancel()
             } else {
-                searchCompleter.queryFragment = searchQuery
+                debounceSearchQuery(searchQuery)
             }
         }
     }
@@ -32,6 +33,8 @@ final class LocationManager: NSObject {
 
     private let locationManager = CLLocationManager()
     private let searchCompleter = MKLocalSearchCompleter()
+    private var searchDebounceTask: Task<Void, Never>?
+    private var lastReverseGeocodeCoordinate: CLLocationCoordinate2D?
 
     override init() {
         super.init()
@@ -121,7 +124,16 @@ final class LocationManager: NSObject {
         }
     }
 
+    /// Cache for reverse geocode results keyed by rounded coordinate to avoid redundant API calls
+    private var reverseGeocodeCache: [String: String] = [:]
+
     func reverseGeocode(_ coordinate: CLLocationCoordinate2D) async -> String? {
+        // Use rounded coordinates as cache key (~100m precision)
+        let cacheKey = "\(String(format: "%.3f", coordinate.latitude)),\(String(format: "%.3f", coordinate.longitude))"
+        if let cached = reverseGeocodeCache[cacheKey] {
+            return cached
+        }
+
         let geocoder = CLGeocoder()
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
 
@@ -133,7 +145,11 @@ final class LocationManager: NSObject {
             if let name = placemark.name { labelParts.append(name) }
             if let locality = placemark.locality { labelParts.append(locality) }
 
-            return labelParts.isEmpty ? nil : labelParts.joined(separator: ", ")
+            let result = labelParts.isEmpty ? nil : labelParts.joined(separator: ", ")
+            if let result {
+                reverseGeocodeCache[cacheKey] = result
+            }
+            return result
         } catch {
             return nil
         }
@@ -142,6 +158,19 @@ final class LocationManager: NSObject {
     func clearSearch() {
         searchQuery = ""
         searchResults = []
+        searchDebounceTask?.cancel()
+    }
+
+    // MARK: - Debounce Helpers
+
+    /// Debounce search query updates to avoid rapid-fire MKLocalSearchCompleter requests
+    private func debounceSearchQuery(_ query: String) {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self.searchCompleter.queryFragment = query
+        }
     }
 }
 

@@ -39,6 +39,9 @@ struct TipJarView: View {
                     // Restore purchases
                     restoreButton
 
+                    // Legal compliance footer
+                    legalFooter
+
                     // Suggestions & Review
                     suggestionsButton
                     reviewButton
@@ -136,30 +139,57 @@ struct TipJarView: View {
                 .foregroundColor(palette.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            ForEach(visiblePlans, id: \.self) { plan in
-                PlanCard(plan: plan, isBestValue: plan == .annual) {
-                    Task {
-                        await manager.purchase(plan: plan)
+            if manager.productsLoadFailed {
+                VStack(spacing: 8) {
+                    Text("Could not load subscription options.")
+                        .font(.subheadline)
+                        .foregroundColor(palette.textSecondary)
+                    Button {
+                        manager.retryLoadProducts()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Retry")
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(palette.accent)
+                    }
+                }
+                .padding(.vertical, 12)
+            } else if manager.isLoadingProducts {
+                ProgressView()
+                    .padding(.vertical, 12)
+            } else if manager.products.isEmpty {
+                Text("Subscriptions temporarily unavailable. Please try again later.")
+                    .font(.subheadline)
+                    .foregroundColor(palette.textSecondary)
+                    .padding(.vertical, 12)
+            } else {
+                ForEach(visiblePlans, id: \.self) { plan in
+                    PlanCard(plan: plan, isBestValue: plan == .annual) {
+                        Task {
+                            await manager.purchase(plan: plan)
+                        }
+                    }
+
+                    if plan == .annual && manager.isAnnualTrialEligible {
+                        Text("Cancel anytime during the 14-day trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
+                            .font(.system(size: 10))
+                            .foregroundColor(palette.textSecondary)
+                            .padding(.horizontal, 4)
+                            .padding(.top, -4)
                     }
                 }
 
-                if plan == .annual && manager.isAnnualTrialEligible {
-                    Text("Cancel anytime during the 14-day trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
-                        .font(.system(size: 10))
-                        .foregroundColor(palette.textSecondary)
-                        .padding(.horizontal, 4)
-                        .padding(.top, -4)
-                }
-            }
-
-            // "See other plans" for subscribed users who haven't expanded (not on annual)
-            if manager.isSubscribed && manager.currentPlan != .annual && !showAllPlans {
-                Button {
-                    withAnimation { showAllPlans = true }
-                } label: {
-                    Text("See all plans")
-                        .font(.subheadline)
-                        .foregroundColor(palette.textSecondary)
+                // "See other plans" for subscribed users who haven't expanded (not on annual)
+                if manager.isSubscribed && manager.currentPlan != .annual && !showAllPlans {
+                    Button {
+                        withAnimation { showAllPlans = true }
+                    } label: {
+                        Text("See all plans")
+                            .font(.subheadline)
+                            .foregroundColor(palette.textSecondary)
+                    }
                 }
             }
         }
@@ -313,6 +343,44 @@ struct TipJarView: View {
             }
         }
         .disabled(manager.isPurchasing)
+    }
+
+    // MARK: - Legal Footer
+
+    private var legalFooter: some View {
+        VStack(spacing: 10) {
+            Text("Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. You can manage and cancel subscriptions in your device's Settings > [your name] > Subscriptions.")
+                .font(.system(size: 10))
+                .foregroundColor(palette.textSecondary)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 16) {
+                Button("Privacy Policy") {
+                    if let url = URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df") {
+                        openURL(url)
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundColor(palette.accent)
+
+                Button("Terms of Use") {
+                    if let url = URL(string: "https://www.notion.so/sonidea/Sonidea-Terms-of-Use-2f72934c965380b19a42f7967e2295df") {
+                        openURL(url)
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundColor(palette.accent)
+
+                Button("Manage Subscription") {
+                    if let url = URL(string: "itms-apps://apps.apple.com/account/subscriptions") {
+                        openURL(url)
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundColor(palette.accent)
+            }
+        }
+        .padding(.horizontal, 8)
     }
 
     // MARK: - Suggestions
@@ -622,6 +690,9 @@ struct PaywallView: View {
                 showShareSheet = true
             } catch {
                 isExporting = false
+                #if DEBUG
+                print("Export failed: \(error.localizedDescription)")
+                #endif
             }
         }
     }

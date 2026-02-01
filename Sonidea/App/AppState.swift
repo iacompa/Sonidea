@@ -26,12 +26,37 @@ final class AppState {
     private static let logger = Logger(subsystem: "com.iacompa.sonidea", category: "AppState")
 
     var recordings: [RecordingItem] = [] {
-        didSet { recordingsContentVersion += 1 }
+        didSet {
+            recordingsContentVersion += 1
+            invalidateRecordingsCache()
+        }
     }
     /// Increments on any recordings mutation; views can observe this to detect content changes
     private(set) var recordingsContentVersion: Int = 0
     var tags: [Tag] = []
-    var albums: [Album] = []
+    var albums: [Album] = [] {
+        didSet { invalidateAlbumsCache() }
+    }
+
+    // MARK: - Cached Filtered Arrays
+
+    /// Cached filtered arrays, invalidated when source arrays change
+    private var _cachedActiveRecordings: [RecordingItem]?
+    private var _cachedTrashedRecordings: [RecordingItem]?
+    private var _cachedRecordingsWithLocation: [RecordingItem]?
+    private var _cachedSharedAlbums: [Album]?
+    private var _cachedPersonalAlbums: [Album]?
+
+    private func invalidateRecordingsCache() {
+        _cachedActiveRecordings = nil
+        _cachedTrashedRecordings = nil
+        _cachedRecordingsWithLocation = nil
+    }
+
+    private func invalidateAlbumsCache() {
+        _cachedSharedAlbums = nil
+        _cachedPersonalAlbums = nil
+    }
     var projects: [Project] = []
     var overdubGroups: [OverdubGroup] = []
     var appearanceMode: AppearanceMode = .system {
@@ -348,23 +373,32 @@ final class AppState {
 
     // MARK: - Filtered Recording Lists
 
-    /// Active recordings (not trashed)
+    /// Active recordings (not trashed) — cached, invalidated when recordings change
     var activeRecordings: [RecordingItem] {
-        recordings.filter { !$0.isTrashed }
+        if let cached = _cachedActiveRecordings { return cached }
+        let result = recordings.filter { !$0.isTrashed }
+        _cachedActiveRecordings = result
+        return result
     }
 
-    /// Trashed recordings
+    /// Trashed recordings — cached, invalidated when recordings change
     var trashedRecordings: [RecordingItem] {
-        recordings.filter { $0.isTrashed }
+        if let cached = _cachedTrashedRecordings { return cached }
+        let result = recordings.filter { $0.isTrashed }
+        _cachedTrashedRecordings = result
+        return result
     }
 
     var trashedCount: Int {
         trashedRecordings.count
     }
 
-    /// Recordings with coordinates
+    /// Recordings with coordinates — cached, invalidated when recordings change
     var recordingsWithLocation: [RecordingItem] {
-        activeRecordings.filter { $0.hasCoordinates }
+        if let cached = _cachedRecordingsWithLocation { return cached }
+        let result = activeRecordings.filter { $0.hasCoordinates }
+        _cachedRecordingsWithLocation = result
+        return result
     }
 
     // MARK: - Recording Management
@@ -395,15 +429,23 @@ final class AppState {
         nextRecordingNumber += 1
         saveNextRecordingNumber()
 
+        // Add metronome BPM note if recorded with metronome
+        var notes = ""
+        if rawData.wasRecordedWithMetronome, let bpm = rawData.metronomeBPM {
+            notes = "Recorded with \(Int(bpm)) BPM metronome"
+        }
+
         let recording = RecordingItem(
             fileURL: rawData.fileURL,
             createdAt: rawData.createdAt,
             duration: rawData.duration,
             title: title,
+            notes: notes,
             albumID: Album.draftsID,
             locationLabel: rawData.locationLabel,
             latitude: rawData.latitude,
-            longitude: rawData.longitude
+            longitude: rawData.longitude,
+            wasRecordedWithMetronome: rawData.wasRecordedWithMetronome
         )
 
         recordings.insert(recording, at: 0)
@@ -758,14 +800,20 @@ final class AppState {
 
     // MARK: - Shared Album Management
 
-    /// Get all shared albums
+    /// Get all shared albums — cached, invalidated when albums change
     var sharedAlbums: [Album] {
-        albums.filter { $0.isShared }
+        if let cached = _cachedSharedAlbums { return cached }
+        let result = albums.filter { $0.isShared }
+        _cachedSharedAlbums = result
+        return result
     }
 
-    /// Get non-shared albums (for album picker sections)
+    /// Get non-shared albums (for album picker sections) — cached, invalidated when albums change
     var personalAlbums: [Album] {
-        albums.filter { !$0.isShared }
+        if let cached = _cachedPersonalAlbums { return cached }
+        let result = albums.filter { !$0.isShared }
+        _cachedPersonalAlbums = result
+        return result
     }
 
     /// Add a newly created shared album
@@ -1412,8 +1460,11 @@ final class AppState {
         // Primary: file-based with checksum and backup rotation
         DataSafetyFileOps.saveSync(recordings, collection: .recordings)
         // Fallback: keep UserDefaults in sync for one release cycle
-        if let data = try? JSONEncoder().encode(recordings) {
+        do {
+            let data = try JSONEncoder().encode(recordings)
             UserDefaults.standard.set(data, forKey: recordingsKey)
+        } catch {
+            Self.logger.error("Failed to encode recordings for UserDefaults fallback: \(error.localizedDescription, privacy: .public)")
         }
     }
 

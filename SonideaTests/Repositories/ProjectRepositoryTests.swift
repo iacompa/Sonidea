@@ -30,7 +30,7 @@ struct ProjectRepositoryTests {
             TestFixtures.makeRecording(title: "V1", projectId: project.id, versionIndex: 1),
             TestFixtures.makeRecording(title: "V2", projectId: project.id, versionIndex: 2),
             TestFixtures.makeRecording(title: "Other"),
-            TestFixtures.makeRecording(title: "Trashed", projectId: project.id, trashedAt: Date())
+            TestFixtures.makeRecording(title: "Trashed", trashedAt: Date(), projectId: project.id)
         ]
         let result = ProjectRepository.recordings(in: project, from: recordings)
         #expect(result.count == 2)

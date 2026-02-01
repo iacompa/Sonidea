@@ -504,6 +504,9 @@ final class AudioSessionManager {
     func configureForOverdub(quality: RecordingQualityPreset, settings: AppSettings) throws {
         let session = AVAudioSession.sharedInstance()
 
+        // Remember settings so route-change handler can reapply preferred input during overdub
+        lastAppliedSettings = settings
+
         // IMPORTANT: For overdub (simultaneous record + playback), we CANNOT use A2DP.
         // A2DP is output-only (no microphone). We must use HFP for Bluetooth which supports
         // both input and output. Use .allowBluetooth (enables HFP) but NOT .allowBluetoothA2DP.
@@ -548,6 +551,10 @@ final class AudioSessionManager {
             #endif
         }
 
+        // Apply preferred input BEFORE activation so the session activates
+        // with the correct input already selected (matches configureForRecording pattern).
+        applyPreferredInput(from: settings)
+
         // Activate the session
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
@@ -574,7 +581,8 @@ final class AudioSessionManager {
             #endif
         }
 
-        // Apply preferred input (prefer built-in mic for overdub unless user has external)
+        // Reapply preferred input after activation — activation may have
+        // changed the route, especially with Bluetooth HFP negotiation.
         applyPreferredInput(from: settings)
 
         // Refresh inputs after activation
@@ -706,5 +714,87 @@ final class AudioSessionManager {
     /// Clear the engine restart flag after handling
     func clearEngineRestartFlag() {
         requiresEngineRestart = false
+    }
+}
+
+// MARK: - Always-On Audio Diagnostics
+
+/// Diagnostic logging that runs in BOTH Debug and Release builds.
+/// Critical for diagnosing Bluetooth and "no audio captured" issues in TestFlight.
+enum AudioDiagnostics {
+
+    /// Log comprehensive state at recording start
+    static func logRecordingStart(
+        context: String,
+        outputURL: URL,
+        session: AVAudioSession = .sharedInstance(),
+        engine: AVAudioEngine? = nil
+    ) {
+        let route = session.currentRoute
+        let fm = FileManager.default
+        let outputDir = outputURL.deletingLastPathComponent()
+        let dirExists = fm.fileExists(atPath: outputDir.path)
+
+        var freeSpace: Int64 = -1
+        if let attrs = try? fm.attributesOfFileSystem(forPath: outputDir.path),
+           let free = attrs[.systemFreeSize] as? Int64 {
+            freeSpace = free
+        }
+
+        var log = "📊 [\(context)] Recording start diagnostics:\n"
+        log += "  File: \(outputURL.lastPathComponent)\n"
+        log += "  Dir exists: \(dirExists), free space: \(freeSpace / 1_048_576)MB\n"
+        log += "  Session: cat=\(session.category.rawValue) mode=\(session.mode.rawValue)"
+        log += " sr=\(session.sampleRate) prefSR=\(session.preferredSampleRate)"
+        log += " ioBuf=\(String(format: "%.4f", session.ioBufferDuration))s inputAvail=\(session.isInputAvailable)\n"
+        log += "  Preferred input: \(session.preferredInput?.portName ?? "nil")\n"
+        log += "  Route inputs: \(route.inputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", "))\n"
+        log += "  Route outputs: \(route.outputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", "))\n"
+
+        if let engine = engine {
+            let inputNode = engine.inputNode
+            let inFmt = inputNode.inputFormat(forBus: 0)
+            let outFmt = inputNode.outputFormat(forBus: 0)
+            let mixFmt = engine.mainMixerNode.outputFormat(forBus: 0)
+            log += "  Engine running: \(engine.isRunning)\n"
+            log += "  InputNode hwFormat: sr=\(inFmt.sampleRate) ch=\(inFmt.channelCount)\n"
+            log += "  InputNode outFormat: sr=\(outFmt.sampleRate) ch=\(outFmt.channelCount)\n"
+            log += "  MainMixer outFormat: sr=\(mixFmt.sampleRate) ch=\(mixFmt.channelCount)\n"
+        }
+
+        print(log)
+    }
+
+    /// Log diagnostic info when "no audio captured" or post-start validation fails
+    static func logNoAudioCaptured(
+        context: String,
+        fileURL: URL,
+        bufferCount: Int,
+        writeErrorCount: Int,
+        lastWriteError: String?
+    ) {
+        let fm = FileManager.default
+        var fileSize: Int64 = -1
+        if fm.fileExists(atPath: fileURL.path),
+           let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+           let size = attrs[.size] as? Int64 {
+            fileSize = size
+        }
+
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+
+        var log = "🚨 [\(context)] NO AUDIO CAPTURED diagnostics:\n"
+        log += "  File: \(fileURL.lastPathComponent), size: \(fileSize) bytes\n"
+        log += "  Buffers written: \(bufferCount)\n"
+        log += "  Write errors: \(writeErrorCount)\n"
+        if let err = lastWriteError {
+            log += "  Last write error: \(err)\n"
+        }
+        log += "  Session sr=\(session.sampleRate) cat=\(session.category.rawValue)\n"
+        log += "  Route inputs: \(route.inputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", "))\n"
+        log += "  Route outputs: \(route.outputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", "))\n"
+
+        print(log)
     }
 }

@@ -132,8 +132,7 @@ struct RecordingDetailView: View {
     @State private var isExporting = false
     @State private var showExportFormatPicker = false
     @State private var showAudioEditTools = false
-    @State private var showToolsPanel = false
-    @State private var selectedEditTool: EditToolType = .fade
+    @State private var activeEffect: EditToolType? = nil
 
     // Tool settings state (persists across panel open/close while editing)
     @State private var appliedFadeIn: TimeInterval = 0
@@ -149,6 +148,7 @@ struct RecordingDetailView: View {
 
     @State private var appliedCompressGain: Float = 0
     @State private var appliedCompressPeakReduction: Float = 0
+    @State private var appliedCompressMix: Float = 1.0
     @State private var hasCompressApplied = false
 
     @State private var appliedReverbRoomSize: Float = 1.0
@@ -829,6 +829,7 @@ struct RecordingDetailView: View {
                                 appliedGateThreshold = -40
                                 appliedCompressGain = 0
                                 appliedCompressPeakReduction = 0
+                                appliedCompressMix = 1.0
                                 appliedReverbRoomSize = 1.0
                                 appliedReverbPreDelay = 20
                                 appliedReverbDecay = 2.0
@@ -838,7 +839,7 @@ struct RecordingDetailView: View {
                                 appliedEchoFeedback = 0.3
                                 appliedEchoDamping = 0.3
                                 appliedEchoWetDry = 0.3
-                                showToolsPanel = false
+                                activeEffect = nil
                                 // Persist markers immediately when exiting edit mode
                                 if editedMarkers != currentRecording.markers {
                                     saveMarkersOnly()
@@ -950,7 +951,7 @@ struct RecordingDetailView: View {
                     )
                     // Fade curve overlay (covers waveform area only, not the time ruler)
                     .overlay(alignment: .bottom) {
-                        if (hasFadeApplied || (showToolsPanel && selectedEditTool == .fade)) && (appliedFadeIn > 0 || appliedFadeOut > 0) {
+                        if (hasFadeApplied || activeEffect == .fade) && (appliedFadeIn > 0 || appliedFadeOut > 0) {
                             FadeCurveOverlay(
                                 fadeInDuration: appliedFadeIn,
                                 fadeOutDuration: appliedFadeOut,
@@ -988,85 +989,6 @@ struct RecordingDetailView: View {
             // Edit mode: Selection info and actions
             if isEditingWaveform {
                 VStack(spacing: 4) {
-                    // Slide-up tools panel (appears between waveform and IN/OUT controls)
-                    if showToolsPanel {
-                        EditToolsSlidePanel(
-                            selectedTool: $selectedEditTool,
-                            isProcessing: $isProcessingEdit,
-                            fadeIn: $appliedFadeIn,
-                            fadeOut: $appliedFadeOut,
-                            fadeCurve: $appliedFadeCurve,
-                            fadeDuration: effectiveEditDuration,
-                            hasFadeApplied: hasFadeApplied,
-                            onApplyFade: { fadeIn, fadeOut, curve in
-                                // Undo previous application if re-applying with new params
-                                if hasFadeApplied { undoLastEdit() }
-                                hasFadeApplied = true
-                                applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
-                            },
-                            onRemoveFade: { removeFade() },
-                            peakTarget: $appliedPeakTarget,
-                            hasPeakApplied: hasPeakApplied,
-                            onApplyPeak: { target in
-                                if hasPeakApplied { undoLastEdit() }
-                                hasPeakApplied = true
-                                applyNormalize(targetDb: target)
-                            },
-                            onRemovePeak: { removePeak() },
-                            gateThreshold: $appliedGateThreshold,
-                            hasGateApplied: hasGateApplied,
-                            onApplyGate: { threshold in
-                                if hasGateApplied { undoLastEdit() }
-                                hasGateApplied = true
-                                applyNoiseGate(threshold: threshold)
-                            },
-                            onRemoveGate: { removeGate() },
-                            compGain: $appliedCompressGain,
-                            compReduction: $appliedCompressPeakReduction,
-                            hasCompressApplied: hasCompressApplied,
-                            onApplyCompress: { gain, reduction in
-                                if hasCompressApplied { undoLastEdit() }
-                                hasCompressApplied = true
-                                applyCompression(gain: gain, peakReduction: reduction)
-                            },
-                            onRemoveCompress: { removeCompression() },
-                            reverbRoomSize: $appliedReverbRoomSize,
-                            reverbPreDelay: $appliedReverbPreDelay,
-                            reverbDecay: $appliedReverbDecay,
-                            reverbDamping: $appliedReverbDamping,
-                            reverbWetDry: $appliedReverbWetDry,
-                            hasReverbApplied: hasReverbApplied,
-                            onApplyReverb: { room, preDelay, decay, damping, wetDry in
-                                if hasReverbApplied { undoLastEdit() }
-                                hasReverbApplied = true
-                                applyReverb(roomSize: room, preDelay: preDelay, decay: decay, damping: damping, wetDry: wetDry)
-                            },
-                            onRemoveReverb: { removeReverb() },
-                            echoDelay: $appliedEchoDelay,
-                            echoFeedback: $appliedEchoFeedback,
-                            echoDamping: $appliedEchoDamping,
-                            echoWetDry: $appliedEchoWetDry,
-                            hasEchoApplied: hasEchoApplied,
-                            onApplyEcho: { delay, feedback, damping, wetDry in
-                                if hasEchoApplied { undoLastEdit() }
-                                hasEchoApplied = true
-                                applyEcho(delay: delay, feedback: feedback, damping: damping, wetDry: wetDry)
-                            },
-                            onRemoveEcho: { removeEcho() },
-                            eqSettings: $localEQSettings,
-                            onEQChanged: {
-                                // Debounced by panel (400ms) — only saves to disk
-                                saveEQSettings()
-                            },
-                            onClose: {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                    showToolsPanel = false
-                                }
-                            }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
                     // Silence debug strip (only when highlighting silence)
                     if case .highlighted = silenceMode {
                         SilenceDebugStrip(
@@ -1077,7 +999,7 @@ struct RecordingDetailView: View {
                         .padding(.horizontal, 8)
                     }
 
-                    // Compact playback controls bar (positioned close to waveform)
+                    // Compact playback controls bar (above toolbar)
                     HStack(spacing: 12) {
                         // Speed button
                         Button {
@@ -1164,25 +1086,94 @@ struct RecordingDetailView: View {
                     }
                     .padding(.horizontal, 4)
 
-                    // Edit actions: Trim, Cut, EQ, Precision + More Tools
-                    EditActionsRow(
+                    // Unified edit toolbar (scrollable: Trim | Cut | Precision | -- | EQ | Fade | ...)
+                    UnifiedEditToolbar(
                         canTrim: canPerformTrim,
                         canCut: canPerformCut,
                         isProcessing: isProcessingEdit,
                         isPrecisionMode: $isPrecisionMode,
-                        showToolsPanel: $showToolsPanel,
+                        activeEffect: $activeEffect,
+                        appliedEffects: currentAppliedEffects,
+                        isPro: appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree,
                         onTrim: performTrim,
                         onCut: performCut,
-                        onMoreTapped: {
-                            if appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                    showToolsPanel.toggle()
-                                }
-                            } else {
-                                proUpgradeContext = .editMode
-                            }
+                        onProGate: {
+                            proUpgradeContext = .editMode
                         }
                     )
+
+                    // Effect parameter panel (auto-height, shown when an effect is active)
+                    if let effect = activeEffect {
+                        EffectParameterPanel(
+                            activeEffect: effect,
+                            isProcessing: $isProcessingEdit,
+                            fadeIn: $appliedFadeIn,
+                            fadeOut: $appliedFadeOut,
+                            fadeCurve: $appliedFadeCurve,
+                            fadeDuration: effectiveEditDuration,
+                            hasFadeApplied: hasFadeApplied,
+                            onApplyFade: { fadeIn, fadeOut, curve in
+                                if hasFadeApplied { undoLastEdit() }
+                                hasFadeApplied = true
+                                applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
+                            },
+                            onRemoveFade: { removeFade() },
+                            peakTarget: $appliedPeakTarget,
+                            hasPeakApplied: hasPeakApplied,
+                            onApplyPeak: { target in
+                                if hasPeakApplied { undoLastEdit() }
+                                hasPeakApplied = true
+                                applyNormalize(targetDb: target)
+                            },
+                            onRemovePeak: { removePeak() },
+                            gateThreshold: $appliedGateThreshold,
+                            hasGateApplied: hasGateApplied,
+                            onApplyGate: { threshold in
+                                if hasGateApplied { undoLastEdit() }
+                                hasGateApplied = true
+                                applyNoiseGate(threshold: threshold)
+                            },
+                            onRemoveGate: { removeGate() },
+                            compGain: $appliedCompressGain,
+                            compReduction: $appliedCompressPeakReduction,
+                            compMix: $appliedCompressMix,
+                            hasCompressApplied: hasCompressApplied,
+                            onApplyCompress: { gain, reduction, mix in
+                                if hasCompressApplied { undoLastEdit() }
+                                hasCompressApplied = true
+                                applyCompression(gain: gain, peakReduction: reduction, mix: mix)
+                            },
+                            onRemoveCompress: { removeCompression() },
+                            reverbRoomSize: $appliedReverbRoomSize,
+                            reverbPreDelay: $appliedReverbPreDelay,
+                            reverbDecay: $appliedReverbDecay,
+                            reverbDamping: $appliedReverbDamping,
+                            reverbWetDry: $appliedReverbWetDry,
+                            hasReverbApplied: hasReverbApplied,
+                            onApplyReverb: { room, preDelay, decay, damping, wetDry in
+                                if hasReverbApplied { undoLastEdit() }
+                                hasReverbApplied = true
+                                applyReverb(roomSize: room, preDelay: preDelay, decay: decay, damping: damping, wetDry: wetDry)
+                            },
+                            onRemoveReverb: { removeReverb() },
+                            echoDelay: $appliedEchoDelay,
+                            echoFeedback: $appliedEchoFeedback,
+                            echoDamping: $appliedEchoDamping,
+                            echoWetDry: $appliedEchoWetDry,
+                            hasEchoApplied: hasEchoApplied,
+                            onApplyEcho: { delay, feedback, damping, wetDry in
+                                if hasEchoApplied { undoLastEdit() }
+                                hasEchoApplied = true
+                                applyEcho(delay: delay, feedback: feedback, damping: damping, wetDry: wetDry)
+                            },
+                            onRemoveEcho: { removeEcho() },
+                            eqSettings: $localEQSettings,
+                            onEQChanged: {
+                                saveEQSettings()
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
 
                     // Processing indicator
                     if isProcessingEdit {
@@ -1343,6 +1334,18 @@ struct RecordingDetailView: View {
     }
 
     // MARK: - Waveform Edit Helpers
+
+    private var currentAppliedEffects: Set<EditToolType> {
+        var effects = Set<EditToolType>()
+        if localEQSettings != .flat { effects.insert(.eq) }
+        if hasFadeApplied { effects.insert(.fade) }
+        if hasPeakApplied { effects.insert(.peak) }
+        if hasGateApplied { effects.insert(.gate) }
+        if hasCompressApplied { effects.insert(.compress) }
+        if hasReverbApplied { effects.insert(.reverb) }
+        if hasEchoApplied { effects.insert(.echo) }
+        return effects
+    }
 
     private var canPerformTrim: Bool {
         // Can trim if there is an active selection that is not the entire duration
@@ -1774,24 +1777,18 @@ struct RecordingDetailView: View {
         appliedFadeIn = 0
         appliedFadeOut = 0
         appliedFadeCurve = .sCurve
-        skipSilenceResultMessage = "Fade removed"
-        showSkipSilenceResult = true
     }
 
     private func removePeak() {
         undoLastEdit()
         hasPeakApplied = false
         appliedPeakTarget = -0.3
-        skipSilenceResultMessage = "Normalize removed"
-        showSkipSilenceResult = true
     }
 
     private func removeGate() {
         undoLastEdit()
         hasGateApplied = false
         appliedGateThreshold = -40
-        skipSilenceResultMessage = "Gate removed"
-        showSkipSilenceResult = true
     }
 
     private func removeCompression() {
@@ -1799,8 +1796,7 @@ struct RecordingDetailView: View {
         hasCompressApplied = false
         appliedCompressGain = 0
         appliedCompressPeakReduction = 0
-        skipSilenceResultMessage = "Compression removed"
-        showSkipSilenceResult = true
+        appliedCompressMix = 1.0
     }
 
     private func removeReverb() {
@@ -1811,8 +1807,6 @@ struct RecordingDetailView: View {
         appliedReverbDecay = 2.0
         appliedReverbDamping = 0.5
         appliedReverbWetDry = 0.3
-        skipSilenceResultMessage = "Reverb removed"
-        showSkipSilenceResult = true
     }
 
     private func removeEcho() {
@@ -1822,8 +1816,6 @@ struct RecordingDetailView: View {
         appliedEchoFeedback = 0.3
         appliedEchoDamping = 0.3
         appliedEchoWetDry = 0.3
-        skipSilenceResultMessage = "Echo removed"
-        showSkipSilenceResult = true
     }
 
     private func applyReverb(roomSize: Float, preDelay: Float, decay: Float, damping: Float, wetDry: Float) {
@@ -1855,8 +1847,6 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Reverb applied"
-                    showSkipSilenceResult = true
                 }
             }
         }
@@ -1890,14 +1880,12 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Echo applied"
-                    showSkipSilenceResult = true
                 }
             }
         }
     }
 
-    private func applyCompression(gain: Float, peakReduction: Float) {
+    private func applyCompression(gain: Float, peakReduction: Float, mix: Float = 1.0) {
         silenceMode = .idle
         let undoSnapshot = createUndoSnapshot(description: "Compress")
         editHistory.pushUndo(undoSnapshot)
@@ -1910,7 +1898,8 @@ struct RecordingDetailView: View {
             let result = await AudioEditor.shared.compressor(
                 sourceURL: sourceURL,
                 makeupGainDb: gain,
-                peakReduction: peakReduction
+                peakReduction: peakReduction,
+                mix: mix
             )
             await MainActor.run {
                 if result.success {
@@ -1923,8 +1912,6 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Compression applied"
-                    showSkipSilenceResult = true
                 }
             }
         }
@@ -1957,8 +1944,6 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Fade applied"
-                    showSkipSilenceResult = true
                 }
             }
         }
@@ -1989,8 +1974,6 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Normalized audio"
-                    showSkipSilenceResult = true
                 }
             }
         }
@@ -2021,8 +2004,6 @@ struct RecordingDetailView: View {
                     playback.load(url: result.outputURL)
                     playback.seek(to: savedTime)
                     if wasPlaying { playback.play() }
-                    skipSilenceResultMessage = "Noise gate applied"
-                    showSkipSilenceResult = true
                 }
             }
         }

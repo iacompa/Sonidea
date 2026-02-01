@@ -3,8 +3,9 @@
 //  Sonidea
 //
 //  Synthesized metronome click track for recording.
-//  Click plays through the audio engine's main mixer (speakers)
+//  Click plays through the audio engine's main mixer (speakers/headphones)
 //  but is NOT captured by the recording tap on the limiter node.
+//  Requires headphones (wired or Bluetooth) — will not play through speakers.
 //
 //  Audio graph:
 //    RECORDING: InputNode -> GainMixer -> Limiter -> [TAP -> File]
@@ -24,18 +25,30 @@ final class MetronomeEngine {
     var isEnabled: Bool = false
     var bpm: Double = 120 {
         didSet {
-            let clamped = max(40.0, min(240.0, bpm))
+            let clamped = max(10.0, min(240.0, bpm))
             if bpm != clamped {
                 bpm = clamped
                 return
             }
             updateRenderParams()
+            // Update live preview BPM if previewing
+            if isPreviewing { updatePreviewParams() }
         }
     }
-    var beatsPerBar: Int = 4 { didSet { updateRenderParams() } }
+    var beatsPerBar: Int = 4 {
+        didSet {
+            updateRenderParams()
+            if isPreviewing { updatePreviewParams() }
+        }
+    }
     var beatUnit: Int = 4  // 4=quarter, 8=eighth
     var countInBars: Int = 0  // 0=no count-in, 1, or 2
-    var volume: Float = 0.8 { didSet { updateRenderParams() } }
+    var volume: Float = 0.8 {
+        didSet {
+            updateRenderParams()
+            if isPreviewing { updatePreviewParams() }
+        }
+    }
 
     // MARK: - Runtime State
 
@@ -43,9 +56,22 @@ final class MetronomeEngine {
     private(set) var isCountingIn = false
     private(set) var currentBeat: Int = 0
 
+    /// Whether standalone preview is active (from settings, outside of recording)
+    private(set) var isPreviewing = false
+
+    /// Whether headphones are currently connected (wired or Bluetooth)
+    private(set) var headphonesConnected = false
+
     private var sourceNode: AVAudioSourceNode?
     private var sampleRate: Double = 44100
     private var clickActive = false
+
+    // MARK: - Preview Engine (standalone playback outside of recording)
+
+    private var previewEngine: AVAudioEngine?
+    private var previewSourceNode: AVAudioSourceNode?
+    /// nonisolated(unsafe) so deinit can remove the observer
+    nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
 
     /// Shared mutable pointer for the render callback's running sample index.
     /// Allocated once and reused across source node recreations so that
@@ -55,6 +81,17 @@ final class MetronomeEngine {
         ptr.initialize(to: 0)
         return ptr
     }()
+
+    /// Shared mutable pointer for the current beat index, written by the
+    /// real-time render callback and polled from the main thread via timer.
+    private let currentBeatPtr: UnsafeMutablePointer<Int32> = {
+        let ptr = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        ptr.initialize(to: 0)
+        return ptr
+    }()
+
+    /// Timer that polls `currentBeatPtr` and updates the observable `currentBeat`.
+    private var beatPollTimer: Timer?
 
     // MARK: - Click Parameters (wood block synthesis)
 
@@ -107,7 +144,20 @@ final class MetronomeEngine {
         // The pointer is owned by `self` and persists across callbacks and start/stop cycles.
         let sampleIndexPtr = self.renderSampleIndexPtr
 
-        let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+        // Explicitly specify the source node's render format to match the
+        // connection format. Without this, the source node uses the engine's
+        // default format (potentially stereo at a different sample rate),
+        // which can cause silence when connected with a mismatched format.
+        let renderFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+
+        let beatPtr = self.currentBeatPtr
+
+        let node = AVAudioSourceNode(format: renderFormat) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let frames = Int(frameCount)
 
@@ -144,21 +194,34 @@ final class MetronomeEngine {
             }
 
             let samplesPerBeat = sr * 60.0 / currentBPM
+            let samplesPerBeatInt = UInt64(samplesPerBeat)
+
+            // Derive running counters from the current sample index to avoid
+            // per-sample truncatingRemainder / modulo on the real-time thread.
+            // sampleInBeat: position within the current beat
+            // beatIndex: which beat we're on within the bar
+            var sampleInBeat: UInt64
+            var beatIndex: Int
+            if samplesPerBeatInt > 0 {
+                let totalBeats = currentSampleIndex / samplesPerBeatInt
+                sampleInBeat = currentSampleIndex - totalBeats * samplesPerBeatInt
+                beatIndex = Int(totalBeats % UInt64(beatsPerBar))
+            } else {
+                sampleInBeat = 0
+                beatIndex = 0
+            }
 
             for buffer in ablPointer {
                 guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
                 for i in 0..<frames {
-                    let sampleInBeat = Double(currentSampleIndex + UInt64(i)).truncatingRemainder(dividingBy: samplesPerBeat)
-                    let beatIndex = Int(Double(currentSampleIndex + UInt64(i)) / samplesPerBeat) % beatsPerBar
-
                     let isDownbeat = beatIndex == 0
                     let freq: Float = isDownbeat ? downbeatFreq : upbeatFreq
                     let dur: Float = isDownbeat ? downbeatDur : upbeatDur
-                    let durSamples = Double(dur) * sr
+                    let durSamples = UInt64(Double(dur) * sr)
 
                     if sampleInBeat < durSamples {
                         // Wood block synthesis: fundamental + inharmonic overtones + noise transient
-                        let t = Float(sampleInBeat / sr)
+                        let t = Float(Double(sampleInBeat) / sr)
 
                         // Noise transient for the initial "knock" (~2ms)
                         let noiseDecay = expf(-t * 2000)
@@ -183,14 +246,28 @@ final class MetronomeEngine {
                     } else {
                         data[i] = 0
                     }
+
+                    // Advance running counter; wrap at beat boundary
+                    sampleInBeat += 1
+                    if sampleInBeat >= samplesPerBeatInt {
+                        sampleInBeat = 0
+                        beatIndex += 1
+                        if beatIndex >= beatsPerBar {
+                            beatIndex = 0
+                        }
+                    }
                 }
             }
+
+            // Update the beat pointer for main-thread polling
+            beatPtr.pointee = Int32(beatIndex)
 
             sampleIndexPtr.pointee = currentSampleIndex + UInt64(frames)
             return noErr
         }
 
         self.sourceNode = node
+        print("[MetronomeEngine] createSourceNode: sampleRate=\(sampleRate) format=\(renderFormat)")
         return node
     }
 
@@ -198,9 +275,13 @@ final class MetronomeEngine {
 
     func start() {
         renderSampleIndexPtr.pointee = 0
+        currentBeatPtr.pointee = 0
+        currentBeat = 0
         clickActive = true
         isPlaying = true
         updateRenderParams()
+        startBeatPolling()
+        print("[MetronomeEngine] start: sr=\(sampleRate) bpm=\(bpm) vol=\(volume) beats=\(beatsPerBar) sourceNode=\(sourceNode != nil ? "attached" : "nil")")
     }
 
     func stop() {
@@ -208,7 +289,30 @@ final class MetronomeEngine {
         isPlaying = false
         isCountingIn = false
         renderSampleIndexPtr.pointee = 0
+        currentBeatPtr.pointee = 0
+        currentBeat = 0
         updateRenderParams()
+        stopBeatPolling()
+    }
+
+    // MARK: - Beat Polling
+
+    private func startBeatPolling() {
+        stopBeatPolling()
+        beatPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let beat = Int(self.currentBeatPtr.pointee)
+                if self.currentBeat != beat {
+                    self.currentBeat = beat
+                }
+            }
+        }
+    }
+
+    private func stopBeatPolling() {
+        beatPollTimer?.invalidate()
+        beatPollTimer = nil
     }
 
     /// Count in for N bars, then call completion when count-in finishes.
@@ -232,13 +336,152 @@ final class MetronomeEngine {
         }
     }
 
-    // Pointer cleanup: renderSampleIndexPtr is a `let` constant (8 bytes),
+    // MARK: - Headphone Detection
+
+    /// Check if headphones (wired or Bluetooth) are connected.
+    /// Uses AudioSessionManager if available, otherwise checks directly.
+    func checkHeadphones() -> Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        let session = AVAudioSession.sharedInstance()
+        for output in session.currentRoute.outputs {
+            switch output.portType {
+            case .headphones, .headsetMic, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .usbAudio:
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+        #endif
+    }
+
+    /// Update headphone state and auto-disable if disconnected during preview or recording
+    func updateHeadphoneStatus() {
+        headphonesConnected = checkHeadphones()
+    }
+
+    // MARK: - Standalone Preview (plays from Settings without recording)
+
+    /// Start a standalone metronome preview. Requires headphones.
+    /// Returns false if headphones are not connected.
+    @discardableResult
+    func startPreview() -> Bool {
+        // Check headphones first
+        updateHeadphoneStatus()
+        guard headphonesConnected else {
+            print("[MetronomeEngine] Preview blocked: no headphones detected")
+            return false
+        }
+
+        // Stop any existing preview
+        stopPreview()
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP])
+            try session.setActive(true)
+
+            let engine = AVAudioEngine()
+            let sr = session.sampleRate > 0 ? session.sampleRate : 44100
+            let clickNode = createSourceNode(sampleRate: sr)
+
+            engine.attach(clickNode)
+            let monoFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sr,
+                channels: 1,
+                interleaved: false
+            )!
+            engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
+
+            try engine.start()
+            start()
+
+            previewEngine = engine
+            previewSourceNode = clickNode
+            isPreviewing = true
+
+            // Observe route changes to auto-stop if headphones disconnect
+            observeRouteChanges()
+
+            print("[MetronomeEngine] Preview started: \(bpm) BPM, sr=\(sr)")
+            return true
+        } catch {
+            print("[MetronomeEngine] Preview failed: \(error)")
+            return false
+        }
+    }
+
+    /// Stop the standalone preview engine.
+    func stopPreview() {
+        guard isPreviewing else { return }
+
+        stop()
+
+        if let node = previewSourceNode, let engine = previewEngine {
+            engine.stop()
+            engine.detach(node)
+        }
+        previewEngine = nil
+        previewSourceNode = nil
+        isPreviewing = false
+        removeRouteChangeObserver()
+
+        print("[MetronomeEngine] Preview stopped")
+    }
+
+    /// Update preview engine params live (BPM, volume changes while previewing)
+    private func updatePreviewParams() {
+        // Render params are already updated via updateRenderParams() in didSet.
+        // The render callback reads them under lock, so live changes are automatic.
+    }
+
+    // MARK: - Route Change Observer
+
+    private func observeRouteChanges() {
+        removeRouteChangeObserver()
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateHeadphoneStatus()
+                if !self.headphonesConnected {
+                    // Auto-stop preview when headphones are removed
+                    if self.isPreviewing {
+                        self.stopPreview()
+                        print("[MetronomeEngine] Auto-stopped preview: headphones disconnected")
+                    }
+                }
+            }
+        }
+    }
+
+    private func removeRouteChangeObserver() {
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
+        }
+    }
+
+    // Pointer cleanup: renderSampleIndexPtr and currentBeatPtr are `let` constants (8 bytes each),
     // safe to access from nonisolated deinit. The render callback guards on
-    // `[weak self]` returning nil, so the pointer is not touched after dealloc.
+    // `[weak self]` returning nil, so pointers are not touched after dealloc.
+    // beatPollTimer uses [weak self] — it will no-op after dealloc.
+    // stop() invalidates the timer during normal lifecycle.
     // sourceNode is released automatically when the class is deallocated.
     deinit {
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         renderSampleIndexPtr.deinitialize(count: 1)
         renderSampleIndexPtr.deallocate()
+        currentBeatPtr.deinitialize(count: 1)
+        currentBeatPtr.deallocate()
     }
 
     // MARK: - Tap Tempo
@@ -272,7 +515,7 @@ final class MetronomeEngine {
         let avgInterval = totalInterval / Double(tapTimes.count - 1)
 
         if avgInterval > 0 {
-            bpm = min(240, max(40, 60.0 / avgInterval))
+            bpm = min(240, max(10, 60.0 / avgInterval))
         }
     }
 }

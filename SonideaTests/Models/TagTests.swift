@@ -10,6 +10,9 @@ import Foundation
 import SwiftUI
 @testable import Sonidea
 
+// Disambiguate Sonidea.Tag from Testing.Tag
+private typealias Tag = Sonidea.Tag
+
 struct TagTests {
 
     // MARK: - Favorite Tag ID Stability

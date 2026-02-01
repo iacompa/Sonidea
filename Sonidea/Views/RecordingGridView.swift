@@ -32,6 +32,10 @@ struct RecordingGridView: View {
     @State private var showMoveToAlbumSheet = false
     @State private var showSingleTagSheet = false
 
+    // Export format selection for single share
+    @State private var recordingToShare: RecordingItem?
+    @State private var showExportFormatPicker = false
+
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext?
     @State private var showTipJar = false
@@ -79,6 +83,13 @@ struct RecordingGridView: View {
         .iPadSheet(isPresented: $showBatchTagPicker) {
             BatchTagPickerSheet(selectedRecordingIDs: selectedRecordingIDs) {
                 clearSelection()
+            }
+        }
+        .sheet(isPresented: $showExportFormatPicker) {
+            ExportFormatPicker { format in
+                if let recording = recordingToShare {
+                    exportAndShare(recording, format: format)
+                }
             }
         }
         .sheet(isPresented: $showShareSheet) {
@@ -241,6 +252,11 @@ struct RecordingGridView: View {
         .padding(.vertical, 8)
     }
 
+    // Pre-computed album lookup for O(1) resolution in card rendering
+    private var albumLookup: [UUID: Album] {
+        Dictionary(uniqueKeysWithValues: appState.albums.map { ($0.id, $0) })
+    }
+
     // MARK: - Recordings Grid
 
     private var recordingsGrid: some View {
@@ -268,7 +284,8 @@ struct RecordingGridView: View {
                         },
                         onMenuAction: { action in
                             handleMenuAction(action, for: recording)
-                        }
+                        },
+                        preResolvedAlbum: .some(recording.albumID.flatMap { albumLookup[$0] })
                     )
                 }
             }
@@ -316,10 +333,15 @@ struct RecordingGridView: View {
     }
 
     private func shareRecording(_ recording: RecordingItem) {
+        recordingToShare = recording
+        showExportFormatPicker = true
+    }
+
+    private func exportAndShare(_ recording: RecordingItem, format: ExportFormat) {
         Task {
             do {
-                let wavURL = try await AudioExporter.shared.exportToWAV(recording: recording)
-                exportedURL = wavURL
+                let url = try await AudioExporter.shared.export(recording: recording, format: format)
+                exportedURL = url
                 showShareSheet = true
             } catch {
                 #if DEBUG
@@ -389,6 +411,9 @@ struct RecordingCardView: View {
     let onLongPress: () -> Void
     let onMenuAction: (RecordingCardMenuAction) -> Void
 
+    // Pre-resolved album to avoid O(n) scan per card during render passes
+    var preResolvedAlbum: Album??
+
     // Computed properties
     private var markerCount: Int {
         recording.markers.count
@@ -403,7 +428,8 @@ struct RecordingCardView: View {
     }
 
     private var album: Album? {
-        appState.album(for: recording.albumID)
+        if let resolved = preResolvedAlbum { return resolved }
+        return appState.album(for: recording.albumID)
     }
 
     private var isInSharedAlbum: Bool {
@@ -499,6 +525,7 @@ struct RecordingCardView: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.green)
             }
+
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)

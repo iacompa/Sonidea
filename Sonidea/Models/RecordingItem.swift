@@ -183,6 +183,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     /// For layers: points to the base recording ID
     var overdubSourceBaseId: UUID?
 
+    /// Whether the metronome/click track was active when this recording was made
+    var wasRecordedWithMetronome: Bool
+
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
 
@@ -456,6 +459,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         overdubIndex: Int? = nil,
         overdubOffsetSeconds: Double = 0,
         overdubSourceBaseId: UUID? = nil,
+        wasRecordedWithMetronome: Bool = false,
         modifiedAt: Date? = nil
     ) {
         self.id = id
@@ -496,6 +500,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.overdubIndex = overdubIndex
         self.overdubOffsetSeconds = overdubOffsetSeconds
         self.overdubSourceBaseId = overdubSourceBaseId
+        self.wasRecordedWithMetronome = wasRecordedWithMetronome
     }
 
     // MARK: - Codable with Migration Support
@@ -510,6 +515,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         case markers
         // Overdub fields
         case overdubGroupId, overdubRoleRaw, overdubIndex, overdubOffsetSeconds, overdubSourceBaseId
+        case wasRecordedWithMetronome
     }
 
     init(from decoder: Decoder) throws {
@@ -564,6 +570,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         overdubIndex = try container.decodeIfPresent(Int.self, forKey: .overdubIndex)
         overdubOffsetSeconds = try container.decodeIfPresent(Double.self, forKey: .overdubOffsetSeconds) ?? 0
         overdubSourceBaseId = try container.decodeIfPresent(UUID.self, forKey: .overdubSourceBaseId)
+
+        // Migration: metronome tracking with false default for existing recordings
+        wasRecordedWithMetronome = try container.decodeIfPresent(Bool.self, forKey: .wasRecordedWithMetronome) ?? false
     }
 }
 
@@ -575,6 +584,8 @@ struct RawRecordingData {
     let latitude: Double?
     let longitude: Double?
     let locationLabel: String
+    let wasRecordedWithMetronome: Bool
+    let metronomeBPM: Double?
 }
 
 // MARK: - Recording Spot (for Map clustering)

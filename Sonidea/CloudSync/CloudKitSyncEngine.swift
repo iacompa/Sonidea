@@ -1372,6 +1372,9 @@ extension RecordingItem {
         record["overdubOffsetSeconds"] = overdubOffsetSeconds
         record["overdubSourceBaseId"] = overdubSourceBaseId?.uuidString
 
+        // Metronome tracking
+        record["wasRecordedWithMetronome"] = wasRecordedWithMetronome
+
         // Icon classification fields
         record["iconSourceRaw"] = iconSourceRaw
         if let predictions = iconPredictions,
@@ -1466,6 +1469,7 @@ extension RecordingItem {
             overdubIndex: record["overdubIndex"] as? Int,
             overdubOffsetSeconds: record["overdubOffsetSeconds"] as? Double ?? 0,
             overdubSourceBaseId: (record["overdubSourceBaseId"] as? String).flatMap { UUID(uuidString: $0) },
+            wasRecordedWithMetronome: record["wasRecordedWithMetronome"] as? Bool ?? false,
             modifiedAt: record["modifiedAt"] as? Date ?? createdAt
         )
     }

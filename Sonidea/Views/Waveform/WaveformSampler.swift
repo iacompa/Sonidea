@@ -27,6 +27,14 @@ final class WaveformSampler {
     private var saveDebounceTask: Task<Void, Never>?
     private var saveMinMaxDebounceTask: Task<Void, Never>?
 
+    // Resampling cache to avoid redundant recalculations during rapid zoom/scroll
+    private var lastResampleKey: String?
+    private var lastResampleTarget: Int = 0
+    private var lastResampleResult: [Float] = []
+    private var lastResampleMinMaxKey: String?
+    private var lastResampleMinMaxTarget: Int = 0
+    private var lastResampleMinMaxResult: [WaveformSamplePair] = []
+
     private static var cacheDirectory: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return caches.appendingPathComponent("WaveformCache", isDirectory: true)
@@ -77,7 +85,15 @@ final class WaveformSampler {
         // Check memory cache first
         if let cached = cache[key] {
             touchCache(key)
-            return resample(cached, to: targetSampleCount)
+            // Return cached resample result if key and target match (avoids redundant work during zoom/scroll)
+            if key == lastResampleKey && targetSampleCount == lastResampleTarget {
+                return lastResampleResult
+            }
+            let result = resample(cached, to: targetSampleCount)
+            lastResampleKey = key
+            lastResampleTarget = targetSampleCount
+            lastResampleResult = result
+            return result
         }
 
         // Extract samples
@@ -89,9 +105,13 @@ final class WaveformSampler {
         cache[key] = samples
         touchCache(key)
         evictIfNeeded()
-        saveCache() // TODO: debounce cache persistence
+        saveCache()
 
-        return resample(samples, to: targetSampleCount)
+        let result = resample(samples, to: targetSampleCount)
+        lastResampleKey = key
+        lastResampleTarget = targetSampleCount
+        lastResampleResult = result
+        return result
     }
 
     /// Get min/max sample pairs for true waveform rendering
@@ -101,7 +121,15 @@ final class WaveformSampler {
         // Check memory cache first
         if let cached = minMaxCache[key] {
             touchCache(key)
-            return resampleMinMax(cached, to: targetSampleCount)
+            // Return cached resample result if key and target match (avoids redundant work during zoom/scroll)
+            if key == lastResampleMinMaxKey && targetSampleCount == lastResampleMinMaxTarget {
+                return lastResampleMinMaxResult
+            }
+            let result = resampleMinMax(cached, to: targetSampleCount)
+            lastResampleMinMaxKey = key
+            lastResampleMinMaxTarget = targetSampleCount
+            lastResampleMinMaxResult = result
+            return result
         }
 
         // Extract min/max samples
@@ -113,9 +141,13 @@ final class WaveformSampler {
         minMaxCache[key] = samples
         touchCache(key)
         evictIfNeeded()
-        saveMinMaxCache() // TODO: debounce cache persistence
+        saveMinMaxCache()
 
-        return resampleMinMax(samples, to: targetSampleCount)
+        let result = resampleMinMax(samples, to: targetSampleCount)
+        lastResampleMinMaxKey = key
+        lastResampleMinMaxTarget = targetSampleCount
+        lastResampleMinMaxResult = result
+        return result
     }
 
     func clearCache(for url: URL) {

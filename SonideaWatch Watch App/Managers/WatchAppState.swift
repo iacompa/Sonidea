@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 @Observable
 class WatchAppState {
 
@@ -20,18 +21,19 @@ class WatchAppState {
 
     var recordButtonPosition: CGPoint?
 
+    // MARK: - Cached Palette
+
+    /// Cached palette — only recomputed when `selectedThemeRawValue` changes.
+    private(set) var currentPalette: WatchThemePalette = WatchTheme.palette(for: "system")
+
     // MARK: - Init
 
     init() {
         loadRecordings()
         loadTheme()
+        // Recompute palette after theme is loaded from UserDefaults
+        currentPalette = WatchTheme.palette(for: selectedThemeRawValue)
         loadRecordButtonPosition()
-    }
-
-    // MARK: - Current Palette
-
-    var currentPalette: WatchThemePalette {
-        WatchTheme.palette(for: selectedThemeRawValue)
     }
 
     // MARK: - Recording Management
@@ -83,6 +85,7 @@ class WatchAppState {
 
     func applyTheme(_ rawValue: String) {
         selectedThemeRawValue = rawValue
+        currentPalette = WatchTheme.palette(for: rawValue)
         saveTheme()
     }
 
@@ -125,8 +128,22 @@ class WatchAppState {
     private func loadRecordings() {
         guard let data = UserDefaults.standard.data(forKey: recordingsKey),
               let loaded = try? JSONDecoder().decode([WatchRecordingItem].self, from: data) else { return }
-        // Filter out recordings whose files no longer exist
-        recordings = loaded.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }
+        // Build a set of filenames present in the documents directory once,
+        // instead of calling fileExists(atPath:) per recording (N syscalls -> 1).
+        let docsDir = WatchRecordingItem.documentsDirectory
+        let existingFiles: Set<String>
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: docsDir.path) {
+            existingFiles = Set(contents)
+        } else {
+            // If directory listing fails, fall back to keeping all recordings
+            existingFiles = Set(loaded.map { $0.fileName })
+        }
+        let valid = loaded.filter { existingFiles.contains($0.fileName) }
+        recordings = valid
+        // Re-save to migrate old absolute-URL format to new filename format
+        if valid.count != loaded.count || !data.isEmpty {
+            saveRecordings()
+        }
     }
 
     private func saveTheme() {

@@ -9,12 +9,15 @@ import Testing
 import Foundation
 @testable import Sonidea
 
+// Disambiguate Sonidea.Tag from Testing.Tag
+private typealias AppTag = Sonidea.Tag
+
 struct TagRepositoryTests {
 
     // MARK: - Create
 
     @Test func createTagSucceeds() {
-        var tags: [Tag] = []
+        var tags: [AppTag] = []
         let tag = TagRepository.createTag(name: "melody", colorHex: "#9B59B6", tags: &tags)
 
         #expect(tag != nil)
@@ -43,7 +46,7 @@ struct TagRepositoryTests {
     }
 
     @Test func updateProtectedTagOnlyRecolors() {
-        var tags = [Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")]
+        var tags = [AppTag(id: AppTag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")]
         let protectedTag = tags[0]
 
         let result = TagRepository.updateTag(protectedTag, name: "renamed", colorHex: "#00FF00", tags: &tags)
@@ -77,7 +80,7 @@ struct TagRepositoryTests {
     }
 
     @Test func deleteProtectedTagFails() {
-        let favoriteTag = Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")
+        let favoriteTag = AppTag(id: AppTag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")
         var tags = [favoriteTag]
         var recordings: [RecordingItem] = []
 
@@ -145,12 +148,12 @@ struct TagRepositoryTests {
     // MARK: - Seed Defaults
 
     @Test func seedDefaultTagsWhenEmpty() {
-        var tags: [Tag] = []
+        var tags: [AppTag] = []
         let didSeed = TagRepository.seedDefaultTagsIfNeeded(tags: &tags)
 
         #expect(didSeed)
         #expect(!tags.isEmpty)
-        #expect(tags.contains(where: { $0.id == Tag.favoriteTagID }))
+        #expect(tags.contains(where: { $0.id == AppTag.favoriteTagID }))
     }
 
     @Test func seedDefaultTagsDoesNotOverwrite() {
@@ -168,12 +171,12 @@ struct TagRepositoryTests {
         var tags = [TestFixtures.makeTag(name: "other")]
         TagRepository.ensureFavoriteTagExists(tags: &tags)
 
-        #expect(tags.contains(where: { $0.id == Tag.favoriteTagID }))
+        #expect(tags.contains(where: { $0.id == AppTag.favoriteTagID }))
         #expect(tags.count == 2)
     }
 
     @Test func ensureFavoriteDoesNotDuplicate() {
-        var tags = [Tag(id: Tag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")]
+        var tags = [AppTag(id: AppTag.favoriteTagID, name: "favorite", colorHex: "#FF6B6B")]
         TagRepository.ensureFavoriteTagExists(tags: &tags)
 
         #expect(tags.count == 1)
@@ -194,7 +197,7 @@ struct TagRepositoryTests {
     }
 
     @Test func isFavorite() {
-        let fav = TestFixtures.makeRecording(tagIDs: [Tag.favoriteTagID])
+        let fav = TestFixtures.makeRecording(tagIDs: [AppTag.favoriteTagID])
         #expect(TagRepository.isFavorite(fav))
 
         let notFav = TestFixtures.makeRecording(tagIDs: [])

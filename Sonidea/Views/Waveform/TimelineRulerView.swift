@@ -138,8 +138,8 @@ struct TimelineRulerView_Minimal: View {
     var timeline: WaveformTimeline? = nil       // ProWaveformEditor / DetailsWaveformView
     var timelineState: TimelineState? = nil      // ZoomableWaveformEditor
 
-    /// Height of the ruler (default 22pt for ultra-compact look)
-    var rulerHeight: CGFloat = 22
+    /// Height of the ruler (default 28pt — room for labels above ticks)
+    var rulerHeight: CGFloat = 28
 
     /// Whether to draw faint extension lines downward (for grid alignment with waveform)
     var showsGridExtensions: Bool = false
@@ -251,8 +251,8 @@ struct TimelineRulerView_Minimal: View {
                             .font(labelFont)
                             .foregroundColor(labelColor)
 
-                        // Position label just above the major tick
-                        let labelY = size.height - majorTickHeight - 3
+                        // Position label just above the major tick (with padding so text isn't clipped)
+                        let labelY = size.height - majorTickHeight - 4
 
                         // Anchor adjustment to prevent clipping at edges
                         let anchor: UnitPoint

@@ -110,6 +110,10 @@ final class iCloudSyncManager {
 
     private var isEnabled = false
 
+    /// Minimum interval between foreground syncs (debounce rapid foreground/background cycling)
+    private static let foregroundSyncDebounceInterval: TimeInterval = 30
+    private var lastForegroundSyncDate: Date = .distantPast
+
     // MARK: - iCloud Availability
 
     var iCloudAvailable: Bool {
@@ -168,9 +172,18 @@ final class iCloudSyncManager {
         updateStatusFromEngine()
     }
 
-    /// Sync on app foreground
+    /// Sync on app foreground (debounced to prevent rapid foreground/background cycling from triggering multiple syncs)
     func syncOnForeground() async {
         guard isEnabled else { return }
+
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastForegroundSyncDate)
+        guard elapsed >= Self.foregroundSyncDebounceInterval else {
+            logger.info("Foreground sync debounced — last sync was \(Int(elapsed))s ago (minimum \(Int(Self.foregroundSyncDebounceInterval))s)")
+            return
+        }
+
+        lastForegroundSyncDate = now
         await cloudKitEngine.syncOnForeground()
         updateStatusFromEngine()
     }

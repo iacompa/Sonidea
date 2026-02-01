@@ -104,6 +104,9 @@ final class OverdubEngine {
     /// Stored input sample rate for recording settings
     private var inputSampleRate: Double = 48000
 
+    /// Stored app settings from prepare() — used by startRecording() for preferred input reapplication
+    private var storedAppSettings = AppSettings()
+
     /// Frame-accurate recording duration counter (incremented from the write queue)
     private var writtenFrameCount: Int64 = 0
 
@@ -132,6 +135,7 @@ final class OverdubEngine {
         // Reset any existing state (don't deactivate session since we're about to reconfigure it)
         stop(deactivateSession: false)
         self.loopFlags = loopFlags
+        self.storedAppSettings = settings
 
         // Configure audio session for overdub
         try AudioSessionManager.shared.configureForOverdub(quality: quality, settings: settings)
@@ -545,15 +549,20 @@ final class OverdubEngine {
             if !routeReady {
                 throw OverdubEngineError.recordingFailed("Bluetooth audio route did not stabilize. Try disconnecting and reconnecting your Bluetooth device, or use wired headphones.")
             }
+
+            // Reapply preferred input after HFP stabilization — available inputs
+            // may have changed during the A2DP→HFP transition.
+            AudioSessionManager.shared.refreshAvailableInputs()
+            AudioSessionManager.shared.applyPreferredInput(from: storedAppSettings)
         }
 
-        #if DEBUG
-        print("🎙️ [OverdubEngine] Starting recording - Debug info:")
-        print("   Session category: \(session.category.rawValue)")
-        print("   Session sample rate: \(session.sampleRate)")
-        print("   Route inputs: \(session.currentRoute.inputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
-        print("   Route outputs: \(session.currentRoute.outputs.map { "\($0.portName) (\($0.portType.rawValue))" })")
-        #endif
+        // Always-on diagnostic logging (aids TestFlight debugging)
+        AudioDiagnostics.logRecordingStart(
+            context: "OverdubEngine",
+            outputURL: finalURL,
+            session: session,
+            engine: engine
+        )
 
         // Verify we have a valid input route
         if session.currentRoute.inputs.isEmpty {
@@ -602,22 +611,52 @@ final class OverdubEngine {
         }
         layerPlayerNodes = newLayerPlayers
 
-        // Get input node and validate its format AFTER engine reset
+        // Resolve hardware input format using 3-tier fallback (same pattern as RecorderManager).
+        // After engine.stop(), inputNode.outputFormat can be stale — use inputFormat(forBus:0)
+        // which reflects the actual connected mic (built-in, headset, Bluetooth HFP).
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        inputSampleRate = inputFormat.sampleRate
+        let sessionSampleRate = session.sampleRate
 
-        #if DEBUG
-        print("   Input format after reset: sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)")
-        #endif
+        // Tier 1: Hardware input format (most accurate — reflects actual mic)
+        let hwFormat = inputNode.inputFormat(forBus: 0)
+        var resolvedInputFormat: AVAudioFormat?
+        if hwFormat.sampleRate > 0 && hwFormat.channelCount > 0 {
+            resolvedInputFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: hwFormat.sampleRate,
+                channels: hwFormat.channelCount,
+                interleaved: false
+            )
+        }
 
-        // Validate input format
-        guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+        // Tier 2: Output format (may be correct for non-Bluetooth)
+        if resolvedInputFormat == nil {
+            let outFmt = inputNode.outputFormat(forBus: 0)
+            if outFmt.sampleRate > 0 && outFmt.channelCount > 0 {
+                resolvedInputFormat = outFmt
+            }
+        }
+
+        // Tier 3: Construct from session sample rate (last resort)
+        if resolvedInputFormat == nil && sessionSampleRate > 0 {
+            resolvedInputFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sessionSampleRate,
+                channels: 1,
+                interleaved: false
+            )
+        }
+
+        guard let inputFormat = resolvedInputFormat else {
             if isBluetooth {
                 throw OverdubEngineError.recordingFailed("Can't start recording with this Bluetooth route. Try disconnecting Bluetooth or use wired headphones.")
             }
             throw OverdubEngineError.recordingFailed("Invalid audio input format. Try disconnecting and reconnecting your audio device.")
         }
+
+        inputSampleRate = inputFormat.sampleRate
+
+        print("[OverdubEngine] Input format resolved: sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount) (hw=\(hwFormat.sampleRate)/\(hwFormat.channelCount), session=\(sessionSampleRate))")
 
         // Create recording file with validated format
         let fileSettings = recordingSettings(for: quality)
@@ -627,12 +666,29 @@ final class OverdubEngine {
             file = try AVAudioFile(forWriting: finalURL, settings: fileSettings)
         } catch {
             #if DEBUG
-            print("❌ [OverdubEngine] Failed to create audio file: \(error)")
+            print("⚠️ [OverdubEngine] First attempt failed to create audio file: \(error)")
             if let nsError = error as NSError? {
                 print("   Error domain: \(nsError.domain), code: \(nsError.code)")
             }
             #endif
-            throw OverdubEngineError.recordingFailed("Could not create recording file: \(error.localizedDescription)")
+            // Retry with session sample rate if input node rate was the problem
+            if sessionSampleRate > 0 && inputSampleRate != sessionSampleRate {
+                inputSampleRate = sessionSampleRate
+                let retrySettings = recordingSettings(for: quality)
+                #if DEBUG
+                print("🔄 [OverdubEngine] Retrying with session sample rate: \(sessionSampleRate)")
+                #endif
+                do {
+                    file = try AVAudioFile(forWriting: finalURL, settings: retrySettings)
+                } catch let retryError {
+                    #if DEBUG
+                    print("❌ [OverdubEngine] Retry also failed: \(retryError)")
+                    #endif
+                    throw OverdubEngineError.recordingFailed("Could not create recording file: \(retryError.localizedDescription)")
+                }
+            } else {
+                throw OverdubEngineError.recordingFailed("Could not create recording file: \(error.localizedDescription)")
+            }
         }
 
         self.recordingFile = file
@@ -896,21 +952,28 @@ final class OverdubEngine {
     private func recordingSettings(for preset: RecordingQualityPreset) -> [String: Any] {
         let sampleRate = inputSampleRate
 
+        // Scale AAC bitrate for low sample rates (Bluetooth HFP can be 8-16kHz).
+        // AAC encoders reject bitrates that are too high relative to sample rate.
+        // Use ~8 bits per sample as a reasonable maximum (matching RecorderManager).
+        let maxBitratePerChannel = max(32000, Int(sampleRate) * 8)
+
         switch preset {
         case .standard:
+            let bitrate = min(128000, maxBitratePerChannel)
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(sampleRate, 44100),
                 AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 128000,
+                AVEncoderBitRateKey: bitrate,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
         case .high:
+            let bitrate = min(256000, maxBitratePerChannel)
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: min(sampleRate, 48000),
                 AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 256000,
+                AVEncoderBitRateKey: bitrate,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
         case .lossless:
@@ -963,10 +1026,10 @@ final class OverdubEngine {
     }
 
     private func updateMeterWithPeak(_ peak: Float) {
-        // Convert peak amplitude to dB with -60 dB floor
+        // Convert peak amplitude to dB with -60 dB floor and +6 dB ceiling
         let dB = 20 * log10(max(peak, 1e-6))
         let minDB: Float = -60
-        let maxDB: Float = 0
+        let maxDB: Float = 6
         let clampedDB = max(minDB, min(maxDB, dB))
         meterLevel = (clampedDB - minDB) / (maxDB - minDB)
     }

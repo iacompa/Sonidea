@@ -318,6 +318,13 @@ final class AudioExporter {
         albumLookup: (UUID?) -> Album?,
         tagsLookup: ([UUID]) -> [Tag]
     ) async throws -> URL {
+        // Check disk space once before processing all recordings
+        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+            throw NSError(domain: "AudioExporter", code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+        }
+
         // Clean up previous exports
         cleanTempDirectory()
 
@@ -371,7 +378,7 @@ final class AudioExporter {
             let destination = folder.appendingPathComponent(exportFilename)
 
             do {
-                try await convertFile(sourceURL: recording.fileURL, outputURL: destination, format: format)
+                try await convertFile(sourceURL: recording.fileURL, outputURL: destination, format: format, skipDiskSpaceCheck: true)
             } catch {
                 // Skip files that fail to convert
                 continue
@@ -437,14 +444,14 @@ final class AudioExporter {
 
     // MARK: - WAV Conversion
 
-    private func convertToWAV(sourceURL: URL, outputURL: URL) async throws -> URL {
+    private func convertToWAV(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) async throws -> URL {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     // Remove existing output file
                     try? FileManager.default.removeItem(at: outputURL)
 
-                    try self.manualConvertToWAV(sourceURL: sourceURL, outputURL: outputURL)
+                    try self.manualConvertToWAV(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
                     continuation.resume(returning: outputURL)
                 } catch {
                     continuation.resume(throwing: error)
@@ -453,12 +460,14 @@ final class AudioExporter {
         }
     }
 
-    private func manualConvertToWAV(sourceURL: URL, outputURL: URL) throws {
-        // Check disk space before conversion
-        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
-            throw NSError(domain: "AudioExporter", code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+    private func manualConvertToWAV(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) throws {
+        // Check disk space before conversion (skip when caller already verified)
+        if !skipDiskSpaceCheck {
+            let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+            if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+                throw NSError(domain: "AudioExporter", code: 10,
+                    userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+            }
         }
 
         let inputFile = try AVAudioFile(forReading: sourceURL)
@@ -493,16 +502,17 @@ final class AudioExporter {
             throw NSError(domain: "AudioExporter", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create converter"])
         }
 
+        // Allocate output buffer once outside the loop and reuse across iterations
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
+            throw NSError(domain: "AudioExporter", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
+        }
+
         var position: AVAudioFramePosition = 0
         while position < inputFile.length {
             let framesToRead = min(bufferSize, AVAudioFrameCount(inputFile.length - position))
             buffer.frameLength = framesToRead
 
             try inputFile.read(into: buffer)
-
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: framesToRead) else {
-                throw NSError(domain: "AudioExporter", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
-            }
 
             var error: NSError?
             var hasProvidedData = false
@@ -527,12 +537,12 @@ final class AudioExporter {
 
     // MARK: - M4A (AAC) Conversion
 
-    private func convertToM4A(sourceURL: URL, outputURL: URL) async throws {
+    private func convertToM4A(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     try? FileManager.default.removeItem(at: outputURL)
-                    try self.manualConvertToAAC(sourceURL: sourceURL, outputURL: outputURL)
+                    try self.manualConvertToAAC(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -541,12 +551,14 @@ final class AudioExporter {
         }
     }
 
-    private func manualConvertToAAC(sourceURL: URL, outputURL: URL) throws {
-        // Check disk space before conversion
-        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
-            throw NSError(domain: "AudioExporter", code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+    private func manualConvertToAAC(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) throws {
+        // Check disk space before conversion (skip when caller already verified)
+        if !skipDiskSpaceCheck {
+            let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+            if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+                throw NSError(domain: "AudioExporter", code: 10,
+                    userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+            }
         }
 
         let inputFile = try AVAudioFile(forReading: sourceURL)
@@ -578,16 +590,17 @@ final class AudioExporter {
                           userInfo: [NSLocalizedDescriptionKey: "Failed to create input buffer"])
         }
 
+        // Allocate output buffer once outside the loop and reuse across iterations
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
+            throw NSError(domain: "AudioExporter", code: 13,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
+        }
+
         var position: AVAudioFramePosition = 0
         while position < inputFile.length {
             let framesToRead = min(bufferSize, AVAudioFrameCount(inputFile.length - position))
             inputBuffer.frameLength = framesToRead
             try inputFile.read(into: inputBuffer)
-
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
-                throw NSError(domain: "AudioExporter", code: 13,
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
-            }
 
             var error: NSError?
             var hasProvidedData = false
@@ -611,12 +624,12 @@ final class AudioExporter {
 
     // MARK: - ALAC Conversion
 
-    private func convertToALAC(sourceURL: URL, outputURL: URL) async throws {
+    private func convertToALAC(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     try? FileManager.default.removeItem(at: outputURL)
-                    try self.manualConvertToALAC(sourceURL: sourceURL, outputURL: outputURL)
+                    try self.manualConvertToALAC(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -625,12 +638,14 @@ final class AudioExporter {
         }
     }
 
-    private func manualConvertToALAC(sourceURL: URL, outputURL: URL) throws {
-        // Check disk space before conversion
-        let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
-            throw NSError(domain: "AudioExporter", code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+    private func manualConvertToALAC(sourceURL: URL, outputURL: URL, skipDiskSpaceCheck: Bool = false) throws {
+        // Check disk space before conversion (skip when caller already verified)
+        if !skipDiskSpaceCheck {
+            let fsAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+            if let freeSize = fsAttrs[.systemFreeSize] as? Int64, freeSize < 50_000_000 {
+                throw NSError(domain: "AudioExporter", code: 10,
+                    userInfo: [NSLocalizedDescriptionKey: "Not enough storage space for export. Please free up at least 50MB."])
+            }
         }
 
         let inputFile = try AVAudioFile(forReading: sourceURL)
@@ -661,16 +676,17 @@ final class AudioExporter {
                           userInfo: [NSLocalizedDescriptionKey: "Failed to create input buffer"])
         }
 
+        // Allocate output buffer once outside the loop and reuse across iterations
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
+            throw NSError(domain: "AudioExporter", code: 23,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
+        }
+
         var position: AVAudioFramePosition = 0
         while position < inputFile.length {
             let framesToRead = min(bufferSize, AVAudioFrameCount(inputFile.length - position))
             inputBuffer.frameLength = framesToRead
             try inputFile.read(into: inputBuffer)
-
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
-                throw NSError(domain: "AudioExporter", code: 23,
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to create output buffer"])
-            }
 
             var error: NSError?
             var hasProvidedData = false
@@ -695,14 +711,15 @@ final class AudioExporter {
     // MARK: - Bulk Conversion Router
 
     /// Convert a source file to the given format at the output URL.
-    private func convertFile(sourceURL: URL, outputURL: URL, format: ExportFormat) async throws {
+    /// - Parameter skipDiskSpaceCheck: When true, skips per-file disk space checks (caller already verified).
+    private func convertFile(sourceURL: URL, outputURL: URL, format: ExportFormat, skipDiskSpaceCheck: Bool = false) async throws {
         switch format {
         case .wav:
-            _ = try await convertToWAV(sourceURL: sourceURL, outputURL: outputURL)
+            _ = try await convertToWAV(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
         case .m4a:
-            try await convertToM4A(sourceURL: sourceURL, outputURL: outputURL)
+            try await convertToM4A(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
         case .alac:
-            try await convertToALAC(sourceURL: sourceURL, outputURL: outputURL)
+            try await convertToALAC(sourceURL: sourceURL, outputURL: outputURL, skipDiskSpaceCheck: skipDiskSpaceCheck)
         case .original:
             try? FileManager.default.removeItem(at: outputURL)
             try FileManager.default.copyItem(at: sourceURL, to: outputURL)

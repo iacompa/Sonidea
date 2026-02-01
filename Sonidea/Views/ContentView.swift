@@ -224,7 +224,9 @@ struct ContentView: View {
                         duration: duration,
                         latitude: nil,
                         longitude: nil,
-                        locationLabel: ""
+                        locationLabel: "",
+                        wasRecordedWithMetronome: false,
+                        metronomeBPM: nil
                     )
                     appState.addRecording(from: rawData)
                     appState.recorder.dismissRecoverableRecording()
@@ -732,8 +734,12 @@ struct ContentView: View {
             #if DEBUG
             print("ℹ️ [ContentView] stopRecording() returned nil - recording too short or no data")
             #endif
-            // Silently discard — either the recording was too short or no data was captured.
-            // Mic permission is checked at record start, so this is not an error state.
+            // Check if there's an error message from the recorder (e.g. write failures)
+            if let error = appState.recorder.recordingError {
+                saveErrorMessage = error
+                showSaveErrorAlert = true
+                appState.recorder.clearRecordingError()
+            }
             currentRoute = .recordings
             return
         }
@@ -1264,26 +1270,26 @@ struct RecordingControlsSheet: View {
 // MARK: - Level Meter Bar (professional DAW-style dB meter)
 
 struct LevelMeterBar: View {
-    let level: Float   // 0.0 – 1.0 normalized (represents -60 to 0 dB)
+    let level: Float   // 0.0 – 1.0 normalized (represents -60 to +6 dB)
     var isPaused: Bool = false
 
     @Environment(\.themePalette) private var palette
 
     // Professional DAW dB color ranges:
-    //   Green:  -60 dB to -18 dB  (safe recording level)
-    //   Yellow: -18 dB to -12 dB  (optimal level)
-    //   Orange: -12 dB to  -6 dB  (hot)
-    //   Red:     -6 dB to   0 dB  (clipping danger)
+    //   Green:  -60 dB to -12 dB  (safe recording level)
+    //   Yellow: -12 dB to  -6 dB  (optimal level)
+    //   Orange:  -6 dB to   0 dB  (hot)
+    //   Red:      0 dB to  +6 dB  (clipping / over)
 
     // Meter range constants
     private let meterMinDB: Float = -60
-    private let meterMaxDB: Float = 0
+    private let meterMaxDB: Float = 6
 
     // Color boundary dB values
-    private let greenEndDB: Float = -18
-    private let yellowEndDB: Float = -12
-    private let orangeEndDB: Float = -6
-    // Red ends at 0 dB
+    private let greenEndDB: Float = -12
+    private let yellowEndDB: Float = -6
+    private let orangeEndDB: Float = 0
+    // Red ends at +6 dB
 
     // dB scale tick marks at key boundaries (positions computed from dB)
     private var scaleMarks: [(db: String, position: CGFloat)] {
@@ -1295,6 +1301,7 @@ struct LevelMeterBar: View {
             ("-12", dbToPosition(-12)),
             ("-6",  dbToPosition(-6)),
             ("0",   dbToPosition(0)),
+            ("+6",  dbToPosition(6)),
         ]
     }
 
@@ -1314,7 +1321,7 @@ struct LevelMeterBar: View {
         }
     }
 
-    private let clipThreshold: Float = 0.95  // ~-3 dB input level triggers clip indicator
+    private let clipThreshold: Float = 60.0 / 66.0  // 0 dBFS triggers clip indicator (0 dB position in -60..+6 range)
 
     @State private var displayLevel: CGFloat = 0
     @State private var peakHoldLevel: CGFloat = 0
@@ -1322,7 +1329,7 @@ struct LevelMeterBar: View {
     @State private var clipTask: Task<Void, Never>?
     @State private var peakHoldTask: Task<Void, Never>?
 
-    /// Convert a dB value (-60..0) to a normalized position (0..1) on the meter.
+    /// Convert a dB value (-60..+6) to a normalized position (0..1) on the meter.
     /// Uses a linear dB scale — since dB is already logarithmic, a linear mapping
     /// of dB values produces the correct perceptual spacing for a professional meter.
     private func dbToPosition(_ dB: Float) -> CGFloat {
@@ -1330,7 +1337,7 @@ struct LevelMeterBar: View {
         return CGFloat((clamped - meterMinDB) / (meterMaxDB - meterMinDB))
     }
 
-    /// Convert a normalized level (0..1, representing -60..0 dB linearly)
+    /// Convert a normalized level (0..1, representing -60..+6 dB linearly)
     /// to a meter display position. Since the input is already in linear-dB space
     /// (computed in RecorderManager), we use it directly — no additional warping needed.
     private func levelToPosition(_ level: Float) -> CGFloat {
@@ -1394,10 +1401,10 @@ struct LevelMeterBar: View {
                 let labelMarks: [(db: String, position: CGFloat)] = [
                     ("-48", dbToPosition(-48)),
                     ("-24", dbToPosition(-24)),
-                    ("-18", dbToPosition(-18)),
                     ("-12", dbToPosition(-12)),
                     ("-6",  dbToPosition(-6)),
                     ("0",   dbToPosition(0)),
+                    ("+6",  dbToPosition(6)),
                 ]
                 ForEach(labelMarks, id: \.db) { mark in
                     let x = mark.position * width
@@ -3226,13 +3233,25 @@ struct SettingsSheetView: View {
                         .tint(palette.accent)
                         .listRowBackground(palette.cardBackground)
 
-                    // Click Track
-                    Toggle("Click Track", isOn: $appState.appSettings.metronomeEnabled)
+                    // Metronome (plays through headphones only during recording)
+                    Toggle("Metronome", isOn: $appState.appSettings.metronomeEnabled)
                         .tint(palette.accent)
                         .listRowBackground(palette.cardBackground)
 
                     if appState.appSettings.metronomeEnabled {
                         VStack(alignment: .leading, spacing: 8) {
+                            // Headphone requirement note
+                            HStack(spacing: 6) {
+                                Image(systemName: "headphones")
+                                    .foregroundStyle(palette.accent)
+                                    .font(.caption)
+                                Text("Requires headphones (wired or Bluetooth)")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.textSecondary)
+                            }
+
+                            Divider()
+
                             HStack {
                                 Text("BPM")
                                     .foregroundStyle(palette.textPrimary)
@@ -3241,7 +3260,7 @@ struct SettingsSheetView: View {
                                     .foregroundStyle(palette.textSecondary)
                                     .monospacedDigit()
                             }
-                            Slider(value: $appState.appSettings.metronomeBPM, in: 40...240, step: 1)
+                            Slider(value: $appState.appSettings.metronomeBPM, in: 10...240, step: 1)
                                 .tint(palette.accent)
                             Button {
                                 appState.recorder.metronome.tapTempo()
@@ -3302,7 +3321,7 @@ struct SettingsSheetView: View {
                             Text("Screen will stay on while recording.")
                         }
                         if appState.appSettings.metronomeEnabled {
-                            Text("Click track: \(Int(appState.appSettings.metronomeBPM)) BPM · \(Int(appState.appSettings.metronomeVolume * 100))% vol. Requires headphones — click plays through headphones only and is not recorded.")
+                            Text("Metronome: \(Int(appState.appSettings.metronomeBPM)) BPM · \(Int(appState.appSettings.metronomeVolume * 100))% vol. Plays through headphones only and is not recorded.")
                         }
                     }
                     .foregroundColor(palette.textSecondary)
@@ -3810,6 +3829,22 @@ struct SettingsSheetView: View {
                                 .foregroundColor(palette.accent)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Privacy Policy")
+                                    .foregroundColor(palette.textPrimary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Terms-of-Use-2f72934c965380b19a42f7967e2295df")!) {
+                        HStack {
+                            Image(systemName: "doc.text")
+                                .foregroundColor(palette.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Terms of Use")
                                     .foregroundColor(palette.textPrimary)
                             }
                             Spacer()
@@ -4908,11 +4943,38 @@ struct StorageEstimateSheet: View {
                     }
                     .listRowBackground(palette.cardBackground)
                 }
+
+                // Background recording info
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label {
+                            Text("Recording continues when you lock the screen or switch to another app. A red indicator appears in the status bar while recording.")
+                        } icon: {
+                            Image(systemName: "record.circle")
+                                .foregroundStyle(.red)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+
+                        Label {
+                            Text("To test: Start recording, then lock the screen or switch apps. Unlock to see the recording continued.")
+                        } icon: {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(palette.accent)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(palette.textTertiary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("Background Recording")
+                        .foregroundStyle(palette.textSecondary)
+                }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(palette.background)
-            .navigationTitle("Storage Estimate")
+            .navigationTitle("Recording Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

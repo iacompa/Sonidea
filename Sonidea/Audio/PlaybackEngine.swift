@@ -162,11 +162,15 @@ final class PlaybackEngine {
         playbackGeneration += 1
         let currentGeneration = playbackGeneration
 
+        // If at end, restart from beginning
+        if seekFrame >= audioLengthFrames {
+            seekFrame = 0
+            currentTime = 0
+        }
+
         // Schedule from current seek position
         let frameCount = AVAudioFrameCount(audioLengthFrames - seekFrame)
         guard frameCount > 0 else {
-            // Already at end, just finish instead of restarting
-            handlePlaybackFinished()
             return
         }
 
@@ -361,7 +365,7 @@ final class PlaybackEngine {
 
     private func startTimer() {
         // Use .common mode so timer continues during scroll tracking
-        let newTimer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+        let newTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.updateCurrentTime()
             }

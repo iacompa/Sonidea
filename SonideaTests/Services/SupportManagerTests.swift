@@ -13,28 +13,28 @@ struct SupportManagerTests {
 
     // MARK: - SubscriptionPlan
 
-    @Test func planRawValues() {
+    @Test @MainActor func planRawValues() {
         #expect(SubscriptionPlan.monthly.rawValue == "0144030")
         #expect(SubscriptionPlan.annual.rawValue == "01440365")
     }
 
-    @Test func planDisplayNames() {
+    @Test @MainActor func planDisplayNames() {
         #expect(SubscriptionPlan.monthly.displayName == "Monthly")
         #expect(SubscriptionPlan.annual.displayName == "Annual")
     }
 
-    @Test func planDescriptions() {
+    @Test @MainActor func planDescriptions() {
         #expect(SubscriptionPlan.monthly.description == "$3.99/month")
         #expect(SubscriptionPlan.annual.description == "$29.99/year")
     }
 
-    @Test func planTaglinesNotEmpty() {
+    @Test @MainActor func planTaglinesNotEmpty() {
         for plan in SubscriptionPlan.allCases {
             #expect(!plan.tagline.isEmpty)
         }
     }
 
-    @Test func allProductIDs() {
+    @Test @MainActor func allProductIDs() {
         let ids = SubscriptionPlan.allProductIDs
         #expect(ids.count == 2)
         #expect(ids.contains("0144030"))
@@ -43,7 +43,7 @@ struct SupportManagerTests {
 
     // MARK: - SubscriptionStatus
 
-    @Test func subscriptionStatusSubscribed() {
+    @Test @MainActor func subscriptionStatusSubscribed() {
         let status = SubscriptionStatus.subscribed(.monthly)
         if case .subscribed(let plan) = status {
             #expect(plan == .monthly)
@@ -52,7 +52,7 @@ struct SupportManagerTests {
         }
     }
 
-    @Test func subscriptionStatusExpired() {
+    @Test @MainActor func subscriptionStatusExpired() {
         let status = SubscriptionStatus.expired
         if case .expired = status {
             // pass
@@ -61,7 +61,7 @@ struct SupportManagerTests {
         }
     }
 
-    @Test func subscriptionStatusTrial() {
+    @Test @MainActor func subscriptionStatusTrial() {
         let status = SubscriptionStatus.trial
         if case .trial = status {
             // pass
@@ -206,7 +206,7 @@ struct SupportManagerTests {
 
     // MARK: - Roadmap Items
 
-    @Test func roadmapItemsNotEmpty() {
+    @Test @MainActor func roadmapItemsNotEmpty() {
         #expect(!roadmapItems.isEmpty)
         for item in roadmapItems {
             #expect(!item.title.isEmpty)

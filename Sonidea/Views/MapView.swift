@@ -34,26 +34,26 @@ struct GPSInsightsMapView: View {
     @State private var selectedSpot: RecordingSpot?
     @State private var sheetState: BottomSheetState = .collapsed
     @State private var dragOffset: CGFloat = 0
-
-    // Computed spots data
-    private var allSpots: [RecordingSpot] {
-        SpotClustering.computeSpots(
-            recordings: appState.activeRecordings,
-            favoriteTagID: appState.favoriteTagID,
-            filterFavoritesOnly: false
-        ).sorted { $0.totalCount > $1.totalCount }
-    }
+    @State private var cachedAllSpots: [RecordingSpot] = []
 
     private var topRecordedSpots: [RecordingSpot] {
-        Array(allSpots.prefix(3))
+        Array(cachedAllSpots.prefix(3))
     }
 
     private var topFavoritedSpots: [RecordingSpot] {
-        allSpots
+        cachedAllSpots
             .filter { $0.favoriteCount > 0 }
             .sorted { $0.favoriteCount > $1.favoriteCount }
             .prefix(3)
             .map { $0 }
+    }
+
+    private func recomputeSpots() {
+        cachedAllSpots = SpotClustering.computeSpots(
+            recordings: appState.activeRecordings,
+            favoriteTagID: appState.favoriteTagID,
+            filterFavoritesOnly: false
+        ).sorted { $0.totalCount > $1.totalCount }
     }
 
     private var hasLocations: Bool {
@@ -74,7 +74,11 @@ struct GPSInsightsMapView: View {
             }
         }
         .onAppear {
+            recomputeSpots()
             fitMapToAllRecordings()
+        }
+        .onChange(of: appState.recordingsContentVersion) { _, _ in
+            recomputeSpots()
         }
     }
 
@@ -130,7 +134,7 @@ struct GPSInsightsMapView: View {
 
         // Find the spot this recording belongs to
         let clusterKey = SpotClustering.clusterKey(latitude: lat, longitude: lon)
-        if let spot = allSpots.first(where: { $0.id == clusterKey }), spot.totalCount > 1 {
+        if let spot = cachedAllSpots.first(where: { $0.id == clusterKey }), spot.totalCount > 1 {
             // Multiple recordings at this spot - show spot view
             selectedSpot = spot
         } else {
@@ -278,14 +282,14 @@ struct GPSInsightsMapView: View {
                             .foregroundColor(palette.textSecondary)
                             .padding(.horizontal, 16)
 
-                        if allSpots.isEmpty {
+                        if cachedAllSpots.isEmpty {
                             Text("No recording spots yet")
                                 .font(.subheadline)
                                 .foregroundColor(palette.textTertiary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 20)
                         } else {
-                            ForEach(Array(allSpots.enumerated()), id: \.element.id) { index, spot in
+                            ForEach(Array(cachedAllSpots.enumerated()), id: \.element.id) { index, spot in
                                 SpotListRow(
                                     rank: index + 1,
                                     spot: spot,

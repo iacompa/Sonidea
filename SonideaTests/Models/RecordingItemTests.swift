@@ -15,8 +15,8 @@ struct RecordingItemTests {
 
     @Test func codableRoundTrip() throws {
         let recording = TestFixtures.makeRecording(
-            title: "Round Trip Test",
             duration: 123.5,
+            title: "Round Trip Test",
             notes: "Some notes",
             tagIDs: [UUID(), UUID()],
             albumID: UUID(),

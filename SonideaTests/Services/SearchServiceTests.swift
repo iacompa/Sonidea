@@ -9,6 +9,9 @@ import Testing
 import Foundation
 @testable import Sonidea
 
+// Disambiguate Sonidea.Tag from Testing.Tag
+private typealias Tag = Sonidea.Tag
+
 struct SearchServiceTests {
 
     // MARK: - Recording Search

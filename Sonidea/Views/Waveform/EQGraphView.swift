@@ -11,7 +11,7 @@ import SwiftUI
 
 struct ParametricEQView: View {
     @Binding var settings: EQSettings
-    @State private var selectedBand: Int? = nil
+    @State private var selectedBand: Int? = 0
     var onSettingsChanged: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -25,33 +25,16 @@ struct ParametricEQView: View {
     private let graphPaddingRight: CGFloat = 12
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             // EQ Graph
             eqGraph
 
-            // Band controls (when a band is selected)
+            // Knob controls for selected band
             if let band = selectedBand {
-                bandControls(for: band)
-            } else {
-                // Hint text when no band selected
-                Text("Tap a point to adjust its settings")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                knobControls(for: band)
             }
 
-            // Reset button
-            if !settings.isFlat {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        settings.reset()
-                        onSettingsChanged?()
-                    }
-                } label: {
-                    Label("Reset EQ", systemImage: "arrow.counterclockwise")
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                }
-            }
+            // Reset handled by parent panel's Reset button
         }
     }
 
@@ -118,7 +101,7 @@ struct ParametricEQView: View {
                         )
                         .onTapGesture {
                             withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedBand = selectedBand == index ? nil : index
+                                selectedBand = index
                             }
                         }
                     }
@@ -213,6 +196,7 @@ struct ParametricEQView: View {
 
     // MARK: - Frequency Response Curve
 
+    // Fix #7: drawingGroup() rasterizes the curve to reduce CPU during SwiftUI diffing
     private func frequencyResponseCurve(width: CGFloat, height: CGFloat) -> some View {
         Path { path in
             let steps = 100
@@ -243,133 +227,127 @@ struct ParametricEQView: View {
             ),
             style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
         )
+        .drawingGroup()
     }
 
     /// Simplified bell curve contribution for a parametric band
+    /// Fix #6: Uses cached log10 constants instead of recomputing per call
     private func bandContribution(at freq: Float, band: EQBandSettings) -> Float {
         let logFreq = log10(freq)
         let logCenter = log10(band.frequency)
-        let bandwidth = band.bandwidth
 
         // Bell curve in log-frequency domain
-        let distance = (logFreq - logCenter) / (bandwidth * 0.5)
-        let contribution = band.gain * exp(-distance * distance * 0.5)
-
-        return contribution
+        let distance = (logFreq - logCenter) / (band.bandwidth * 0.5)
+        return band.gain * exp(-distance * distance * 0.5)
     }
 
-    // MARK: - Band Controls
+    // MARK: - Knob Controls
 
     @ViewBuilder
-    private func bandControls(for index: Int) -> some View {
-        let band = settings.bands[index]
-
-        VStack(spacing: 12) {
-            // Band name
-            Text(EQSettings.bandLabels[index])
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-
-            // Frequency control
+    private func knobControls(for index: Int) -> some View {
+        HStack(spacing: 0) {
+            // Freq knob (logarithmic)
             VStack(spacing: 4) {
-                HStack {
-                    Text("Freq")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(formatFrequency(band.frequency))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundColor(.primary)
-                }
+                Text("Freq")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
 
-                LogSlider(
+                EQKnob(
                     value: Binding(
-                        get: { band.frequency },
+                        get: { settings.bands[index].frequency },
                         set: {
                             settings.bands[index].frequency = $0
                             onSettingsChanged?()
                         }
                     ),
-                    range: EQBandSettings.minFrequency...EQBandSettings.maxFrequency
+                    range: EQBandSettings.minFrequency...EQBandSettings.maxFrequency,
+                    color: Self.bandColors[index],
+                    isLogarithmic: true
                 )
+
+                Text(formatFrequency(settings.bands[index].frequency))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(.primary)
             }
+            .frame(maxWidth: .infinity)
 
-            // Gain control
+            // Gain knob (linear)
             VStack(spacing: 4) {
-                HStack {
-                    Text("Gain")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(formatGain(band.gain))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundColor(gainColor(band.gain))
-                }
+                Text("Gain")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
 
-                Slider(
+                EQKnob(
                     value: Binding(
-                        get: { band.gain },
+                        get: { settings.bands[index].gain },
                         set: {
                             settings.bands[index].gain = $0
                             onSettingsChanged?()
                         }
                     ),
-                    in: EQBandSettings.minGain...EQBandSettings.maxGain
+                    range: EQBandSettings.minGain...EQBandSettings.maxGain,
+                    color: Self.bandColors[index]
                 )
-                .tint(.accentColor)
+
+                Text(formatGain(settings.bands[index].gain))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(.primary)
             }
+            .frame(maxWidth: .infinity)
 
-            // Q control
+            // Q knob (linear)
             VStack(spacing: 4) {
-                HStack {
-                    Text("Q")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(String(format: "%.1f", band.q))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundColor(.primary)
-                }
+                Text("Q")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
 
-                Slider(
+                EQKnob(
                     value: Binding(
-                        get: { band.q },
+                        get: { settings.bands[index].q },
                         set: {
                             settings.bands[index].q = $0
                             onSettingsChanged?()
                         }
                     ),
-                    in: EQBandSettings.minQ...EQBandSettings.maxQ
+                    range: EQBandSettings.minQ...EQBandSettings.maxQ,
+                    color: Self.bandColors[index]
                 )
-                .tint(.orange)
+
+                Text(String(format: "%.1f", settings.bands[index].q))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(.primary)
             }
+            .frame(maxWidth: .infinity)
         }
-        .padding(12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
         .background(Color(.systemGray6))
         .cornerRadius(10)
     }
 
+    static let bandColors: [Color] = [.red, .orange, .green, .blue]
+
     // MARK: - Coordinate Conversion
+
+    // Fix #6: Cache log10 constants (computed once, not per call)
+    private static let minLogFreq = log10(EQBandSettings.minFrequency)
+    private static let maxLogFreq = log10(EQBandSettings.maxFrequency)
+    private static let logFreqRange = maxLogFreq - minLogFreq
 
     /// Convert frequency (Hz) to X position using log scale
     private func frequencyToX(_ freq: Float, width: CGFloat) -> CGFloat {
-        let minLog = log10(EQBandSettings.minFrequency)
-        let maxLog = log10(EQBandSettings.maxFrequency)
         let freqLog = log10(max(EQBandSettings.minFrequency, min(EQBandSettings.maxFrequency, freq)))
-        let normalized = (freqLog - minLog) / (maxLog - minLog)
+        let normalized = (freqLog - Self.minLogFreq) / Self.logFreqRange
         return CGFloat(normalized) * width
     }
 
     /// Convert X position to frequency (Hz) using log scale
     private func xToFrequency(_ x: CGFloat, width: CGFloat) -> Float {
-        let minLog = log10(EQBandSettings.minFrequency)
-        let maxLog = log10(EQBandSettings.maxFrequency)
         let normalized = Float(max(0, min(width, x)) / width)
-        let freqLog = minLog + normalized * (maxLog - minLog)
+        let freqLog = Self.minLogFreq + normalized * Self.logFreqRange
         return pow(10, freqLog)
     }
 
@@ -460,35 +438,130 @@ struct EQBandPoint: View {
     }
 }
 
-// MARK: - Logarithmic Slider
+// MARK: - EQ Knob
 
-struct LogSlider: View {
+struct EQKnob: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
+    var color: Color = .blue
+    var isLogarithmic: Bool = false
 
-    private var normalizedValue: Float {
-        let minLog = log10(range.lowerBound)
-        let maxLog = log10(range.upperBound)
-        let valueLog = log10(max(range.lowerBound, value))
-        return (valueLog - minLog) / (maxLog - minLog)
+    private let size: CGFloat = 56
+    /// Total arc sweep: 270 degrees
+    private let totalAngle: Double = 270
+    /// Start angle offset from 12 o'clock (clockwise). 135 degrees = 7 o'clock position
+    private let startAngle: Double = 135
+    /// Number of haptic detent positions across the full range
+    private static let hapticDetents = 20
+
+    // Drag state: captures normalized value at gesture start to prevent compounding
+    @State private var dragStartNormalized: Double?
+    @State private var lastDetent: Int = -1
+
+    // Log scale helpers
+    private var minLog: Float { log10(max(1e-10, range.lowerBound)) }
+    private var maxLog: Float { log10(max(1e-10, range.upperBound)) }
+    private var logRange: Float { maxLog - minLog }
+
+    /// Normalize value to 0...1
+    private var normalized: Double {
+        if isLogarithmic {
+            let clamped = max(range.lowerBound, min(range.upperBound, value))
+            let logVal = log10(max(1e-10, clamped))
+            return Double((logVal - minLog) / logRange)
+        } else {
+            let span = range.upperBound - range.lowerBound
+            guard span > 0 else { return 0 }
+            return Double((value - range.lowerBound) / span)
+        }
     }
 
-    private func valueFromNormalized(_ normalized: Float) -> Float {
-        let minLog = log10(range.lowerBound)
-        let maxLog = log10(range.upperBound)
-        let valueLog = minLog + normalized * (maxLog - minLog)
-        return pow(10, valueLog)
+    /// Convert normalized 0...1 back to value
+    private func valueFromNormalized(_ n: Double) -> Float {
+        let clamped = Float(max(0, min(1, n)))
+        if isLogarithmic {
+            let logVal = minLog + clamped * logRange
+            return pow(10, logVal)
+        } else {
+            return range.lowerBound + clamped * (range.upperBound - range.lowerBound)
+        }
     }
+
+    private static let hapticGenerator = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
-        Slider(
-            value: Binding(
-                get: { normalizedValue },
-                set: { value = valueFromNormalized($0) }
-            ),
-            in: 0...1
+        let trackLineWidth: CGFloat = 4
+        let arcRadius = (size - trackLineWidth) / 2
+
+        ZStack {
+            // Background track arc
+            Arc(startAngle: startAngle, sweepAngle: totalAngle)
+                .stroke(color.opacity(0.2), style: StrokeStyle(lineWidth: trackLineWidth, lineCap: .round))
+                .frame(width: arcRadius * 2, height: arcRadius * 2)
+
+            // Value arc
+            Arc(startAngle: startAngle, sweepAngle: totalAngle * normalized)
+                .stroke(color, style: StrokeStyle(lineWidth: trackLineWidth, lineCap: .round))
+                .frame(width: arcRadius * 2, height: arcRadius * 2)
+
+            // Indicator dot
+            let indicatorAngle = Angle.degrees(startAngle + totalAngle * normalized - 90)
+            let dotRadius: CGFloat = 3
+            Circle()
+                .fill(color)
+                .frame(width: dotRadius * 2, height: dotRadius * 2)
+                .offset(
+                    x: (arcRadius - 1) * CGFloat(cos(indicatorAngle.radians)),
+                    y: (arcRadius - 1) * CGFloat(sin(indicatorAngle.radians))
+                )
+        }
+        .frame(width: size, height: size)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { gesture in
+                    // Capture starting position once per drag
+                    if dragStartNormalized == nil {
+                        dragStartNormalized = normalized
+                        lastDetent = Int(normalized * Double(Self.hapticDetents))
+                    }
+                    // Vertical drag: up = increase, down = decrease
+                    // Full range requires ~500pt of drag
+                    let delta = -Double(gesture.translation.height) / 500.0
+                    let newNorm = max(0, min(1, dragStartNormalized! + delta))
+                    value = valueFromNormalized(newNorm)
+
+                    // Haptic on detent crossing
+                    let newDetent = Int(newNorm * Double(Self.hapticDetents))
+                    if newDetent != lastDetent {
+                        lastDetent = newDetent
+                        Self.hapticGenerator.impactOccurred()
+                    }
+                }
+                .onEnded { _ in
+                    dragStartNormalized = nil
+                }
         )
-        .tint(.purple)
+    }
+}
+
+/// Arc shape for knob track/value
+private struct Arc: Shape {
+    let startAngle: Double
+    let sweepAngle: Double
+
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        var path = Path()
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(startAngle - 90),
+            endAngle: .degrees(startAngle + sweepAngle - 90),
+            clockwise: false
+        )
+        return path
     }
 }
 

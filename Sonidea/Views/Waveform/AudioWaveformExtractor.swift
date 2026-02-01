@@ -89,10 +89,48 @@ struct WaveformData: Equatable, Codable {
         let safeStart = max(0, min(startIndex, bestLOD.count - 1))
         let safeEnd = max(safeStart + 1, min(endIndex, bestLOD.count))
 
-        let slice = Array(bestLOD[safeStart..<safeEnd])
+        // Use ArraySlice to avoid copying — resample reads via index access
+        let slice = bestLOD[safeStart..<safeEnd]
 
         // Resample to target count if needed
-        return resample(slice, to: targetCount)
+        return resampleSlice(slice, to: targetCount)
+    }
+
+    /// Resample an ArraySlice without copying to a new Array first.
+    /// Uses offset-adjusted indexing to read directly from the slice.
+    private func resampleSlice(_ samples: ArraySlice<Float>, to targetCount: Int) -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        let count = samples.count
+        guard count != targetCount else { return Array(samples) }
+
+        let base = samples.startIndex
+        var result: [Float] = []
+        result.reserveCapacity(targetCount)
+
+        if count < targetCount {
+            // Upsample with linear interpolation
+            for i in 0..<targetCount {
+                let position = Float(i) * Float(count - 1) / Float(max(1, targetCount - 1))
+                let lowerOffset = Int(position)
+                let upperOffset = min(lowerOffset + 1, count - 1)
+                let fraction = position - Float(lowerOffset)
+                result.append(samples[base + lowerOffset] * (1 - fraction) + samples[base + upperOffset] * fraction)
+            }
+        } else {
+            // Downsample by taking max in each bucket
+            let samplesPerBucket = Float(count) / Float(targetCount)
+            for i in 0..<targetCount {
+                let start = Int(Float(i) * samplesPerBucket)
+                let end = min(Int(Float(i + 1) * samplesPerBucket), count)
+                var maxVal: Float = 0
+                for j in start..<end {
+                    if samples[base + j] > maxVal { maxVal = samples[base + j] }
+                }
+                result.append(maxVal)
+            }
+        }
+
+        return result
     }
 
     private func resample(_ samples: [Float], to targetCount: Int) -> [Float] {

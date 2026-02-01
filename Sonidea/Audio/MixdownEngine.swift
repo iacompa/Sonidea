@@ -185,33 +185,49 @@ final class MixdownEngine {
                     outRight[i] = 0
                 }
 
-                // Mix base track (with loop support)
+                // Mix base track
                 let baseLength = baseFile.length
                 if baseIsLooped || position < baseLength {
 
-                    var outOffset = 0
-                    var remaining = Int(framesToProcess)
-                    while remaining > 0 {
-                        let globalPos = position + AVAudioFramePosition(outOffset)
-                        let effectivePos = baseIsLooped ? (globalPos % baseLength) : globalPos
-                        if !baseIsLooped && effectivePos >= baseLength { break }
+                    // Fast path: non-looped base track can read sequentially without inner loop
+                    if !baseIsLooped {
+                        let readable = Int(min(AVAudioFramePosition(framesToProcess), baseLength - position))
+                        if readable > 0 {
+                            baseBuffer.frameLength = AVAudioFrameCount(readable)
+                            try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
 
-                        let framesUntilEnd = Int(baseLength - effectivePos)
-                        let readable = min(remaining, framesUntilEnd)
-                        guard readable > 0 else { break }
-
-                        baseFile.framePosition = effectivePos
-                        baseBuffer.frameLength = AVAudioFrameCount(readable)
-                        try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
-
-                        if let baseData = baseBuffer.floatChannelData {
-                            var lGain = baseLeftGain
-                            var rGain = baseRightGain
-                            vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
-                            vDSP_vsma(baseData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                            if let baseData = baseBuffer.floatChannelData {
+                                var lGain = baseLeftGain
+                                var rGain = baseRightGain
+                                vDSP_vsma(baseData[0], 1, &lGain, outLeft, 1, outLeft, 1, vDSP_Length(readable))
+                                vDSP_vsma(baseData[0], 1, &rGain, outRight, 1, outRight, 1, vDSP_Length(readable))
+                            }
                         }
-                        outOffset += readable
-                        remaining -= readable
+                    } else {
+                        // Looped path: inner loop handles wrap-around at track boundaries
+                        var outOffset = 0
+                        var remaining = Int(framesToProcess)
+                        while remaining > 0 {
+                            let globalPos = position + AVAudioFramePosition(outOffset)
+                            let effectivePos = globalPos % baseLength
+
+                            let framesUntilEnd = Int(baseLength - effectivePos)
+                            let readable = min(remaining, framesUntilEnd)
+                            guard readable > 0 else { break }
+
+                            baseFile.framePosition = effectivePos
+                            baseBuffer.frameLength = AVAudioFrameCount(readable)
+                            try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
+
+                            if let baseData = baseBuffer.floatChannelData {
+                                var lGain = baseLeftGain
+                                var rGain = baseRightGain
+                                vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
+                                vDSP_vsma(baseData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                            }
+                            outOffset += readable
+                            remaining -= readable
+                        }
                     }
                 }
 

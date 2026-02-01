@@ -10,14 +10,22 @@ import Foundation
 import CryptoKit
 @testable import Sonidea
 
+// Disambiguate Sonidea.Tag from Testing.Tag
+private typealias AppTag = Sonidea.Tag
+
 struct DataSafetyManagerTests {
 
     // MARK: - Helpers
 
-    /// Clean up test data directory
+    /// Clean up test data directory and legacy UserDefaults fallback
     private func cleanTestDirectory() {
         let directory = DataSafetyFileOps.dataDirectory()
         try? FileManager.default.removeItem(at: directory)
+
+        // Also clear legacy UserDefaults to prevent fallback from returning stale data
+        for collection in CollectionID.allCases {
+            UserDefaults.standard.removeObject(forKey: collection.legacyDefaultsKey)
+        }
     }
 
     // MARK: - Save + Load Round-Trip
@@ -27,8 +35,8 @@ struct DataSafetyManagerTests {
         defer { cleanTestDirectory() }
 
         let recordings = [
-            TestFixtures.makeRecording(title: "Test 1", duration: 30),
-            TestFixtures.makeRecording(title: "Test 2", duration: 60)
+            TestFixtures.makeRecording(duration: 30, title: "Test 1"),
+            TestFixtures.makeRecording(duration: 60, title: "Test 2")
         ]
 
         DataSafetyFileOps.saveSync(recordings, collection: .recordings)
@@ -49,7 +57,7 @@ struct DataSafetyManagerTests {
         ]
 
         DataSafetyFileOps.saveSync(tags, collection: .tags)
-        let loaded = DataSafetyFileOps.load(Tag.self, collection: .tags)
+        let loaded = DataSafetyFileOps.load(AppTag.self, collection: .tags)
 
         #expect(loaded.count == 2)
         #expect(loaded[0].name == "melody")
@@ -128,7 +136,7 @@ struct DataSafetyManagerTests {
 
         // Load should fail checksum and fall back (to backup or empty)
         // The backup from the rotation should still have valid data
-        let loaded = DataSafetyFileOps.load(Tag.self, collection: .tags)
+        let loaded = DataSafetyFileOps.load(AppTag.self, collection: .tags)
         // It should either recover from backup or return empty (not crash)
         #expect(loaded.count <= 1)
     }
@@ -158,7 +166,7 @@ struct DataSafetyManagerTests {
         #expect(FileManager.default.fileExists(atPath: backup2.path))
 
         // Primary should have latest data
-        let loaded = DataSafetyFileOps.load(Tag.self, collection: .tags)
+        let loaded = DataSafetyFileOps.load(AppTag.self, collection: .tags)
         #expect(loaded.count == 1)
         #expect(loaded[0].name == "v3")
     }
@@ -183,7 +191,7 @@ struct DataSafetyManagerTests {
         try FileManager.default.removeItem(at: primaryURL)
 
         // Should recover from backup
-        let loaded = DataSafetyFileOps.load(Tag.self, collection: .tags)
+        let loaded = DataSafetyFileOps.load(AppTag.self, collection: .tags)
         #expect(!loaded.isEmpty)
     }
 

@@ -129,7 +129,7 @@ struct ZoomableWaveformEditor: View {
     // MARK: - Constants
 
     private var waveformHeight: CGFloat { sizeClass == .regular ? 220 : 160 }
-    private let timeRulerHeight: CGFloat = 22  // Apple Voice Memos-style compact ruler
+    private let timeRulerHeight: CGFloat = 28  // Apple Voice Memos-style compact ruler
     private let handleMinDistance: CGFloat = 10  // Increased from 1 to prevent accidental drags
 
     // Haptic generators
@@ -414,7 +414,7 @@ struct ZoomableWaveformCanvas: View {
             let startIdx = Swift.max(0, Swift.min(visibleStartIndex, samples.count - 1))
             let endIdx = Swift.max(startIdx + 1, Swift.min(visibleEndIndex, samples.count))
 
-            let visibleSamples = Array(samples[startIdx..<endIdx])
+            let visibleSamples = samples[startIdx..<endIdx]
 
             // Draw bars
             let barCount = visibleSamples.count

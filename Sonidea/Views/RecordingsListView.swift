@@ -165,6 +165,9 @@ struct RecordingsListView: View {
         .onChange(of: appState.activeRecordings.count) { _, _ in
             cachedGroupedRecordings = computeGroupedRecordings()
         }
+        .onChange(of: appState.recordingsContentVersion) { _, _ in
+            cachedGroupedRecordings = computeGroupedRecordings()
+        }
     }
 
     private var emptyState: some View {
@@ -314,6 +317,33 @@ struct RecordingsListView: View {
 
     // MARK: - Recordings List
 
+    // Pre-computed lookup dictionaries for O(1) tag/album/project resolution in row rendering
+    private var tagLookup: [UUID: Tag] {
+        Dictionary(uniqueKeysWithValues: appState.tags.map { ($0.id, $0) })
+    }
+
+    private var albumLookup: [UUID: Album] {
+        Dictionary(uniqueKeysWithValues: appState.albums.map { ($0.id, $0) })
+    }
+
+    private var projectLookup: [UUID: Project] {
+        Dictionary(uniqueKeysWithValues: appState.projects.map { ($0.id, $0) })
+    }
+
+    private func resolvedTags(for recording: RecordingItem) -> [Tag] {
+        recording.tagIDs.compactMap { tagLookup[$0] }
+    }
+
+    private func resolvedAlbum(for recording: RecordingItem) -> Album? {
+        guard let id = recording.albumID else { return nil }
+        return albumLookup[id]
+    }
+
+    private func resolvedProject(for recording: RecordingItem) -> Project? {
+        guard let id = recording.projectId else { return nil }
+        return projectLookup[id]
+    }
+
     private var recordingsList: some View {
         List {
             ForEach(cachedGroupedRecordings, id: \.date) { group in
@@ -323,7 +353,10 @@ struct RecordingsListView: View {
                             recording: recording,
                             isSelectionMode: isSelectionMode,
                             isSelected: selectedRecordingIDs.contains(recording.id),
-                            showTime: Calendar.current.isDateInToday(group.date)
+                            showTime: Calendar.current.isDateInToday(group.date),
+                            preResolvedTags: resolvedTags(for: recording),
+                            preResolvedAlbum: .some(resolvedAlbum(for: recording)),
+                            preResolvedProject: .some(resolvedProject(for: recording))
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -532,20 +565,28 @@ struct RecordingRow: View {
     var isSelected: Bool = false
     var showTime: Bool = false
 
+    // Pre-resolved lookups to avoid O(n) scans per row during render passes
+    var preResolvedTags: [Tag]?
+    var preResolvedAlbum: Album??
+    var preResolvedProject: Project??
+
     private var formattedTime: String {
         CachedDateFormatter.timeOnly.string(from: recording.createdAt)
     }
 
     private var recordingTags: [Tag] {
-        appState.tags(for: recording.tagIDs)
+        if let tags = preResolvedTags { return tags }
+        return appState.tags(for: recording.tagIDs)
     }
 
     private var album: Album? {
-        appState.album(for: recording.albumID)
+        if let resolved = preResolvedAlbum { return resolved }
+        return appState.album(for: recording.albumID)
     }
 
     private var project: Project? {
-        appState.project(for: recording.projectId)
+        if let resolved = preResolvedProject { return resolved }
+        return appState.project(for: recording.projectId)
     }
 
     private var isBestTake: Bool {
@@ -599,6 +640,7 @@ struct RecordingRow: View {
                     if let album = album, album.isShared {
                         SharedAlbumBadge()
                     }
+
                 }
 
                 HStack(spacing: 6) {

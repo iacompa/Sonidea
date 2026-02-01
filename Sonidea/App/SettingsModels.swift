@@ -374,7 +374,7 @@ struct AppSettings: Codable {
     // Prevent screen sleep while recording
     var preventSleepWhileRecording: Bool = true
 
-    // Metronome / click track
+    // Metronome
     var metronomeEnabled: Bool = false
     var metronomeBPM: Double = 120
     var metronomeVolume: Float = 0.8

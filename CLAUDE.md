@@ -504,8 +504,66 @@ GeometryReader { outerProxy in
 - Playback controls use `HStack(spacing: 12)` with NO Spacers — buttons are grouped together, not pushed to edges
 - The `.padding(.vertical, 16)` on the VStack DOES work correctly (only horizontal is broken)
 
+## Bluetooth Recording & Metronome Bug Fixes (latest session)
+
+### OverdubEngine Fixes (error 560226676 — "could not create recording file")
+- **AAC bitrate scaling**: `recordingSettings(for:)` now caps bitrate relative to sample rate (`maxBitratePerChannel = max(32000, Int(sampleRate) * 8)`). With Bluetooth HFP at 8kHz, bitrate caps to 64kbps instead of rejected 128kbps. Matches RecorderManager pattern.
+- **Input format resolution**: Replaced stale `inputNode.outputFormat(forBus: 0)` with 3-tier fallback: (1) `inputNode.inputFormat(forBus: 0)` — actual hardware format, (2) `outputFormat` — fallback, (3) construct from `session.sampleRate` — last resort. Prevents format mismatch after engine stop.
+- **Stored AppSettings**: `prepare()` now stores `settings` in `storedAppSettings` property for use in `startRecording()`.
+- **Preferred input reapplication**: After Bluetooth HFP route stabilization polling, calls `refreshAvailableInputs()` and `applyPreferredInput(from: storedAppSettings)` to honor mic source selection.
+
+### AudioSessionManager Fixes
+- **configureForOverdub()**: Now sets `lastAppliedSettings = settings` so route-change handler can reapply preferred input during overdub sessions.
+- **configureForOverdub()**: Added `applyPreferredInput(from: settings)` BEFORE session activation (matching double-apply pattern in configureForRecording).
+
+### RecorderManager Fixes ("no audio captured" with metronome)
+- **Buffer write counting**: New `bufferWriteCount` and `lastWriteErrorMessage` properties track successful writes and last error.
+- **Post-start validation**: 1.5-second delayed check after engine starts — if `bufferWriteCount == 0`, shows actionable error ("No audio input detected. Check your microphone connection or try disconnecting Bluetooth.") and logs full diagnostics.
+- **Enhanced "no audio captured" error**: Now logs full diagnostics via `AudioDiagnostics.logNoAudioCaptured()` and shows context-aware error message (mentions Bluetooth/mic if zero buffers written).
+
+### Always-On Diagnostic Logging
+- **AudioDiagnostics enum** (in AudioSessionManager.swift): Two static methods that log in BOTH Debug and Release builds (critical for TestFlight):
+  - `logRecordingStart()`: File URL, directory, free space, session state (category, mode, sampleRate, IOBufferDuration, inputAvailable, preferredInput), route (all inputs + outputs), engine state (formats)
+  - `logNoAudioCaptured()`: File size, buffer count, write error count, last error, session state, route
+- Both RecorderManager and OverdubEngine call `logRecordingStart()` at engine start
+- RecorderManager metronome logging now always-on (not DEBUG-only): BPM, volume, mixer volume, output format, output route devices
+- MetronomeEngine logs in `createSourceNode()` and `start()`: sample rate, format, BPM, volume, sourceNode status
+
+### Files Modified (4)
+| File | Changes |
+|------|---------|
+| `AudioSessionManager.swift` | +lastAppliedSettings in configureForOverdub, +pre-activation applyPreferredInput, +AudioDiagnostics enum |
+| `OverdubEngine.swift` | +storedAppSettings, +AAC bitrate scaling, +3-tier input format resolution, +BT preferred input reapplication, +diagnostic logging |
+| `RecorderManager.swift` | +bufferWriteCount/lastWriteErrorMessage, +post-start validation, +enhanced no-audio error, +always-on diagnostics |
+| `MetronomeEngine.swift` | +diagnostic logging in createSourceNode() and start() |
+
 **Remaining work:**
 - Shared album methods (~400 lines) still live directly in AppState due to CloudKit async coupling
 - No integration tests or UI tests
 - ShareSheet iPad popover configuration (not confirmed as an issue when presented via SwiftUI .sheet)
 - Watch: no audio session interruption handling, no crash recovery for in-progress recordings
+
+## Logic Pro-Style Knob EQ Controls (latest session)
+
+### Overview
+Replaced slider-based EQ band controls with Logic Pro-style rotary knobs in `EQGraphView.swift`. The interactive EQ graph (draggable band points) is unchanged. The slider panel below is now a row of 3 knobs (Freq, Gain, Q) per band with color-coded band selector tabs.
+
+### New Views
+- **`EQKnob`**: 270-degree arc knob (~56pt diameter) with background track, value arc, and indicator dot. Vertical drag gesture (up = increase, down = decrease, ~300pt for full range). `isLogarithmic` flag for frequency knob (log10 scale).
+- **`EQBandTab`**: Color-coded capsule pill button for band selection (filled when selected, tinted when not)
+- **`Arc`** (private): `Shape` struct for drawing arc paths used by `EQKnob`
+
+### Changes to `ParametricEQView`
+- `selectedBand` default changed from `nil` to `0` — knobs always visible on load
+- `body` now shows `bandTabs` (4 color-coded pill buttons) + `knobControls(for:)` (3 knobs in HStack)
+- Band point `onTapGesture` always selects (never deselects to nil)
+- Added `bandColors` static array `[.red, .orange, .green, .blue]` shared between tabs and knobs
+
+### Removed
+- `LogSlider` struct (replaced by `EQKnob` with `isLogarithmic: true`)
+- `bandControls(for:)` method (old Freq/Gain/Q slider layout)
+
+### File Modified (1)
+| File | Changes |
+|------|---------|
+| `EQGraphView.swift` | -LogSlider, -bandControls(for:), +EQKnob, +EQBandTab, +Arc, +bandTabs, +knobControls(for:), selectedBand default 0 |

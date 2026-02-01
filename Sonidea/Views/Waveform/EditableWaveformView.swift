@@ -160,10 +160,10 @@ struct EditableWaveformView: View {
             let barWidth = Swift.max(2, availableWidth / CGFloat(barCount))
             let cornerRadius: CGFloat = 1.5
 
-            // DAW-style waveform: always use accent color for high visibility on all themes
-            let waveformColor = palette.accent
-            let playedColor = waveformColor
-            let unplayedColor = colorScheme == .dark ? waveformColor.opacity(0.6) : waveformColor.opacity(0.5)
+            // High-contrast neutral bars by default; accent only when selection active
+            let neutralBarColor = palette.waveformBarColor
+            let playedColor = neutralBarColor
+            let unplayedColor = neutralBarColor.opacity(colorScheme == .dark ? 0.6 : 0.5)
 
             let playheadProgress = duration > 0 ? currentTime / duration : 0
             let playheadIndex = Int(playheadProgress * Double(barCount))
@@ -184,13 +184,13 @@ struct EditableWaveformView: View {
 
                 let color: Color
                 if isEditing {
-                    // DAW-style: accent color waveform, dim unselected when selection exists
+                    // Neutral bars always. Selected region switches to accent color.
+                    // Non-selected bars stay unchanged (no dimming).
                     if hasActiveSelection {
                         let isInSelection = index >= selectionStartIndex && index <= selectionEndIndex
-                        color = isInSelection ? waveformColor : waveformColor.opacity(0.5)
+                        color = isInSelection ? palette.accent : neutralBarColor
                     } else {
-                        // No selection: full brightness
-                        color = waveformColor
+                        color = neutralBarColor
                     }
                 } else {
                     // Normal playback mode
@@ -532,6 +532,9 @@ struct EditableWaveformView: View {
                     newTime = Swift.max(0, Swift.min(newTime, duration))
                     newTime = quantize(newTime)
                     playheadPosition = newTime
+                    // Clear any active selection when tapping to set playhead
+                    selectionStart = 0
+                    selectionEnd = 0
                     impactGenerator.impactOccurred(intensity: 0.4)
                 } else {
                     // In playback mode: tap seeks to position
@@ -713,83 +716,6 @@ struct WaveformEditActionsView: View {
             // Precision toggle
             HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
         }
-    }
-}
-
-// MARK: - Full-Width Edit Actions Row
-
-struct EditActionsRow: View {
-    let canTrim: Bool
-    let canCut: Bool
-    let isProcessing: Bool
-    @Binding var isPrecisionMode: Bool
-    @Binding var showToolsPanel: Bool
-    let onTrim: () -> Void
-    let onCut: () -> Void
-    let onAddMarker: () -> Void
-    let onMoreTapped: () -> Void
-
-    @Environment(\.themePalette) private var palette
-
-    var body: some View {
-        HStack(spacing: 0) {
-            EditActionButton(
-                icon: "crop",
-                label: "Trim",
-                isEnabled: canTrim && !isProcessing,
-                style: .primary,
-                action: onTrim
-            )
-
-            Spacer()
-
-            EditActionButton(
-                icon: "scissors",
-                label: "Cut",
-                isEnabled: canCut && !isProcessing,
-                style: .destructive,
-                action: onCut
-            )
-
-            Spacer()
-
-            // Mark button (icon + text)
-            Button(action: onAddMarker) {
-                HStack(spacing: 4) {
-                    Image(systemName: "flag.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("Mark")
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 10)
-                .foregroundColor(!isProcessing ? palette.accent : palette.textTertiary)
-                .background(!isProcessing ? palette.accent.opacity(0.12) : palette.inputBackground)
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(!isProcessing ? palette.accent.opacity(0.25) : Color.clear, lineWidth: 1)
-                )
-            }
-            .disabled(isProcessing)
-
-            Spacer()
-
-            HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
-
-            Spacer()
-
-            EditToolButton(
-                icon: "line.3.horizontal",
-                label: "More",
-                isActive: showToolsPanel,
-                isEnabled: !isProcessing,
-                action: onMoreTapped
-            )
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 

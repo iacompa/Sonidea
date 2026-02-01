@@ -67,8 +67,7 @@ struct RoadmapItem: Identifiable {
 }
 
 let roadmapItems: [RoadmapItem] = [
-RoadmapItem(title: "VST3/AU Plugin for DAW imports", icon: "puzzlepiece.extension"),
-    RoadmapItem(title: "Android release", icon: "iphone.and.arrow.forward"),
+    RoadmapItem(title: "VST3/AU Plugin for DAW imports", icon: "puzzlepiece.extension"),
     RoadmapItem(title: "More themes", icon: "paintpalette"),
 ]
 
@@ -84,6 +83,7 @@ final class SupportManager {
     var purchaseError: String?
     var products: [Product] = []
     var isLoadingProducts = true
+    var productsLoadFailed = false
 
     /// Callback invoked when Pro access is lost (trial expired or subscription cancelled)
     var onProAccessLost: (() -> Void)?
@@ -207,13 +207,19 @@ final class SupportManager {
         isLoadingProducts = true
         do {
             products = try await Product.products(for: SubscriptionPlan.allProductIDs)
+            productsLoadFailed = false
             await updateAnnualIntroOfferEligibility()
             isLoadingProducts = false
         } catch {
-            #if DEBUG
-            print("Failed to load products: \(error)")
-            #endif
+            print("[SupportManager] Failed to load products: \(error)")
+            productsLoadFailed = true
             isLoadingProducts = false
+        }
+    }
+
+    func retryLoadProducts() {
+        Task {
+            await loadProducts()
         }
     }
 
@@ -296,7 +302,13 @@ final class SupportManager {
 
     func purchase(plan: SubscriptionPlan) async {
         guard let product = products.first(where: { $0.id == plan.rawValue }) else {
-            purchaseError = "Products are still loading. Try again in a moment."
+            if productsLoadFailed {
+                purchaseError = "Subscription options could not be loaded. Please check your internet connection and try again."
+            } else if products.isEmpty && !isLoadingProducts {
+                purchaseError = "Subscription products are temporarily unavailable. Please try again later."
+            } else {
+                purchaseError = "Products are still loading. Try again in a moment."
+            }
             return
         }
 

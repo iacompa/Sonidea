@@ -807,6 +807,60 @@ struct WaveformBarsView: View {
     var showsSelectionHighlight: Bool = true  // Set to false for Details (non-edit) mode
     var showsHorizontalGrid: Bool = true      // Set to false for Details (cleaner look)
 
+    /// Cached grid line x-positions to avoid recalculating when visible range hasn't changed
+    private struct GridCache {
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+        let width: CGFloat
+        let height: CGFloat
+        let majorXPositions: [CGFloat]
+        let minorXPositions: [CGFloat]
+        let horizontalYPositions: [CGFloat]
+        let centerY: CGFloat
+    }
+
+    /// Build or reuse cached grid positions. Only recalculates when visible range or size changes.
+    private func gridPositions(actualWidth: CGFloat, height: CGFloat) -> GridCache {
+        let startTime = timeline.visibleStartTime
+        let endTime = timeline.visibleEndTime
+        let (majorInterval, minorInterval) = timeline.tickIntervals()
+
+        // Minor vertical grid positions
+        var minorXs: [CGFloat] = []
+        let firstMinorTick = ceil(startTime / minorInterval) * minorInterval
+        var minorTime = firstMinorTick
+        while minorTime <= endTime {
+            minorXs.append(timeline.timeToX(minorTime, width: actualWidth))
+            minorTime += minorInterval
+        }
+
+        // Major vertical grid positions
+        var majorXs: [CGFloat] = []
+        let firstMajorTick = ceil(startTime / majorInterval) * majorInterval
+        var majorTime = firstMajorTick
+        while majorTime <= endTime {
+            majorXs.append(timeline.timeToX(majorTime, width: actualWidth))
+            majorTime += majorInterval
+        }
+
+        // Horizontal grid positions
+        var hYs: [CGFloat] = []
+        if showsHorizontalGrid {
+            let horizontalGridCount = 4
+            let horizontalSpacing = height / CGFloat(horizontalGridCount)
+            for i in 1..<horizontalGridCount {
+                hYs.append(CGFloat(i) * horizontalSpacing)
+            }
+        }
+
+        return GridCache(
+            startTime: startTime, endTime: endTime,
+            width: actualWidth, height: height,
+            majorXPositions: majorXs, minorXPositions: minorXs,
+            horizontalYPositions: hYs, centerY: height / 2
+        )
+    }
+
     var body: some View {
         Canvas { context, size in
             guard let data = waveformData else { return }
@@ -833,43 +887,29 @@ struct WaveformBarsView: View {
             // High-contrast neutral bars by default; accent color only when selection is active
             let neutralBarColor = palette.waveformBarColor
 
-            // === 1. Draw Grid (aligned with time ruler) ===
+            // === 1. Draw Grid (aligned with time ruler, using cached positions) ===
 
-            // Vertical grid lines - use same time intervals as ruler for perfect alignment
-            let (majorInterval, minorInterval) = timeline.tickIntervals()
-            let startTime = timeline.visibleStartTime
-            let endTime = timeline.visibleEndTime
+            let grid = gridPositions(actualWidth: actualWidth, height: size.height)
 
             // Draw minor vertical grid lines (lighter)
-            let firstMinorTick = ceil(startTime / minorInterval) * minorInterval
-            var minorTime = firstMinorTick
-            while minorTime <= endTime {
-                let x = timeline.timeToX(minorTime, width: actualWidth)
+            for x in grid.minorXPositions {
                 var gridLine = Path()
                 gridLine.move(to: CGPoint(x: x, y: 0))
                 gridLine.addLine(to: CGPoint(x: x, y: size.height))
                 context.stroke(gridLine, with: .color(gridColor.opacity(0.5)), lineWidth: 0.5)
-                minorTime += minorInterval
             }
 
             // Draw major vertical grid lines (more visible)
-            let firstMajorTick = ceil(startTime / majorInterval) * majorInterval
-            var majorTime = firstMajorTick
-            while majorTime <= endTime {
-                let x = timeline.timeToX(majorTime, width: actualWidth)
+            for x in grid.majorXPositions {
                 var gridLine = Path()
                 gridLine.move(to: CGPoint(x: x, y: 0))
                 gridLine.addLine(to: CGPoint(x: x, y: size.height))
                 context.stroke(gridLine, with: .color(gridColor), lineWidth: 0.5)
-                majorTime += majorInterval
             }
 
             // Horizontal grid lines (amplitude markers) - only in Edit mode
             if showsHorizontalGrid {
-                let horizontalGridCount = 4
-                let horizontalSpacing = size.height / CGFloat(horizontalGridCount)
-                for i in 1..<horizontalGridCount {
-                    let y = CGFloat(i) * horizontalSpacing
+                for y in grid.horizontalYPositions {
                     var gridLine = Path()
                     gridLine.move(to: CGPoint(x: 0, y: y))
                     gridLine.addLine(to: CGPoint(x: actualWidth, y: y))

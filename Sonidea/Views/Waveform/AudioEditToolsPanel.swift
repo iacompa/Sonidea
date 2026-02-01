@@ -2,8 +2,7 @@
 //  AudioEditToolsPanel.swift
 //  Sonidea
 //
-//  Individual tool sheets for Fade, Peak (Normalize), and Noise Gate.
-//  Also includes EditToolButton for the inline toolbar and FadeCurveOverlay for waveform visualization.
+//  Edit tool button, fade curve overlay, tool type enum, and slide-up tools panel.
 //
 
 import SwiftUI
@@ -44,579 +43,6 @@ struct EditToolButton: View {
             )
         }
         .disabled(!isEnabled && !isActive)
-    }
-}
-
-// MARK: - Fade Tool Sheet
-
-struct FadeToolSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
-
-    @Binding var isProcessing: Bool
-    let duration: TimeInterval
-    @Binding var fadeInDuration: Double
-    @Binding var fadeOutDuration: Double
-    @Binding var fadeCurve: FadeCurve
-    let isApplied: Bool
-    let onApply: (TimeInterval, TimeInterval, FadeCurve) -> Void
-    let onRemove: () -> Void
-
-    @State private var debounceTask: Task<Void, Never>?
-
-    private static let defaultFadeIn: Double = 0
-    private static let defaultFadeOut: Double = 0
-    private static let defaultCurve: FadeCurve = .sCurve
-
-    private var maxFade: Double { min(5.0, duration / 2) }
-
-    private var isDefault: Bool {
-        fadeInDuration == Self.defaultFadeIn
-            && fadeOutDuration == Self.defaultFadeOut
-            && fadeCurve == Self.defaultCurve
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("Fade In", systemImage: "arrow.up.right")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1fs", fadeInDuration))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $fadeInDuration, in: 0...maxFade, step: 0.1)
-                            .tint(palette.accent)
-
-                        HStack {
-                            Label("Fade Out", systemImage: "arrow.down.right")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1fs", fadeOutDuration))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $fadeOutDuration, in: 0...maxFade, step: 0.1)
-                            .tint(palette.accent)
-
-                        Picker("Curve", selection: $fadeCurve) {
-                            ForEach(FadeCurve.allCases) { curve in
-                                Text(curve.displayName).tag(curve)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                } header: {
-                    Text("Settings")
-                }
-
-                Section {
-                    if isApplied || !isDefault {
-                        Button {
-                            debounceTask?.cancel()
-                            fadeInDuration = Self.defaultFadeIn
-                            fadeOutDuration = Self.defaultFadeOut
-                            fadeCurve = Self.defaultCurve
-                            if isApplied { onRemove() }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Reset to Default", systemImage: "arrow.counterclockwise")
-                                    .fontWeight(.medium)
-                                    .foregroundColor(palette.textSecondary)
-                                Spacer()
-                            }
-                        }
-                        .disabled(isProcessing)
-                    }
-
-                    if isProcessing {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .padding(.trailing, 6)
-                            Text("Processing...")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textTertiary)
-                            Spacer()
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Fade")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        debounceTask?.cancel()
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: fadeInDuration) { debouncedApply() }
-            .onChange(of: fadeOutDuration) { debouncedApply() }
-            .onChange(of: fadeCurve) { debouncedApply() }
-        }
-    }
-
-    private func debouncedApply() {
-        guard fadeInDuration > 0 || fadeOutDuration > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard !Task.isCancelled else { return }
-            onApply(fadeInDuration, fadeOutDuration, fadeCurve)
-        }
-    }
-}
-
-// MARK: - Peak (Normalize) Tool Sheet
-
-struct PeakToolSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
-
-    @Binding var isProcessing: Bool
-    @Binding var normalizeTarget: Float
-    let isApplied: Bool
-    let onApply: (Float) -> Void
-    let onRemove: () -> Void
-
-    @State private var debounceTask: Task<Void, Never>?
-
-    private static let defaultTarget: Float = -0.3
-
-    private var isDefault: Bool {
-        normalizeTarget == Self.defaultTarget
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Target Peak")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1f dB", normalizeTarget))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $normalizeTarget, in: -6...0, step: 0.1)
-                            .tint(palette.accent)
-                        Text("Adjusts volume so the loudest peak reaches the target level.")
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                } header: {
-                    Label("Normalize", systemImage: "speaker.wave.3")
-                }
-
-                Section {
-                    if isApplied || !isDefault {
-                        Button {
-                            debounceTask?.cancel()
-                            normalizeTarget = Self.defaultTarget
-                            if isApplied { onRemove() }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Reset to Default", systemImage: "arrow.counterclockwise")
-                                    .fontWeight(.medium)
-                                    .foregroundColor(palette.textSecondary)
-                                Spacer()
-                            }
-                        }
-                        .disabled(isProcessing)
-                    }
-
-                    if isProcessing {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .padding(.trailing, 6)
-                            Text("Processing...")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textTertiary)
-                            Spacer()
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Peak")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        debounceTask?.cancel()
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: normalizeTarget) {
-                debounceTask?.cancel()
-                debounceTask = Task {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    guard !Task.isCancelled else { return }
-                    onApply(normalizeTarget)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Gate Tool Sheet
-
-struct GateToolSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
-
-    @Binding var isProcessing: Bool
-    @Binding var gateThreshold: Float
-    let isApplied: Bool
-    let onApply: (Float) -> Void
-    let onRemove: () -> Void
-
-    @State private var debounceTask: Task<Void, Never>?
-
-    private static let defaultThreshold: Float = -40
-
-    private var isDefault: Bool {
-        gateThreshold == Self.defaultThreshold
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Threshold")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.0f dB", gateThreshold))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $gateThreshold, in: -60...(-10), step: 1)
-                            .tint(palette.accent)
-                        Text("Silences audio below the threshold. Useful for removing background noise between phrases.")
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                } header: {
-                    Label("Noise Gate", systemImage: "waveform.badge.minus")
-                }
-
-                Section {
-                    if isApplied || !isDefault {
-                        Button {
-                            debounceTask?.cancel()
-                            gateThreshold = Self.defaultThreshold
-                            if isApplied { onRemove() }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Reset to Default", systemImage: "arrow.counterclockwise")
-                                    .fontWeight(.medium)
-                                    .foregroundColor(palette.textSecondary)
-                                Spacer()
-                            }
-                        }
-                        .disabled(isProcessing)
-                    }
-
-                    if isProcessing {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .padding(.trailing, 6)
-                            Text("Processing...")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textTertiary)
-                            Spacer()
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Gate")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        debounceTask?.cancel()
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: gateThreshold) {
-                debounceTask?.cancel()
-                debounceTask = Task {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    guard !Task.isCancelled else { return }
-                    onApply(gateThreshold)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Compress Tool Sheet
-
-struct CompressToolSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
-
-    @Binding var isProcessing: Bool
-    @Binding var makeupGain: Float
-    @Binding var peakReduction: Float
-    let isApplied: Bool
-    let onApply: (Float, Float) -> Void
-    let onRemove: () -> Void
-
-    @State private var debounceTask: Task<Void, Never>?
-
-    private static let defaultGain: Float = 0
-    private static let defaultReduction: Float = 0
-
-    private var isDefault: Bool {
-        makeupGain == Self.defaultGain && peakReduction == Self.defaultReduction
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Gain")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1f dB", makeupGain))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $makeupGain, in: 0...10, step: 0.1)
-                            .tint(palette.accent)
-                        Text("Boosts overall output level after compression.")
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                } header: {
-                    Label("Makeup Gain", systemImage: "speaker.wave.2")
-                }
-
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Peak Reduction")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1f", peakReduction))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundColor(palette.textSecondary)
-                        }
-                        Slider(value: $peakReduction, in: 0...10, step: 0.1)
-                            .tint(palette.accent)
-                        Text("Controls how aggressively peaks are reduced. Higher values = more compression.")
-                            .font(.caption)
-                            .foregroundColor(palette.textSecondary)
-                    }
-                } header: {
-                    Label("Peak Reduction", systemImage: "waveform.path.ecg.rectangle")
-                }
-
-                Section {
-                    if isApplied || !isDefault {
-                        Button {
-                            debounceTask?.cancel()
-                            makeupGain = Self.defaultGain
-                            peakReduction = Self.defaultReduction
-                            if isApplied { onRemove() }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Label("Reset to Default", systemImage: "arrow.counterclockwise")
-                                    .fontWeight(.medium)
-                                    .foregroundColor(palette.textSecondary)
-                                Spacer()
-                            }
-                        }
-                        .disabled(isProcessing)
-                    }
-
-                    if isProcessing {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .padding(.trailing, 6)
-                            Text("Processing...")
-                                .font(.subheadline)
-                                .foregroundColor(palette.textTertiary)
-                            Spacer()
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Compress")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        debounceTask?.cancel()
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: makeupGain) { debouncedApply() }
-            .onChange(of: peakReduction) { debouncedApply() }
-        }
-    }
-
-    private func debouncedApply() {
-        guard makeupGain > 0 || peakReduction > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard !Task.isCancelled else { return }
-            onApply(makeupGain, peakReduction)
-        }
-    }
-}
-
-// MARK: - Fade Curve Preview (inside sheet)
-
-struct FadeCurvePreview: View {
-    let fadeInDuration: TimeInterval
-    let fadeOutDuration: TimeInterval
-    let curve: FadeCurve
-    let totalDuration: TimeInterval
-
-    @Environment(\.themePalette) private var palette
-
-    var body: some View {
-        Canvas { context, size in
-            let w = size.width
-            let h = size.height
-
-            guard totalDuration > 0 else { return }
-
-            // Draw baseline
-            let baselineY = h - 4
-            context.stroke(
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: baselineY))
-                    p.addLine(to: CGPoint(x: w, y: baselineY))
-                },
-                with: .color(palette.textTertiary.opacity(0.3)),
-                lineWidth: 1
-            )
-
-            // Draw top line
-            let topY: CGFloat = 4
-            context.stroke(
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: topY))
-                    p.addLine(to: CGPoint(x: w, y: topY))
-                },
-                with: .color(palette.textTertiary.opacity(0.15)),
-                lineWidth: 0.5
-            )
-
-            // Build the fade envelope path
-            let fadeInFraction = CGFloat(fadeInDuration / totalDuration)
-            let fadeOutFraction = CGFloat(fadeOutDuration / totalDuration)
-            let fadeInEndX = fadeInFraction * w
-            let fadeOutStartX = w - (fadeOutFraction * w)
-
-            let steps = 60
-            var envelopePath = Path()
-
-            for i in 0...steps {
-                let t = CGFloat(i) / CGFloat(steps)
-                let x = t * w
-
-                var gain: CGFloat = 1.0
-
-                // Fade in region
-                if fadeInDuration > 0 && x < fadeInEndX {
-                    let fadeT = Float(x / fadeInEndX)
-                    gain = CGFloat(curve.apply(fadeT))
-                }
-
-                // Fade out region
-                if fadeOutDuration > 0 && x > fadeOutStartX {
-                    let fadeT = Float((w - x) / (w - fadeOutStartX))
-                    let fadeOutGain = CGFloat(curve.apply(fadeT))
-                    gain = min(gain, fadeOutGain)
-                }
-
-                let y = baselineY - gain * (baselineY - topY)
-
-                if i == 0 {
-                    envelopePath.move(to: CGPoint(x: x, y: y))
-                } else {
-                    envelopePath.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-
-            // Stroke the envelope
-            context.stroke(envelopePath, with: .color(palette.accent), lineWidth: 2)
-
-            // Fill under the envelope
-            var fillPath = envelopePath
-            fillPath.addLine(to: CGPoint(x: w, y: baselineY))
-            fillPath.addLine(to: CGPoint(x: 0, y: baselineY))
-            fillPath.closeSubpath()
-            context.fill(fillPath, with: .color(palette.accent.opacity(0.15)))
-
-            // Draw fade boundary markers
-            if fadeInDuration > 0 {
-                context.stroke(
-                    Path { p in
-                        p.move(to: CGPoint(x: fadeInEndX, y: topY))
-                        p.addLine(to: CGPoint(x: fadeInEndX, y: baselineY))
-                    },
-                    with: .color(palette.accent.opacity(0.4)),
-                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
-                )
-            }
-            if fadeOutDuration > 0 {
-                context.stroke(
-                    Path { p in
-                        p.move(to: CGPoint(x: fadeOutStartX, y: topY))
-                        p.addLine(to: CGPoint(x: fadeOutStartX, y: baselineY))
-                    },
-                    with: .color(palette.accent.opacity(0.4)),
-                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
-                )
-            }
-
-            // Time labels
-            if fadeInDuration > 0 {
-                let label = String(format: "%.1fs", fadeInDuration)
-                context.draw(
-                    Text(label).font(.system(size: 9, weight: .medium)).foregroundColor(palette.accent),
-                    at: CGPoint(x: fadeInEndX / 2, y: h - 14),
-                    anchor: .center
-                )
-            }
-            if fadeOutDuration > 0 {
-                let label = String(format: "%.1fs", fadeOutDuration)
-                context.draw(
-                    Text(label).font(.system(size: 9, weight: .medium)).foregroundColor(palette.accent),
-                    at: CGPoint(x: fadeOutStartX + (w - fadeOutStartX) / 2, y: h - 14),
-                    anchor: .center
-                )
-            }
-        }
-        .background(palette.inputBackground.opacity(0.5))
-        .cornerRadius(8)
     }
 }
 
@@ -679,53 +105,38 @@ struct FadeCurveOverlay: View {
 
         let steps = max(20, Int(regionWidth / 2))
 
-        // Build the darkened area above the gain curve
-        // Where gain is low, more darkness; where gain is 1.0, no darkness
-        var curvePath = Path()
-        curvePath.move(to: CGPoint(x: startX, y: 0))
+        // Pre-compute curve points once (avoids calling curve.apply() twice per step)
+        var curvePoints = [(x: CGFloat, y: CGFloat)]()
+        curvePoints.reserveCapacity(steps + 1)
 
         for i in 0...steps {
             let t = Float(i) / Float(steps)
             let x = startX + CGFloat(t) * regionWidth
-
-            let gain: Float
-            if isFadeIn {
-                gain = curve.apply(t)
-            } else {
-                gain = curve.apply(1.0 - t)
-            }
-
-            // curveY: where gain=0 → y=height (full dark), gain=1 → y=0 (no dark)
+            let gain = isFadeIn ? curve.apply(t) : curve.apply(1.0 - t)
+            // curveY: where gain=0 -> y=height (full dark), gain=1 -> y=0 (no dark)
             let curveY = height * (1.0 - CGFloat(gain))
-            curvePath.addLine(to: CGPoint(x: x, y: curveY))
+            curvePoints.append((x: x, y: curveY))
         }
 
-        // Close along the top edge
+        // Build the darkened area above the gain curve using cached points
+        var curvePath = Path()
+        curvePath.move(to: CGPoint(x: startX, y: 0))
+        for pt in curvePoints {
+            curvePath.addLine(to: CGPoint(x: pt.x, y: pt.y))
+        }
         curvePath.addLine(to: CGPoint(x: endX, y: 0))
         curvePath.closeSubpath()
 
         // Fill with semi-transparent dark overlay (represents volume reduction)
         context.fill(curvePath, with: .color(Color.black.opacity(0.35)))
 
-        // Draw the gain curve line
+        // Draw the gain curve line using the same cached points
         var linePath = Path()
-        for i in 0...steps {
-            let t = Float(i) / Float(steps)
-            let x = startX + CGFloat(t) * regionWidth
-
-            let gain: Float
-            if isFadeIn {
-                gain = curve.apply(t)
-            } else {
-                gain = curve.apply(1.0 - t)
-            }
-
-            let curveY = height * (1.0 - CGFloat(gain))
-
+        for (i, pt) in curvePoints.enumerated() {
             if i == 0 {
-                linePath.move(to: CGPoint(x: x, y: curveY))
+                linePath.move(to: CGPoint(x: pt.x, y: pt.y))
             } else {
-                linePath.addLine(to: CGPoint(x: x, y: curveY))
+                linePath.addLine(to: CGPoint(x: pt.x, y: pt.y))
             }
         }
 
@@ -747,12 +158,13 @@ struct FadeCurveOverlay: View {
 // MARK: - Edit Tool Type
 
 enum EditToolType: String, CaseIterable, Identifiable {
-    case fade, peak, gate, compress, reverb, echo
+    case eq, fade, peak, gate, compress, reverb, echo
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
+        case .eq: return "EQ"
         case .fade: return "Fade"
         case .peak: return "Peak"
         case .gate: return "Gate"
@@ -764,6 +176,7 @@ enum EditToolType: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .eq: return "slider.horizontal.3"
         case .fade: return "waveform.path.ecg"
         case .peak: return "speaker.wave.3"
         case .gate: return "waveform.badge.minus"
@@ -774,12 +187,132 @@ enum EditToolType: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Slide-Up Tools Panel
+// MARK: - Unified Edit Toolbar (scrollable buttons: Trim | Cut | Precision | -- | EQ | Fade | ...)
 
-struct EditToolsSlidePanel: View {
+struct UnifiedEditToolbar: View {
+    let canTrim: Bool
+    let canCut: Bool
+    let isProcessing: Bool
+    @Binding var isPrecisionMode: Bool
+    @Binding var activeEffect: EditToolType?
+    let appliedEffects: Set<EditToolType>
+    let isPro: Bool
+    let onTrim: () -> Void
+    let onCut: () -> Void
+    let onProGate: () -> Void
+
     @Environment(\.themePalette) private var palette
 
-    @Binding var selectedTool: EditToolType
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                // Trim
+                EditActionButton(
+                    icon: "crop",
+                    label: "Trim",
+                    isEnabled: canTrim && !isProcessing,
+                    style: .primary,
+                    action: onTrim
+                )
+
+                // Cut
+                EditActionButton(
+                    icon: "scissors",
+                    label: "Cut",
+                    isEnabled: canCut && !isProcessing,
+                    style: .destructive,
+                    action: onCut
+                )
+
+                // Precision
+                HoldForPrecisionButton(isPrecisionMode: $isPrecisionMode)
+
+                // Divider
+                Rectangle()
+                    .fill(palette.stroke.opacity(0.3))
+                    .frame(width: 1, height: 24)
+                    .padding(.horizontal, 2)
+
+                // Effect buttons
+                ForEach(EditToolType.allCases) { tool in
+                    effectToolButton(tool)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private func effectToolButton(_ tool: EditToolType) -> some View {
+        Button {
+            if !isPro {
+                onProGate()
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.15)) {
+                if activeEffect == tool {
+                    activeEffect = nil
+                } else {
+                    activeEffect = tool
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(tool.displayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 10)
+            .foregroundColor(buttonForeground(for: tool))
+            .background(buttonBackground(for: tool))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(buttonBorder(for: tool), lineWidth: activeEffect == tool ? 0 : 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                // Applied-effect dot indicator
+                if appliedEffects.contains(tool) && activeEffect != tool {
+                    Circle()
+                        .fill(palette.accent)
+                        .frame(width: 6, height: 6)
+                        .offset(x: -2, y: 2)
+                }
+            }
+        }
+        .disabled(isProcessing)
+    }
+
+    private func buttonForeground(for tool: EditToolType) -> Color {
+        if activeEffect == tool { return .white }
+        if !isPro { return palette.textTertiary }
+        if appliedEffects.contains(tool) { return palette.accent }
+        return palette.accent
+    }
+
+    private func buttonBackground(for tool: EditToolType) -> Color {
+        if activeEffect == tool { return palette.accent }
+        if !isPro { return palette.inputBackground }
+        if appliedEffects.contains(tool) { return palette.accent.opacity(0.15) }
+        return palette.accent.opacity(0.12)
+    }
+
+    private func buttonBorder(for tool: EditToolType) -> Color {
+        if activeEffect == tool { return Color.clear }
+        if !isPro { return Color.clear }
+        return palette.accent.opacity(0.25)
+    }
+}
+
+// MARK: - Effect Parameter Panel (auto-height, no chrome)
+
+struct EffectParameterPanel: View {
+    @Environment(\.themePalette) private var palette
+
+    let activeEffect: EditToolType
     @Binding var isProcessing: Bool
 
     // Fade
@@ -806,8 +339,9 @@ struct EditToolsSlidePanel: View {
     // Compress
     @Binding var compGain: Float
     @Binding var compReduction: Float
+    @Binding var compMix: Float
     let hasCompressApplied: Bool
-    let onApplyCompress: (Float, Float) -> Void
+    let onApplyCompress: (Float, Float, Float) -> Void
     let onRemoveCompress: () -> Void
 
     // Reverb
@@ -829,10 +363,12 @@ struct EditToolsSlidePanel: View {
     let onApplyEcho: (Float, Float, Float, Float) -> Void
     let onRemoveEcho: () -> Void
 
-    let onClose: () -> Void
+    // EQ (real-time playback, non-destructive)
+    @Binding var eqSettings: EQSettings
+    let onEQChanged: () -> Void
 
-    // Debounce task for real-time apply
-    @State private var debounceTask: Task<Void, Never>?
+    // Per-tool debounce tasks
+    @State private var debounceTasks: [EditToolType: Task<Void, Never>] = [:]
 
     // Debounce interval in nanoseconds (400ms)
     private let debounceNanos: UInt64 = 400_000_000
@@ -841,6 +377,7 @@ struct EditToolsSlidePanel: View {
 
     private func isApplied(for tool: EditToolType) -> Bool {
         switch tool {
+        case .eq: return eqSettings != .flat
         case .fade: return hasFadeApplied
         case .peak: return hasPeakApplied
         case .gate: return hasGateApplied
@@ -850,27 +387,30 @@ struct EditToolsSlidePanel: View {
         }
     }
 
-    // MARK: - Default values for each tool
+    // MARK: - Default values
 
-    private static let defaultFadeIn: Double = 0
-    private static let defaultFadeOut: Double = 0
-    private static let defaultFadeCurve: FadeCurve = .sCurve
-    private static let defaultPeakTarget: Float = -0.3
-    private static let defaultGateThreshold: Float = -40
-    private static let defaultCompGain: Float = 0
-    private static let defaultCompReduction: Float = 0
-    private static let defaultReverbRoomSize: Float = 1.0
-    private static let defaultReverbPreDelay: Float = 20
-    private static let defaultReverbDecay: Float = 2.0
-    private static let defaultReverbDamping: Float = 0.5
-    private static let defaultReverbWetDry: Float = 0.3
-    private static let defaultEchoDelay: Float = 0.25
-    private static let defaultEchoFeedback: Float = 0.3
-    private static let defaultEchoDamping: Float = 0.3
-    private static let defaultEchoWetDry: Float = 0.3
+    static let defaultFadeIn: Double = 0
+    static let defaultFadeOut: Double = 0
+    static let defaultFadeCurve: FadeCurve = .sCurve
+    static let defaultPeakTarget: Float = -0.3
+    static let defaultGateThreshold: Float = -40
+    static let defaultCompGain: Float = 0
+    static let defaultCompReduction: Float = 0
+    static let defaultCompMix: Float = 1.0
+    static let defaultReverbRoomSize: Float = 1.0
+    static let defaultReverbPreDelay: Float = 20
+    static let defaultReverbDecay: Float = 2.0
+    static let defaultReverbDamping: Float = 0.5
+    static let defaultReverbWetDry: Float = 0.3
+    static let defaultEchoDelay: Float = 0.25
+    static let defaultEchoFeedback: Float = 0.3
+    static let defaultEchoDamping: Float = 0.3
+    static let defaultEchoWetDry: Float = 0.3
 
     private var isCurrentToolDefault: Bool {
-        switch selectedTool {
+        switch activeEffect {
+        case .eq:
+            return eqSettings == .flat
         case .fade:
             return fadeIn == Self.defaultFadeIn && fadeOut == Self.defaultFadeOut && fadeCurve == Self.defaultFadeCurve
         case .peak:
@@ -878,7 +418,7 @@ struct EditToolsSlidePanel: View {
         case .gate:
             return gateThreshold == Self.defaultGateThreshold
         case .compress:
-            return compGain == Self.defaultCompGain && compReduction == Self.defaultCompReduction
+            return compGain == Self.defaultCompGain && compReduction == Self.defaultCompReduction && compMix == Self.defaultCompMix
         case .reverb:
             return reverbRoomSize == Self.defaultReverbRoomSize && reverbPreDelay == Self.defaultReverbPreDelay
                 && reverbDecay == Self.defaultReverbDecay && reverbDamping == Self.defaultReverbDamping
@@ -890,98 +430,40 @@ struct EditToolsSlidePanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            grabHandle
-            toolTabs
-            Divider().padding(.top, 6)
-            toolScrollContent
-            Divider()
-            actionButtons
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(palette.cardBackground.opacity(0.97))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: -2)
-        )
-    }
-
-    private var grabHandle: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(palette.textTertiary.opacity(0.3))
-            .frame(width: 36, height: 4)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-    }
-
-    private var toolTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(EditToolType.allCases) { tool in
-                    toolTabButton(tool)
-                }
-            }
-            .padding(.horizontal, 12)
-        }
-    }
-
-    private func toolTabButton(_ tool: EditToolType) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                selectedTool = tool
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: tool.icon)
-                    .font(.system(size: 11))
-                Text(tool.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .foregroundColor(selectedTool == tool ? .white : (isApplied(for: tool) ? palette.accent : palette.textPrimary))
-            .background(selectedTool == tool ? palette.accent : (isApplied(for: tool) ? palette.accent.opacity(0.15) : palette.inputBackground))
-            .cornerRadius(12)
-        }
-    }
-
-    private var toolScrollContent: some View {
-        ScrollView {
+        VStack(spacing: 8) {
             toolContent
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-        }
-        .frame(maxHeight: 190)
-        .onChange(of: fadeIn) { debouncedApplyFade() }
-        .onChange(of: fadeOut) { debouncedApplyFade() }
-        .onChange(of: fadeCurve) { debouncedApplyFade() }
-        .onChange(of: peakTarget) { debouncedApplyPeak() }
-        .onChange(of: gateThreshold) { debouncedApplyGate() }
-        .onChange(of: compGain) { debouncedApplyCompress() }
-        .onChange(of: compReduction) { debouncedApplyCompress() }
-        .onChange(of: reverbRoomSize) { debouncedApplyReverb() }
-        .onChange(of: reverbPreDelay) { debouncedApplyReverb() }
-        .onChange(of: reverbDecay) { debouncedApplyReverb() }
-        .onChange(of: reverbDamping) { debouncedApplyReverb() }
-        .onChange(of: reverbWetDry) { debouncedApplyReverb() }
-        .onChange(of: echoDelay) { debouncedApplyEcho() }
-        .onChange(of: echoFeedback) { debouncedApplyEcho() }
-        .onChange(of: echoDamping) { debouncedApplyEcho() }
-        .onChange(of: echoWetDry) { debouncedApplyEcho() }
-    }
 
-    private var actionButtons: some View {
-        HStack(spacing: 10) {
-            if !isCurrentToolDefault || isApplied(for: selectedTool) {
+            if !isCurrentToolDefault || isApplied(for: activeEffect) {
                 resetButton
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
             }
-            if isProcessing {
-                processingIndicator
-            }
-            closeButton
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(palette.cardBackground.opacity(0.97))
+                .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+        )
+        .modifier(ToolOnChangeModifier(
+            selectedTool: activeEffect,
+            onFadeChanged: debouncedApplyFade,
+            onPeakChanged: debouncedApplyPeak,
+            onGateChanged: debouncedApplyGate,
+            onCompressChanged: debouncedApplyCompress,
+            onReverbChanged: debouncedApplyReverb,
+            onEchoChanged: debouncedApplyEcho,
+            fadeIn: fadeIn, fadeOut: fadeOut, fadeCurve: fadeCurve,
+            peakTarget: peakTarget,
+            gateThreshold: gateThreshold,
+            compGain: compGain, compReduction: compReduction, compMix: compMix,
+            reverbRoomSize: reverbRoomSize, reverbPreDelay: reverbPreDelay,
+            reverbDecay: reverbDecay, reverbDamping: reverbDamping, reverbWetDry: reverbWetDry,
+            echoDelay: echoDelay, echoFeedback: echoFeedback,
+            echoDamping: echoDamping, echoWetDry: echoWetDry
+        ))
     }
 
     private var resetButton: some View {
@@ -1003,37 +485,12 @@ struct EditToolsSlidePanel: View {
         .disabled(isProcessing)
     }
 
-    private var processingIndicator: some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .scaleEffect(0.8)
-            Text("Processing...")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(palette.textTertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-    }
-
-    private var closeButton: some View {
-        Button {
-            debounceTask?.cancel()
-            onClose()
-        } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 14, weight: .semibold))
-                .padding(10)
-                .foregroundColor(palette.textSecondary)
-                .background(palette.inputBackground)
-                .clipShape(Circle())
-        }
-    }
-
     // MARK: - Tool Content
 
     @ViewBuilder
     private var toolContent: some View {
-        switch selectedTool {
+        switch activeEffect {
+        case .eq: eqControls
         case .fade: fadeControls
         case .peak: peakControls
         case .gate: gateControls
@@ -1041,6 +498,15 @@ struct EditToolsSlidePanel: View {
         case .reverb: reverbControls
         case .echo: echoControls
         }
+    }
+
+    private var eqControls: some View {
+        ParametricEQView(
+            settings: $eqSettings,
+            onSettingsChanged: {
+                debouncedApplyEQ()
+            }
+        )
     }
 
     private var fadeControls: some View {
@@ -1075,28 +541,218 @@ struct EditToolsSlidePanel: View {
     }
 
     private var compressControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sliderRowFloat("Gain", value: $compGain, range: 0...10, step: 0.1, display: String(format: "%.1f dB", compGain))
-            sliderRowFloat("Peak Reduction", value: $compReduction, range: 0...10, step: 0.1, display: String(format: "%.1f", compReduction))
+        HStack(spacing: 0) {
+            VStack(spacing: 4) {
+                Text("Gain")
+                    .font(.caption2)
+                    .foregroundColor(palette.textSecondary)
+                EQKnob(
+                    value: $compGain,
+                    range: 0...10,
+                    color: palette.accent
+                )
+                Text(String(format: "%.1f dB", compGain))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: 4) {
+                Text("Reduction")
+                    .font(.caption2)
+                    .foregroundColor(palette.textSecondary)
+                EQKnob(
+                    value: $compReduction,
+                    range: 0...10,
+                    color: palette.accent
+                )
+                Text(String(format: "%.1f", compReduction))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: 4) {
+                Text("Mix")
+                    .font(.caption2)
+                    .foregroundColor(palette.textSecondary)
+                EQKnob(
+                    value: $compMix,
+                    range: 0...1,
+                    color: palette.accent
+                )
+                Text(String(format: "%.0f%%", compMix * 100))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 
     private var reverbControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sliderRowFloat("Room Size", value: $reverbRoomSize, range: 0.3...3.0, step: 0.1, display: String(format: "%.1f", reverbRoomSize))
-            sliderRowFloat("Pre-Delay", value: $reverbPreDelay, range: 0...200, step: 1, display: String(format: "%.0f ms", reverbPreDelay))
-            sliderRowFloat("Decay", value: $reverbDecay, range: 0.1...10, step: 0.1, display: String(format: "%.1fs", reverbDecay))
-            sliderRowFloat("Damping", value: $reverbDamping, range: 0...1, step: 0.05, display: String(format: "%.0f%%", reverbDamping * 100))
-            sliderRowFloat("Wet/Dry", value: $reverbWetDry, range: 0...1, step: 0.05, display: String(format: "%.0f%%", reverbWetDry * 100))
+        VStack(spacing: 12) {
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Room")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $reverbRoomSize,
+                        range: 0.3...3.0,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.1f", reverbRoomSize))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Pre-Delay")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $reverbPreDelay,
+                        range: 0...200,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f ms", reverbPreDelay))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Decay")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $reverbDecay,
+                        range: 0.1...10,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.1fs", reverbDecay))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Damping")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $reverbDamping,
+                        range: 0...1,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f%%", reverbDamping * 100))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Wet/Dry")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $reverbWetDry,
+                        range: 0...1,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f%%", reverbWetDry * 100))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                // Spacer column to balance the 3-2 layout
+                Color.clear
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
     private var echoControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sliderRowFloat("Delay", value: $echoDelay, range: 0.05...2.0, step: 0.01, display: String(format: "%.0f ms", echoDelay * 1000))
-            sliderRowFloat("Feedback", value: $echoFeedback, range: 0...0.9, step: 0.05, display: String(format: "%.0f%%", echoFeedback * 100))
-            sliderRowFloat("Damping", value: $echoDamping, range: 0...1, step: 0.05, display: String(format: "%.0f%%", echoDamping * 100))
-            sliderRowFloat("Wet/Dry", value: $echoWetDry, range: 0...1, step: 0.05, display: String(format: "%.0f%%", echoWetDry * 100))
+        VStack(spacing: 12) {
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Delay")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $echoDelay,
+                        range: 0.05...2.0,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f ms", echoDelay * 1000))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Feedback")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $echoFeedback,
+                        range: 0...0.9,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f%%", echoFeedback * 100))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Damping")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $echoDamping,
+                        range: 0...1,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f%%", echoDamping * 100))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Wet/Dry")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $echoWetDry,
+                        range: 0...1,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f%%", echoWetDry * 100))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -1136,11 +792,24 @@ struct EditToolsSlidePanel: View {
 
     // MARK: - Debounced Real-Time Apply
 
+    private func cancelAllDebounceTasks() {
+        for task in debounceTasks.values { task.cancel() }
+        debounceTasks.removeAll()
+    }
+
+    private func debouncedApplyEQ() {
+        debounceTasks[.eq]?.cancel()
+        debounceTasks[.eq] = Task {
+            try? await Task.sleep(nanoseconds: debounceNanos)
+            guard !Task.isCancelled else { return }
+            onEQChanged()
+        }
+    }
+
     private func debouncedApplyFade() {
-        guard selectedTool == .fade else { return }
         guard fadeIn > 0 || fadeOut > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        debounceTasks[.fade]?.cancel()
+        debounceTasks[.fade] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
             onApplyFade(fadeIn, fadeOut, fadeCurve)
@@ -1148,9 +817,8 @@ struct EditToolsSlidePanel: View {
     }
 
     private func debouncedApplyPeak() {
-        guard selectedTool == .peak else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        debounceTasks[.peak]?.cancel()
+        debounceTasks[.peak] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
             onApplyPeak(peakTarget)
@@ -1158,9 +826,8 @@ struct EditToolsSlidePanel: View {
     }
 
     private func debouncedApplyGate() {
-        guard selectedTool == .gate else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        debounceTasks[.gate]?.cancel()
+        debounceTasks[.gate] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
             onApplyGate(gateThreshold)
@@ -1168,21 +835,19 @@ struct EditToolsSlidePanel: View {
     }
 
     private func debouncedApplyCompress() {
-        guard selectedTool == .compress else { return }
-        guard compGain > 0 || compReduction > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        guard compGain > 0 || compReduction > 0 || compMix < 1.0 else { return }
+        debounceTasks[.compress]?.cancel()
+        debounceTasks[.compress] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
-            onApplyCompress(compGain, compReduction)
+            onApplyCompress(compGain, compReduction, compMix)
         }
     }
 
     private func debouncedApplyReverb() {
-        guard selectedTool == .reverb else { return }
         guard reverbWetDry > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        debounceTasks[.reverb]?.cancel()
+        debounceTasks[.reverb] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
             onApplyReverb(reverbRoomSize, reverbPreDelay, reverbDecay, reverbDamping, reverbWetDry)
@@ -1190,10 +855,9 @@ struct EditToolsSlidePanel: View {
     }
 
     private func debouncedApplyEcho() {
-        guard selectedTool == .echo else { return }
         guard echoWetDry > 0 else { return }
-        debounceTask?.cancel()
-        debounceTask = Task {
+        debounceTasks[.echo]?.cancel()
+        debounceTasks[.echo] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
             onApplyEcho(echoDelay, echoFeedback, echoDamping, echoWetDry)
@@ -1203,8 +867,12 @@ struct EditToolsSlidePanel: View {
     // MARK: - Reset Actions
 
     private func resetCurrentTool() {
-        debounceTask?.cancel()
-        switch selectedTool {
+        debounceTasks[activeEffect]?.cancel()
+        debounceTasks[activeEffect] = nil
+        switch activeEffect {
+        case .eq:
+            eqSettings = .flat
+            onEQChanged()
         case .fade:
             if hasFadeApplied { onRemoveFade() }
             fadeIn = Self.defaultFadeIn
@@ -1220,6 +888,7 @@ struct EditToolsSlidePanel: View {
             if hasCompressApplied { onRemoveCompress() }
             compGain = Self.defaultCompGain
             compReduction = Self.defaultCompReduction
+            compMix = Self.defaultCompMix
         case .reverb:
             if hasReverbApplied { onRemoveReverb() }
             reverbRoomSize = Self.defaultReverbRoomSize
@@ -1237,31 +906,58 @@ struct EditToolsSlidePanel: View {
     }
 }
 
-// MARK: - Legacy AudioEditToolsPanel (kept for compatibility)
+// MARK: - Tool onChange Modifier
 
-struct AudioEditToolsPanel: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
+private struct ToolOnChangeModifier: ViewModifier {
+    let selectedTool: EditToolType
+    let onFadeChanged: () -> Void
+    let onPeakChanged: () -> Void
+    let onGateChanged: () -> Void
+    let onCompressChanged: () -> Void
+    let onReverbChanged: () -> Void
+    let onEchoChanged: () -> Void
 
-    @Binding var isProcessing: Bool
+    // Values to observe
+    let fadeIn: Double, fadeOut: Double, fadeCurve: FadeCurve
+    let peakTarget: Float
+    let gateThreshold: Float
+    let compGain: Float, compReduction: Float, compMix: Float
+    let reverbRoomSize: Float, reverbPreDelay: Float, reverbDecay: Float, reverbDamping: Float, reverbWetDry: Float
+    let echoDelay: Float, echoFeedback: Float, echoDamping: Float, echoWetDry: Float
 
-    let onFade: (TimeInterval, TimeInterval, FadeCurve) -> Void
-    let onNormalize: (Float) -> Void
-    let onNoiseGate: (Float) -> Void
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Text("Use the Fade, Peak, and Gate buttons in the toolbar.")
-                    .foregroundColor(palette.textSecondary)
-            }
-            .navigationTitle("Audio Tools")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
+    func body(content: Content) -> some View {
+        switch selectedTool {
+        case .eq:
+            content
+        case .fade:
+            content
+                .onChange(of: fadeIn) { onFadeChanged() }
+                .onChange(of: fadeOut) { onFadeChanged() }
+                .onChange(of: fadeCurve) { onFadeChanged() }
+        case .peak:
+            content
+                .onChange(of: peakTarget) { onPeakChanged() }
+        case .gate:
+            content
+                .onChange(of: gateThreshold) { onGateChanged() }
+        case .compress:
+            content
+                .onChange(of: compGain) { onCompressChanged() }
+                .onChange(of: compReduction) { onCompressChanged() }
+                .onChange(of: compMix) { onCompressChanged() }
+        case .reverb:
+            content
+                .onChange(of: reverbRoomSize) { onReverbChanged() }
+                .onChange(of: reverbPreDelay) { onReverbChanged() }
+                .onChange(of: reverbDecay) { onReverbChanged() }
+                .onChange(of: reverbDamping) { onReverbChanged() }
+                .onChange(of: reverbWetDry) { onReverbChanged() }
+        case .echo:
+            content
+                .onChange(of: echoDelay) { onEchoChanged() }
+                .onChange(of: echoFeedback) { onEchoChanged() }
+                .onChange(of: echoDamping) { onEchoChanged() }
+                .onChange(of: echoWetDry) { onEchoChanged() }
         }
     }
 }

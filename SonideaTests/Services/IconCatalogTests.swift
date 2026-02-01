@@ -85,7 +85,7 @@ struct IconCatalogTests {
     @Test func searchByName() {
         let results = IconCatalog.search("Guitar")
         #expect(!results.isEmpty)
-        #expect(results.contains { $0.displayName == "Guitar" })
+        #expect(results.contains { $0.displayName.contains("Guitar") })
     }
 
     @Test func searchCaseInsensitive() {

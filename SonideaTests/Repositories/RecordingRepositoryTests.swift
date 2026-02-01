@@ -125,7 +125,7 @@ struct RecordingRepositoryTests {
     }
 
     @Test func clearRecordingLocation() {
-        let rec = TestFixtures.makeRecording(latitude: 37.77, longitude: -122.42, locationLabel: "SF")
+        let rec = TestFixtures.makeRecording(locationLabel: "SF", latitude: 37.77, longitude: -122.42)
         var recordings = [rec]
 
         let updated = RecordingRepository.clearRecordingLocation(recordingID: rec.id, recordings: &recordings)

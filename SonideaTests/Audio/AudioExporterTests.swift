@@ -21,7 +21,7 @@ struct AudioExporterTests {
     }
 
     @Test func formatFileExtensions() {
-        #expect(ExportFormat.original.fileExtension == "m4a")
+        #expect(ExportFormat.original.fileExtension == "") // sentinel — uses recording's actual extension
         #expect(ExportFormat.wav.fileExtension == "wav")
         #expect(ExportFormat.m4a.fileExtension == "m4a")
         #expect(ExportFormat.alac.fileExtension == "m4a")

@@ -17,13 +17,14 @@ struct JournalView: View {
 
     @State private var selectedRecording: RecordingItem?
     @State private var selectedProject: Project?
+    @State private var cachedTimelineGroups: [TimelineGroup] = []
 
-    private var timelineGroups: [TimelineGroup] {
+    private func recomputeTimelineGroups() {
         let items = TimelineBuilder.buildTimeline(
             recordings: appState.activeRecordings,
             projects: appState.projects
         )
-        return TimelineBuilder.groupByDay(items)
+        cachedTimelineGroups = TimelineBuilder.groupByDay(items)
     }
 
     var body: some View {
@@ -32,7 +33,7 @@ struct JournalView: View {
                 palette.background
                     .ignoresSafeArea()
 
-                if timelineGroups.isEmpty {
+                if cachedTimelineGroups.isEmpty {
                     emptyStateView
                 } else {
                     timelineList
@@ -56,6 +57,10 @@ struct JournalView: View {
             }
             .sheet(item: $selectedProject) { project in
                 ProjectDetailView(project: project)
+            }
+            .onAppear { recomputeTimelineGroups() }
+            .onChange(of: appState.recordingsContentVersion) { _, _ in
+                recomputeTimelineGroups()
             }
         }
     }
@@ -85,7 +90,7 @@ struct JournalView: View {
     private var timelineList: some View {
         ScrollView {
             LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(timelineGroups) { group in
+                ForEach(cachedTimelineGroups) { group in
                     Section {
                         ForEach(group.items) { item in
                             TimelineRowView(

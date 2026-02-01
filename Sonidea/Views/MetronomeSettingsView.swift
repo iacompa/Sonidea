@@ -2,7 +2,7 @@
 //  MetronomeSettingsView.swift
 //  Sonidea
 //
-//  Settings for the metronome / click track during recording.
+//  Settings for the metronome during recording. Requires headphones.
 //
 
 import SwiftUI
@@ -17,10 +17,10 @@ struct MetronomeSettingsView: View {
             List {
                 // Enable toggle
                 Section {
-                    Toggle("Click Track", isOn: $metronome.isEnabled)
+                    Toggle("Metronome", isOn: $metronome.isEnabled)
                         .tint(palette.accent)
                 } footer: {
-                    Text("When enabled, a click track plays through your headphones or speakers while recording. The click is not captured in the recording.")
+                    Text("When enabled, a metronome plays through your headphones while recording. Requires headphones (wired or Bluetooth). The click is not captured in the recording.")
                 }
 
                 if metronome.isEnabled {
@@ -101,7 +101,7 @@ struct MetronomeSettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Click Track")
+            .navigationTitle("Metronome")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {

@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Foundation
+import os.log
 
 /// Result of an audio editing operation
 struct AudioEditResult {
@@ -743,14 +744,16 @@ final class AudioEditor {
     func compressor(
         sourceURL: URL,
         makeupGainDb: Float = 0,
-        peakReduction: Float = 0
+        peakReduction: Float = 0,
+        mix: Float = 1.0
     ) async -> AudioEditResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let result = self.performCompressor(
                     sourceURL: sourceURL,
                     makeupGainDb: makeupGainDb,
-                    peakReduction: peakReduction
+                    peakReduction: peakReduction,
+                    mix: mix
                 )
                 continuation.resume(returning: result)
             }
@@ -760,7 +763,8 @@ final class AudioEditor {
     private func performCompressor(
         sourceURL: URL,
         makeupGainDb: Float,
-        peakReduction: Float
+        peakReduction: Float,
+        mix: Float
     ) -> AudioEditResult {
         do {
             let sourceFile = try AVAudioFile(forReading: sourceURL)
@@ -781,6 +785,7 @@ final class AudioEditor {
             let attackCoeff = 1.0 / max(1.0, Float(sampleRate) * attackMs / 1000.0)
             let releaseCoeff = 1.0 / max(1.0, Float(sampleRate) * releaseMs / 1000.0)
             let makeupGainLinear = powf(10.0, makeupGainDb / 20.0)
+            let clampedMix = min(1.0, max(0.0, mix))
 
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
@@ -837,10 +842,12 @@ final class AudioEditor {
                     }
                     envelope = max(0.0, min(1.0, envelope))
 
-                    // Apply compression gain + makeup gain
-                    let finalGain = envelope * makeupGainLinear
+                    // Apply compression gain + makeup gain with dry/wet mix
+                    let compGain = envelope * makeupGainLinear
                     for ch in 0..<channelCount {
-                        floatData[ch][frame] *= finalGain
+                        let drySample = floatData[ch][frame]
+                        let wetSample = drySample * compGain
+                        floatData[ch][frame] = drySample * (1.0 - clampedMix) + wetSample * clampedMix
                         // Soft clip to prevent overs from makeup gain
                         let val = floatData[ch][frame]
                         if val > 1.0 {
@@ -953,8 +960,14 @@ final class AudioEditor {
             let dry: Float = 1.0 - wet
             let fixedGain: Float = 0.015  // Scales sum of 8 comb outputs
 
-            // Reverb tail extends output beyond source
-            let tailSeconds = min(10.0, Double(rt60) + 1.0)
+            // Reverb tail extends output beyond source — cap at 5 seconds to prevent OOM on older devices
+            let maxTailSeconds: Double = 5.0
+            let requestedTailSeconds = min(10.0, Double(rt60) + 1.0)
+            if requestedTailSeconds > maxTailSeconds {
+                Logger(subsystem: "com.iacompa.sonidea", category: "AudioEditor")
+                    .warning("Reverb tail time \(requestedTailSeconds, privacy: .public)s exceeds \(maxTailSeconds, privacy: .public)s cap — clamping to prevent excessive memory use")
+            }
+            let tailSeconds = min(maxTailSeconds, requestedTailSeconds)
             let tailFrames = Int(tailSeconds * sampleRate)
             let totalOutputFrames = totalFrameCount + tailFrames
 
