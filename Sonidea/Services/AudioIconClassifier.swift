@@ -13,13 +13,13 @@ import SoundAnalysis
 
 /// Result of audio classification for icon selection
 struct AudioClassificationResult {
-    let icon: PresetIcon
+    let iconSymbol: String   // Raw SF Symbol name (e.g. "dog.fill", "music.note")
     let confidence: Float
     /// Top predictions that meet the suggestion threshold (max 3, sorted by confidence desc)
     let topPredictions: [IconPrediction]
 
-    init(icon: PresetIcon, confidence: Float, topPredictions: [IconPrediction] = []) {
-        self.icon = icon
+    init(iconSymbol: String, confidence: Float, topPredictions: [IconPrediction] = []) {
+        self.iconSymbol = iconSymbol
         self.confidence = confidence
         self.topPredictions = topPredictions
     }
@@ -47,7 +47,7 @@ protocol AudioIconClassifier {
 final class SoundAnalysisClassifier: AudioIconClassifier {
 
     /// Maximum duration to analyze (seconds)
-    private let maxAnalysisDuration: TimeInterval = 10.0
+    private let maxAnalysisDuration: TimeInterval = 15.0
 
     /// Check if the built-in classifier is available
     var isModelAvailable: Bool {
@@ -61,7 +61,7 @@ final class SoundAnalysisClassifier: AudioIconClassifier {
             #if DEBUG
             print("[SoundAnalysisClassifier] File not found: \(fileURL.path)")
             #endif
-            return AudioClassificationResult(icon: .waveform, confidence: 0)
+            return AudioClassificationResult(iconSymbol: "waveform", confidence: 0)
         }
 
         do {
@@ -75,6 +75,7 @@ final class SoundAnalysisClassifier: AudioIconClassifier {
             let observer = ClassificationResultsObserver(maxDuration: maxAnalysisDuration)
 
             try analyzer.add(request, withObserver: observer)
+            observer.analyzer = analyzer
 
             // Run analysis in background and wait for completion
             return await withCheckedContinuation { continuation in
@@ -89,7 +90,7 @@ final class SoundAnalysisClassifier: AudioIconClassifier {
             #if DEBUG
             print("[SoundAnalysisClassifier] Analysis failed: \(error.localizedDescription)")
             #endif
-            return AudioClassificationResult(icon: .waveform, confidence: 0)
+            return AudioClassificationResult(iconSymbol: "waveform", confidence: 0)
         }
     }
 }
@@ -119,6 +120,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
 
     /// Track analyzed time
     private var lastAnalyzedTime: TimeInterval = 0
+
+    /// Weak reference to analyzer for cancellation after maxDuration
+    weak var analyzer: SNAudioFileAnalyzer?
 
     init(maxDuration: TimeInterval) {
         self.maxDuration = maxDuration
@@ -153,6 +157,14 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
                 let symbol = matchedIcon.sfSymbol
                 iconConfidences[symbol] = max(iconConfidences[symbol] ?? 0, confidence)
             }
+        }
+
+        // Enforce max analysis duration — cancel analyzer if we've processed enough audio
+        if lastAnalyzedTime >= maxDuration {
+            #if DEBUG
+            print("[SoundAnalysisClassifier] Reached \(Int(maxDuration))s limit, cancelling analysis")
+            #endif
+            analyzer?.cancelAnalysis()
         }
     }
 
@@ -190,10 +202,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
         // Find best overall match (may be below threshold)
         let bestMatch = snapshotConfidences.max { $0.value < $1.value }
 
-        if let best = bestMatch, best.value > 0 {
-            let presetIcon = PresetIcon(rawValue: best.key) ?? .waveform
+        if let best = bestMatch, best.value >= 0.40 {
             let result = AudioClassificationResult(
-                icon: presetIcon,
+                iconSymbol: best.key,
                 confidence: best.value,
                 topPredictions: Array(qualifiedPredictions)
             )
@@ -202,7 +213,7 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
             #endif
             onComplete?(result)
         } else {
-            onComplete?(AudioClassificationResult(icon: .waveform, confidence: 0, topPredictions: []))
+            onComplete?(AudioClassificationResult(iconSymbol: "waveform", confidence: 0, topPredictions: []))
         }
     }
 }
@@ -214,7 +225,7 @@ final class LegacySoundAnalysisClassifier: AudioIconClassifier {
     var isModelAvailable: Bool { false }
 
     func classify(fileURL: URL) async -> AudioClassificationResult? {
-        return AudioClassificationResult(icon: .waveform, confidence: 0)
+        return AudioClassificationResult(iconSymbol: "waveform", confidence: 0)
     }
 }
 
@@ -225,9 +236,6 @@ final class AudioIconClassifierManager {
     static let shared = AudioIconClassifierManager()
 
     private let classifier: AudioIconClassifier
-
-    /// Confidence threshold for auto-assignment (0.855 = 85.5%)
-    let confidenceThreshold: Float = 0.855
 
     private init() {
         // Use Apple's built-in SoundAnalysis classifier on iOS 15+
@@ -241,27 +249,6 @@ final class AudioIconClassifierManager {
             #if DEBUG
             print("[AudioIconClassifierManager] Using legacy fallback (iOS < 15)")
             #endif
-        }
-    }
-
-    /// Classify an audio file and return suggested icon if confidence meets threshold
-    /// - Parameter fileURL: URL to the audio file
-    /// - Returns: Suggested PresetIcon, or nil if classification failed or below threshold
-    func classifyForIcon(fileURL: URL) async -> PresetIcon? {
-        guard let result = await classifier.classify(fileURL: fileURL) else {
-            return nil
-        }
-
-        if result.meetsThreshold(confidenceThreshold) {
-            #if DEBUG
-            print("[AudioIconClassifierManager] Classification: \(result.icon.displayName) @ \(Int(result.confidence * 100))%")
-            #endif
-            return result.icon
-        } else {
-            #if DEBUG
-            print("[AudioIconClassifierManager] Below threshold: \(result.icon.displayName) @ \(Int(result.confidence * 100))%")
-            #endif
-            return nil
         }
     }
 
@@ -304,12 +291,16 @@ final class AudioIconClassifierManager {
             updated.iconPredictions = result.topPredictions
         }
 
-        // Only auto-assign icon if confidence meets threshold
-        if result.meetsThreshold(confidenceThreshold) {
-            updated.iconName = result.icon.rawValue
+        // Use per-category threshold for auto-assignment
+        let iconCategory = IconCatalog.category(for: result.iconSymbol)
+        let threshold = iconCategory?.autoAssignThreshold ?? 0.85
+
+        if result.meetsThreshold(threshold) {
+            updated.iconName = result.iconSymbol
             updated.iconSource = .auto
             #if DEBUG
-            print("[AudioIconClassifierManager] Set icon to \(result.icon.displayName) for: \(recording.title)")
+            let displayName = IconCatalog.icon(for: result.iconSymbol)?.displayName ?? result.iconSymbol
+            print("[AudioIconClassifierManager] Set icon to \(displayName) for: \(recording.title)")
             #endif
         } else {
             #if DEBUG

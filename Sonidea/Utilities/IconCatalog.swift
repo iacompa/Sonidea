@@ -33,6 +33,19 @@ enum IconCategory: String, CaseIterable, Identifiable {
         case .other: return 6
         }
     }
+
+    /// Per-category confidence threshold for auto-assigning an icon
+    var autoAssignThreshold: Float {
+        switch self {
+        case .voice: return 0.75
+        case .music: return 0.75
+        case .animals: return 0.80
+        case .nature: return 0.80
+        case .vehicles: return 0.80
+        case .sounds: return 0.85
+        case .other: return 0.85
+        }
+    }
 }
 
 // MARK: - Icon Definition
@@ -46,7 +59,7 @@ struct IconDefinition: Identifiable, Hashable {
     let classifierLabels: Set<String>  // Apple SoundAnalysis labels that map to this icon
 
     init(sfSymbol: String, displayName: String, category: IconCategory, classifierLabels: [String] = []) {
-        self.id = sfSymbol
+        self.id = "\(category.rawValue)_\(sfSymbol)"
         self.sfSymbol = sfSymbol
         self.displayName = displayName
         self.category = category
@@ -71,7 +84,7 @@ struct IconCatalog {
     static let allIcons: [IconDefinition] = [
         // MARK: - Music (first)
         IconDefinition(sfSymbol: "music.note", displayName: "Music", category: .music,
-                      classifierLabels: ["music"]),
+                      classifierLabels: ["music", "orchestra", "musical_ensemble"]),
         IconDefinition(sfSymbol: "music.note.list", displayName: "Piano", category: .music,
                       classifierLabels: ["piano", "electric_piano", "keyboard_musical", "synthesizer",
                                         "organ", "electronic_organ", "hammond_organ", "harpsichord"]),
@@ -80,9 +93,9 @@ struct IconCatalog {
                       classifierLabels: ["drum", "drum_kit", "bass_drum", "snare_drum", "timpani", "tabla",
                                         "cymbal", "hi_hat", "tambourine", "mallet_percussion", "gong",
                                         "marimba_xylophone", "vibraphone", "glockenspiel", "steelpan",
-                                        "rattle_instrument"]),
+                                        "rattle_instrument", "cowbell"]),
         IconDefinition(sfSymbol: "music.mic", displayName: "Vocal", category: .music,
-                      classifierLabels: ["singing", "choir_singing", "rapping", "yodeling", "humming"]),
+                      classifierLabels: ["singing", "choir_singing", "rapping", "yodeling", "humming", "whistling"]),
         IconDefinition(sfSymbol: "tuningfork", displayName: "Tuning", category: .music),
         IconDefinition(sfSymbol: "metronome", displayName: "Metronome", category: .music),
         IconDefinition(sfSymbol: "amplifier", displayName: "Amp", category: .music),
@@ -97,12 +110,12 @@ struct IconCatalog {
                                         "guitar_strum", "guitar_tapping", "steel_guitar_slide_guitar",
                                         "violin_fiddle", "cello", "double_bass", "bowed_string_instrument",
                                         "plucked_string_instrument", "harp", "mandolin", "banjo", "sitar",
-                                        "zither", "ukulele"]),
+                                        "zither", "ukulele", "accordion", "concertina"]),
         // Wind instruments
         IconDefinition(sfSymbol: "wind", displayName: "Wind", category: .music,
                       classifierLabels: ["flute", "oboe", "clarinet", "bassoon", "saxophone", "trumpet",
                                         "trombone", "french_horn", "brass_instrument", "wind_instrument",
-                                        "bagpipes", "didgeridoo", "harmonica"]),
+                                        "bagpipes", "didgeridoo", "harmonica", "tuning_fork", "shofar"]),
         IconDefinition(sfSymbol: "waveform.badge.mic", displayName: "Recording", category: .music),
 
         // MARK: - Sounds (second)
@@ -116,19 +129,21 @@ struct IconCatalog {
                                         "singing_bowl", "telephone_bell_ringing"]),
         IconDefinition(sfSymbol: "alarm.fill", displayName: "Alarm", category: .sounds,
                       classifierLabels: ["alarm_clock", "clock", "tick_tock", "tick", "siren",
-                                        "civil_defense_siren", "smoke_detector"]),
+                                        "civil_defense_siren", "smoke_detector", "fire_alarm"]),
         IconDefinition(sfSymbol: "phone.fill", displayName: "Phone", category: .sounds,
                       classifierLabels: ["telephone", "ringtone"]),
         IconDefinition(sfSymbol: "hand.tap.fill", displayName: "Tap", category: .sounds,
                       classifierLabels: ["knock", "tap", "click", "clicking", "typing",
-                                        "typing_computer_keyboard", "keyboard"]),
+                                        "typing_computer_keyboard", "keyboard", "finger_snapping"]),
         IconDefinition(sfSymbol: "hand.raised.fill", displayName: "Clap", category: .sounds,
                       classifierLabels: ["applause", "clapping", "cheering"]),
         IconDefinition(sfSymbol: "burst.fill", displayName: "Impact", category: .sounds,
-                      classifierLabels: ["crash", "boom", "thump_thud", "slap_smack", "glass_breaking"]),
+                      classifierLabels: ["crash", "boom", "thump_thud", "slap_smack", "glass_breaking",
+                                        "fireworks", "firecracker", "gunshot_gunfire", "explosion", "artillery_fire"]),
         IconDefinition(sfSymbol: "wrench.and.screwdriver.fill", displayName: "Tools", category: .sounds,
                       classifierLabels: ["power_tool", "drill", "hammer", "saw", "scissors", "cutting",
-                                        "lawn_mower", "chainsaw"]),
+                                        "lawn_mower", "chainsaw", "vacuum_cleaner", "blender",
+                                        "hair_dryer", "electric_shaver", "toothbrush"]),
         IconDefinition(sfSymbol: "door.left.hand.open", displayName: "Door", category: .sounds,
                       classifierLabels: ["door", "door_slam", "door_sliding", "door_open_close"]),
         IconDefinition(sfSymbol: "key.fill", displayName: "Keys", category: .sounds,
@@ -138,7 +153,9 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "printer.fill", displayName: "Printer", category: .sounds,
                       classifierLabels: ["printing", "printer"]),
         IconDefinition(sfSymbol: "gearshape.fill", displayName: "Mechanical", category: .sounds,
-                      classifierLabels: ["mechanical_fan", "ratchet_and_pawl", "engine"]),
+                      classifierLabels: ["mechanical_fan", "ratchet_and_pawl", "engine",
+                                        "microwave_oven", "washing_machine", "dishwasher",
+                                        "air_conditioner", "sewing_machine"]),
         IconDefinition(sfSymbol: "megaphone.fill", displayName: "Announcement", category: .sounds,
                       classifierLabels: ["air_horn"]),
 
@@ -147,7 +164,7 @@ struct IconCatalog {
                       classifierLabels: ["speech", "talking"]),
         IconDefinition(sfSymbol: "person.fill", displayName: "Person", category: .voice),
         IconDefinition(sfSymbol: "person.2.fill", displayName: "People", category: .voice,
-                      classifierLabels: ["crowd", "babble", "children_shouting"]),
+                      classifierLabels: ["crowd", "babble", "children_shouting", "children_playing"]),
         IconDefinition(sfSymbol: "person.wave.2.fill", displayName: "Greeting", category: .voice),
         IconDefinition(sfSymbol: "bubble.left.fill", displayName: "Speech", category: .voice,
                       classifierLabels: ["whispering", "narration"]),
@@ -157,7 +174,8 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "face.dashed.fill", displayName: "Crying", category: .voice,
                       classifierLabels: ["crying_sobbing", "baby_crying"]),
         IconDefinition(sfSymbol: "mouth.fill", displayName: "Voice", category: .voice,
-                      classifierLabels: ["cough", "sneeze", "breathing", "snoring", "gasp", "sigh", "burp", "hiccup"]),
+                      classifierLabels: ["cough", "sneeze", "breathing", "snoring", "gasp", "sigh", "burp", "hiccup",
+                                        "gargling", "nose_blowing", "chewing", "slurp", "biting"]),
         IconDefinition(sfSymbol: "person.crop.circle.fill", displayName: "Portrait", category: .voice),
         IconDefinition(sfSymbol: "theatermasks.fill", displayName: "Performance", category: .voice),
         IconDefinition(sfSymbol: "video.fill", displayName: "Video", category: .voice),
@@ -187,7 +205,7 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "drop.fill", displayName: "Water", category: .nature,
                       classifierLabels: ["water", "water_tap_faucet", "water_pump", "liquid_dripping",
                                         "liquid_filling_container", "liquid_pouring", "liquid_splashing",
-                                        "liquid_sloshing", "liquid_trickle_dribble"]),
+                                        "liquid_sloshing", "liquid_trickle_dribble", "toilet_flush"]),
         IconDefinition(sfSymbol: "cloud.rain.fill", displayName: "Rain", category: .nature,
                       classifierLabels: ["rain", "raindrop"]),
         IconDefinition(sfSymbol: "cloud.bolt.fill", displayName: "Thunder", category: .nature,
@@ -208,7 +226,8 @@ struct IconCatalog {
         // MARK: - Vehicles
         IconDefinition(sfSymbol: "car.fill", displayName: "Car", category: .vehicles,
                       classifierLabels: ["car_horn", "car_passing_by", "engine_starting", "engine_idling",
-                                        "engine_accelerating_revving", "engine_knocking"]),
+                                        "engine_accelerating_revving", "engine_knocking",
+                                        "vehicle_skidding", "race_car"]),
         IconDefinition(sfSymbol: "bus.fill", displayName: "Bus", category: .vehicles,
                       classifierLabels: ["bus"]),
         IconDefinition(sfSymbol: "truck.box.fill", displayName: "Truck", category: .vehicles,
@@ -218,7 +237,8 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "bicycle", displayName: "Bicycle", category: .vehicles,
                       classifierLabels: ["bicycle"]),
         IconDefinition(sfSymbol: "tram.fill", displayName: "Train", category: .vehicles,
-                      classifierLabels: ["train", "train_horn", "train_whistle", "train_wheels_squealing", "rail_transport"]),
+                      classifierLabels: ["train", "train_horn", "train_whistle", "train_wheels_squealing", "rail_transport",
+                                        "subway_metro"]),
         IconDefinition(sfSymbol: "airplane", displayName: "Airplane", category: .vehicles,
                       classifierLabels: ["airplane", "aircraft", "helicopter"]),
         IconDefinition(sfSymbol: "ferry.fill", displayName: "Boat", category: .vehicles,
@@ -227,7 +247,8 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "horn.blast.fill", displayName: "Horn", category: .vehicles,
                       classifierLabels: ["car_horn", "train_horn", "air_horn"]),
         IconDefinition(sfSymbol: "light.beacon.max.fill", displayName: "Siren", category: .vehicles,
-                      classifierLabels: ["siren", "police_siren", "fire_engine_siren", "ambulance_siren"]),
+                      classifierLabels: ["siren", "police_siren", "fire_engine_siren", "ambulance_siren",
+                                        "emergency_vehicle"]),
 
         // MARK: - Other
         IconDefinition(sfSymbol: "brain.head.profile", displayName: "Idea", category: .other),
@@ -251,7 +272,8 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "stopwatch.fill", displayName: "Timer", category: .other),
         IconDefinition(sfSymbol: "sportscourt.fill", displayName: "Sports", category: .other,
                       classifierLabels: ["playing_tennis", "playing_badminton", "basketball_bounce",
-                                        "playing_table_tennis", "skateboard", "skiing"]),
+                                        "playing_table_tennis", "skateboard", "skiing",
+                                        "person_running", "person_walking", "rope_skipping"]),
     ]
 
     /// Icons grouped by category (for picker UI)
@@ -268,6 +290,11 @@ struct IconCatalog {
     /// Lookup icon by SF Symbol name
     static func icon(for sfSymbol: String) -> IconDefinition? {
         allIcons.first { $0.sfSymbol == sfSymbol }
+    }
+
+    /// Look up the category for a given SF Symbol name
+    static func category(for sfSymbol: String) -> IconCategory? {
+        allIcons.first { $0.sfSymbol == sfSymbol }?.category
     }
 
     /// Find best matching icon for a classifier label

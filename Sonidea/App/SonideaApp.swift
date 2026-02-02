@@ -92,6 +92,9 @@ struct SonideaApp: App {
                         Task {
                             await appState.enforceSharedAlbumAccess()
                         }
+
+                        // Retry any icon classifications that failed in background
+                        appState.retryPendingClassifications()
                     } else if newPhase == .background {
                         // When going to background, verify Live Activity state matches recording state
                         if !appState.recorder.isActive {

@@ -468,6 +468,7 @@ final class AppState {
 
         // Auto-classify icon if enabled (Pro feature, or temporarily free)
         if appSettings.autoSelectIcon && (supportManager.canUseProFeatures || ProFeatureContext.autoIcons.isFree) {
+            addToPendingClassifications(recording.id)
             Task {
                 await autoClassifyIcon(recording: recording)
             }
@@ -493,18 +494,78 @@ final class AppState {
         }
     }
 
+    // MARK: - Icon Classification Retry Queue
+
+    private static let pendingClassificationsKey = "pendingIconClassificationIDs"
+
+    private func addToPendingClassifications(_ id: UUID) {
+        var pending = Self.loadPendingClassificationIDs()
+        pending.insert(id.uuidString)
+        UserDefaults.standard.set(Array(pending), forKey: Self.pendingClassificationsKey)
+    }
+
+    private func removeFromPendingClassifications(_ id: UUID) {
+        var pending = Self.loadPendingClassificationIDs()
+        pending.remove(id.uuidString)
+        UserDefaults.standard.set(Array(pending), forKey: Self.pendingClassificationsKey)
+    }
+
+    private static func loadPendingClassificationIDs() -> Set<String> {
+        let array = UserDefaults.standard.stringArray(forKey: pendingClassificationsKey) ?? []
+        return Set(array)
+    }
+
+    func retryPendingClassifications() {
+        let pendingIDs = Self.loadPendingClassificationIDs()
+        guard !pendingIDs.isEmpty else { return }
+
+        #if DEBUG
+        print("[AppState] Retrying \(pendingIDs.count) pending icon classifications")
+        #endif
+
+        for idString in pendingIDs {
+            guard let uuid = UUID(uuidString: idString),
+                  let recording = recording(for: uuid),
+                  recording.iconSource != .user,
+                  recording.iconName == nil || recording.iconSourceRaw != IconSource.auto.rawValue else {
+                // Already classified or user-set — remove from queue
+                if let uuid = UUID(uuidString: idString) {
+                    removeFromPendingClassifications(uuid)
+                }
+                continue
+            }
+
+            Task {
+                await autoClassifyIcon(recording: recording)
+            }
+        }
+    }
+
     private func autoClassifyIcon(recording: RecordingItem) async {
+        let taskID = await UIApplication.shared.beginBackgroundTask(withName: "IconClassification") {
+            // Expiration handler — classification will be retried on next foreground
+        }
+
         let updated = await AudioIconClassifierManager.shared.classifyAndUpdateIfNeeded(
             recording: recording,
             autoSelectEnabled: appSettings.autoSelectIcon
         )
 
-        // Only update if icon was actually changed
-        if updated.iconName != recording.iconName {
+        // Save if icon changed OR if predictions were updated (bug fix: predictions were silently discarded)
+        if updated.iconName != recording.iconName || updated.iconPredictions != recording.iconPredictions {
             await MainActor.run {
                 updateRecording(updated)
             }
+            removeFromPendingClassifications(recording.id)
+        } else if updated.iconName == nil && updated.iconPredictions == nil {
+            // Classification produced no results — keep in retry queue
+            addToPendingClassifications(recording.id)
+        } else {
+            // No changes needed — remove from queue
+            removeFromPendingClassifications(recording.id)
         }
+
+        await UIApplication.shared.endBackgroundTask(taskID)
     }
 
     func updateRecording(_ updated: RecordingItem) {

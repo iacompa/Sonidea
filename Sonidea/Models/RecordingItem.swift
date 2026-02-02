@@ -31,8 +31,8 @@ struct IconPrediction: Codable, Equatable {
     let iconSymbol: String   // SF Symbol name
     let confidence: Float    // 0.0 to 1.0
 
-    /// Minimum threshold for suggestions (85.5%)
-    static let suggestionThreshold: Float = 0.855
+    /// Minimum threshold for suggestions (50%)
+    static let suggestionThreshold: Float = 0.50
 }
 
 // MARK: - Preset Icons for Recordings
