@@ -17,6 +17,9 @@ class WatchAppState {
     var recordings: [WatchRecordingItem] = []
     var selectedThemeRawValue: String = "system"
 
+    /// Number of recordings waiting to be confirmed by the phone
+    var pendingTransferCount: Int = 0
+
     // MARK: - Record Button Position
 
     var recordButtonPosition: CGPoint?
@@ -34,6 +37,17 @@ class WatchAppState {
         // Recompute palette after theme is loaded from UserDefaults
         currentPalette = WatchTheme.palette(for: selectedThemeRawValue)
         loadRecordButtonPosition()
+        pendingTransferCount = WatchConnectivityService.shared.pendingTransferCount
+
+        // Handle transfer confirmations from phone
+        WatchConnectivityService.shared.onTransferConfirmed = { [weak self] _ in
+            self?.pendingTransferCount = WatchConnectivityService.shared.pendingTransferCount
+        }
+    }
+
+    /// Retry all pending transfers (called when phone becomes reachable)
+    func retryPendingTransfers() {
+        WatchConnectivityService.shared.retryPendingTransfers(recordings: recordings)
     }
 
     // MARK: - Recording Management

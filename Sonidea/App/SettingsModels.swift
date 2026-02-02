@@ -386,4 +386,35 @@ struct AppSettings: Codable {
     var hasSeenWelcome: Bool = false
 
     static let `default` = AppSettings()
+
+    // MARK: - Migration-safe decoder
+
+    /// Custom decoder that gracefully handles missing keys when new properties are added.
+    /// Without this, loading old persisted data that lacks newer keys causes a decode failure,
+    /// resetting all settings to defaults and losing the user's configuration.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordingQuality = try container.decodeIfPresent(RecordingQualityPreset.self, forKey: .recordingQuality) ?? .high
+        transcriptionLanguage = try container.decodeIfPresent(TranscriptionLanguage.self, forKey: .transcriptionLanguage) ?? .system
+        autoTranscribe = try container.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
+        skipInterval = try container.decodeIfPresent(SkipInterval.self, forKey: .skipInterval) ?? .fifteen
+        playbackSpeed = try container.decodeIfPresent(Float.self, forKey: .playbackSpeed) ?? 1.0
+        silenceSkipSettings = try container.decodeIfPresent(SilenceSkipSettings.self, forKey: .silenceSkipSettings) ?? .default
+        iCloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudSyncEnabled) ?? false
+        preferredInputUID = try container.decodeIfPresent(String.self, forKey: .preferredInputUID)
+        recordingInputSettings = try container.decodeIfPresent(RecordingInputSettings.self, forKey: .recordingInputSettings) ?? .default
+        hasShownMoveHint = try container.decodeIfPresent(Bool.self, forKey: .hasShownMoveHint) ?? false
+        hasEverMovedRecordButton = try container.decodeIfPresent(Bool.self, forKey: .hasEverMovedRecordButton) ?? false
+        lastMoveHintShownAt = try container.decodeIfPresent(Date.self, forKey: .lastMoveHintShownAt)
+        recordingMode = try container.decodeIfPresent(RecordingMode.self, forKey: .recordingMode) ?? .mono
+        autoSelectIcon = try container.decodeIfPresent(Bool.self, forKey: .autoSelectIcon) ?? true
+        preventSleepWhileRecording = try container.decodeIfPresent(Bool.self, forKey: .preventSleepWhileRecording) ?? true
+        metronomeEnabled = try container.decodeIfPresent(Bool.self, forKey: .metronomeEnabled) ?? false
+        metronomeBPM = try container.decodeIfPresent(Double.self, forKey: .metronomeBPM) ?? 120
+        metronomeVolume = try container.decodeIfPresent(Float.self, forKey: .metronomeVolume) ?? 0.8
+        watchSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .watchSyncEnabled) ?? false
+        hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
+    }
+
+    init() {}
 }

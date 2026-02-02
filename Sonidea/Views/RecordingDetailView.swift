@@ -163,6 +163,7 @@ struct RecordingDetailView: View {
     @State private var appliedEchoDamping: Float = 0.3
     @State private var appliedEchoWetDry: Float = 0.3
     @State private var hasEchoApplied = false
+    @State private var showDiscardEffectsAlert = false
 
     @State private var editedIconColor: Color
     // Track if icon color was explicitly modified by user (to avoid lossy round-trip conversion)
@@ -344,6 +345,12 @@ struct RecordingDetailView: View {
 
     var body: some View {
         NavigationStack {
+            mainContent
+        }
+    }
+
+    @ViewBuilder
+    private var mainContentCore: some View {
             GeometryReader { outerProxy in
                 ZStack {
                     palette.background.ignoresSafeArea()
@@ -386,6 +393,7 @@ struct RecordingDetailView: View {
                             }
                         }
                         .disabled(isExporting)
+                        .accessibilityLabel(isExporting ? "Exporting" : "Share recording")
 
                         // Main icon + up to 2 secondary icons strip
                         Button {
@@ -412,6 +420,7 @@ struct RecordingDetailView: View {
                                         .strokeBorder(palette.textPrimary.opacity(0.4), lineWidth: 1.5)
                                 )
                         }
+                        .accessibilityLabel("Icon color")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -505,6 +514,10 @@ struct RecordingDetailView: View {
                     silenceRMSMeter.clear()
                 }
             }
+    }
+
+    private var mainContentWithModals: some View {
+        mainContentCore
             .alert("Cannot Play Recording", isPresented: $showPlaybackError) {
                 Button("OK") {
                     playback.clearError()
@@ -636,6 +649,10 @@ struct RecordingDetailView: View {
                     .environment(appState)
                     .environment(\.themePalette, palette)
             }
+    }
+
+    private var mainContent: some View {
+        mainContentWithModals
             .fullScreenCover(isPresented: $showOverdubSession) {
                 OverdubSessionView(
                     baseRecording: currentRecording,
@@ -651,6 +668,16 @@ struct RecordingDetailView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Recording over a track requires headphones to prevent feedback.\n\nWired headphones are strongly recommended for the best overdub experience — they typically provide lower latency and more consistent timing. Bluetooth headphones will work but may introduce noticeable audio delay.")
+            }
+            .alert("Discard Effect Changes?", isPresented: $showDiscardEffectsAlert) {
+                Button("Discard", role: .destructive) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        exitEditMode()
+                    }
+                }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text("You have unapplied effects. Exiting edit mode will discard them.")
             }
             .overlay(alignment: .bottom) {
                 if showVersionSavedToast {
@@ -670,7 +697,6 @@ struct RecordingDetailView: View {
                         }
                 }
             }
-        }
     }
 
     // MARK: - Version Saved Toast
@@ -735,6 +761,7 @@ struct RecordingDetailView: View {
                                     .cornerRadius(6)
                             }
                             .disabled(!editHistory.canUndo)
+                            .accessibilityLabel("Undo")
 
                             Button {
                                 performRedo()
@@ -747,6 +774,7 @@ struct RecordingDetailView: View {
                                     .cornerRadius(6)
                             }
                             .disabled(!editHistory.canRedo)
+                            .accessibilityLabel("Redo")
 
                             // Divider
                             Rectangle()
@@ -822,40 +850,12 @@ struct RecordingDetailView: View {
                     Button {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                             if isEditingWaveform {
-                                // Exit edit mode - pause playback and reset precision mode
-                                playback.pause()
-                                isPrecisionMode = false
-                                silenceMode = .idle  // Clear any highlighted silence
-                                // Reset tool active states
-                                hasFadeApplied = false
-                                hasPeakApplied = false
-                                hasGateApplied = false
-                                hasCompressApplied = false
-                                hasReverbApplied = false
-                                hasEchoApplied = false
-                                appliedFadeIn = 0
-                                appliedFadeOut = 0
-                                appliedFadeCurve = .sCurve
-                                appliedPeakTarget = -0.3
-                                appliedGateThreshold = -40
-                                appliedCompressGain = 0
-                                appliedCompressPeakReduction = 0
-                                appliedCompressMix = 1.0
-                                appliedReverbRoomSize = 1.0
-                                appliedReverbPreDelay = 20
-                                appliedReverbDecay = 2.0
-                                appliedReverbDamping = 0.5
-                                appliedReverbWetDry = 0.3
-                                appliedEchoDelay = 0.25
-                                appliedEchoFeedback = 0.3
-                                appliedEchoDamping = 0.3
-                                appliedEchoWetDry = 0.3
-                                activeEffect = nil
-                                // Persist markers immediately when exiting edit mode
-                                if editedMarkers != currentRecording.markers {
-                                    saveMarkersOnly()
+                                // Check for unapplied effects before exiting
+                                if hasUnsavedEffects {
+                                    showDiscardEffectsAlert = true
+                                } else {
+                                    exitEditMode()
                                 }
-                                isEditingWaveform = false
                             } else {
                                 guard appState.supportManager.canUseProFeatures || ProFeatureContext.editMode.isFree else {
                                     proUpgradeContext = .editMode
@@ -889,6 +889,7 @@ struct RecordingDetailView: View {
                             .background(palette.accent)
                             .cornerRadius(6)
                     }
+                    .accessibilityLabel(isEditingWaveform ? "Exit edit mode" : "Enter edit mode")
                 }
             }
 
@@ -1023,6 +1024,7 @@ struct RecordingDetailView: View {
                                 .background(palette.accent.opacity(0.15))
                                 .cornerRadius(7)
                         }
+                        .accessibilityLabel("Playback speed \(String(format: "%.1f", playback.playbackSpeed)) times")
 
                         Spacer()
 
@@ -1038,6 +1040,7 @@ struct RecordingDetailView: View {
                                 .foregroundColor(palette.textPrimary)
                                 .frame(width: 36, height: 36)
                         }
+                        .accessibilityLabel("Skip backward \(appState.appSettings.skipInterval.rawValue) seconds")
 
                         // Play/Pause - liquid glass 3D style
                         Button {
@@ -1058,6 +1061,7 @@ struct RecordingDetailView: View {
                                 .shadow(color: palette.accent.opacity(0.35), radius: 5, y: 2)
                                 .shadow(color: .white.opacity(0.15), radius: 1, y: -1)
                         }
+                        .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
 
                         // Skip forward
                         Button {
@@ -1071,6 +1075,7 @@ struct RecordingDetailView: View {
                                 .foregroundColor(palette.textPrimary)
                                 .frame(width: 36, height: 36)
                         }
+                        .accessibilityLabel("Skip forward \(appState.appSettings.skipInterval.rawValue) seconds")
 
                         Spacer()
 
@@ -1094,6 +1099,7 @@ struct RecordingDetailView: View {
                                     .strokeBorder(palette.accent.opacity(0.25), lineWidth: 1)
                             )
                         }
+                        .accessibilityLabel("Add marker")
                     }
                     .padding(.horizontal, 4)
 
@@ -1356,6 +1362,45 @@ struct RecordingDetailView: View {
         if hasReverbApplied { effects.insert(.reverb) }
         if hasEchoApplied { effects.insert(.echo) }
         return effects
+    }
+
+    /// True when any effect has non-default values that haven't been applied to audio
+    private var hasUnsavedEffects: Bool {
+        !currentAppliedEffects.isEmpty
+    }
+
+    private func exitEditMode() {
+        playback.pause()
+        isPrecisionMode = false
+        silenceMode = .idle
+        hasFadeApplied = false
+        hasPeakApplied = false
+        hasGateApplied = false
+        hasCompressApplied = false
+        hasReverbApplied = false
+        hasEchoApplied = false
+        appliedFadeIn = 0
+        appliedFadeOut = 0
+        appliedFadeCurve = .sCurve
+        appliedPeakTarget = -0.3
+        appliedGateThreshold = -40
+        appliedCompressGain = 0
+        appliedCompressPeakReduction = 0
+        appliedCompressMix = 1.0
+        appliedReverbRoomSize = 1.0
+        appliedReverbPreDelay = 20
+        appliedReverbDecay = 2.0
+        appliedReverbDamping = 0.5
+        appliedReverbWetDry = 0.3
+        appliedEchoDelay = 0.25
+        appliedEchoFeedback = 0.3
+        appliedEchoDamping = 0.3
+        appliedEchoWetDry = 0.3
+        activeEffect = nil
+        if editedMarkers != currentRecording.markers {
+            saveMarkersOnly()
+        }
+        isEditingWaveform = false
     }
 
     private var canPerformTrim: Bool {
@@ -2401,18 +2446,10 @@ struct RecordingDetailView: View {
                         },
                         onCreateProject: {
                             showProjectActionSheet = false
-                            guard appState.supportManager.canUseProFeatures else {
-                                proUpgradeContext = .projects
-                                return
-                            }
                             showCreateProject = true
                         },
                         onAddToExisting: {
                             showProjectActionSheet = false
-                            guard appState.supportManager.canUseProFeatures else {
-                                proUpgradeContext = .projects
-                                return
-                            }
                             showChooseProject = true
                         },
                         onCancel: {
@@ -2442,6 +2479,7 @@ struct RecordingDetailView: View {
                     }
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(palette.accent)
+                    .accessibilityLabel("Manage tags")
                 }
 
                 // Tag chips or "None"

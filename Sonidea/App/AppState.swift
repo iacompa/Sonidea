@@ -9,6 +9,7 @@ import Foundation
 import Observation
 import SwiftUI
 import CoreLocation
+import WidgetKit
 import os
 
 // MARK: - UI Metrics (for Settings to access container geometry)
@@ -190,13 +191,20 @@ final class AppState {
             await self.enforceSharedAlbumAccess()
 
             // Then, validate that each remaining shared album's share still exists
+            // and resolve the current user's role
             var staleAlbums: [Album] = []
-            for album in self.albums where album.isShared {
+            for (index, album) in self.albums.enumerated() where album.isShared {
                 let exists = await self.sharedAlbumManager.validateShareExists(for: album)
                 if !exists || self.sharedAlbumManager.shareStale {
                     Self.logger.info("Removing stale shared album: \(album.name)")
                     staleAlbums.append(album)
                     self.sharedAlbumManager.shareStale = false
+                } else if album.currentUserRole == nil {
+                    // Resolve the current user's role from the CKShare
+                    let resolved = await self.sharedAlbumManager.resolveCurrentUserRole(for: album)
+                    if resolved.currentUserRole != nil {
+                        self.albums[index] = resolved
+                    }
                 }
             }
             for album in staleAlbums {
@@ -239,6 +247,12 @@ final class AppState {
         // Watch sync is a Pro feature
         if settings.watchSyncEnabled {
             settings.watchSyncEnabled = false
+            settingsChanged = true
+        }
+
+        // Metronome is a Pro feature
+        if settings.metronomeEnabled && !ProFeatureContext.metronome.isFree {
+            settings.metronomeEnabled = false
             settingsChanged = true
         }
 
@@ -756,8 +770,8 @@ final class AppState {
         let tagId = tag.id
         let result = TagRepository.deleteTag(tag, tags: &tags, recordings: &recordings)
         if result {
-            saveTags()
-            saveRecordings()
+            persistTags()
+            persistRecordings()
             triggerSyncForTagDeletion(tagId)
         }
         return result
@@ -770,8 +784,8 @@ final class AppState {
             tags: &tags,
             recordings: &recordings
         )
-        saveTags()
-        saveRecordings()
+        persistTags()
+        persistRecordings()
         for tagID in deletedIDs {
             triggerSyncForTagDeletion(tagID)
         }
@@ -822,8 +836,8 @@ final class AppState {
     func deleteAlbum(_ album: Album) {
         let albumId = album.id
         guard AlbumRepository.deleteAlbum(album, albums: &albums, recordings: &recordings) else { return }
-        saveAlbums()
-        saveRecordings()
+        persistAlbums()
+        persistRecordings()
         triggerSyncForAlbumDeletion(albumId)
     }
 
@@ -836,8 +850,8 @@ final class AppState {
 
     private func ensureDraftsAlbum() {
         let result = AlbumRepository.ensureDraftsAlbum(albums: &albums, recordings: &recordings)
-        if result.albumsChanged { saveAlbums() }
-        if result.recordingsChanged { saveRecordings() }
+        if result.albumsChanged { persistAlbums() }
+        if result.recordingsChanged { persistRecordings() }
     }
 
     /// Ensure the Imports system album exists (called on first external import)
@@ -1527,6 +1541,32 @@ final class AppState {
         } catch {
             Self.logger.error("Failed to encode recordings for UserDefaults fallback: \(error.localizedDescription, privacy: .public)")
         }
+        // Update home screen widgets with latest data
+        updateWidgetData()
+    }
+
+    /// Write recording data to the App Group shared container for widget consumption
+    /// and reload all widget timelines.
+    private func updateWidgetData() {
+        let recent = recordings
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(5)
+            .map { recording in
+                WidgetRecordingInfo(
+                    id: recording.id,
+                    title: recording.title,
+                    duration: recording.duration,
+                    createdAt: recording.createdAt,
+                    iconName: recording.iconName
+                )
+            }
+        let widgetData = SharedWidgetData(
+            recentRecordings: Array(recent),
+            totalRecordingCount: recordings.count,
+            lastUpdated: Date()
+        )
+        widgetData.save()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func loadRecordings() {
@@ -1816,8 +1856,8 @@ final class AppState {
     /// Delete a project (recordings become standalone)
     func deleteProject(_ project: Project) {
         let deletedId = ProjectRepository.deleteProject(project, projects: &projects, recordings: &recordings)
-        saveProjects()
-        saveRecordings()
+        persistProjects()
+        persistRecordings()
         triggerSyncForProjectDeletion(deletedId)
     }
 

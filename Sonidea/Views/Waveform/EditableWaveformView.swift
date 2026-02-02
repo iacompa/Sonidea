@@ -39,7 +39,7 @@ struct EditableWaveformView: View {
     private let precisionMultiplier: CGFloat = 0.25
 
     // Handle dimensions
-    private let handleWidth: CGFloat = 14
+    private let handleWidth: CGFloat = 6
     private let handleHitAreaWidth: CGFloat = 44
 
     // Drag threshold to prevent accidental drags (increased from 1 to 10)
@@ -341,6 +341,17 @@ struct EditableWaveformView: View {
                 .frame(width: 12, height: 12)
                 .offset(y: -height / 2 + 6)
                 .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)
+
+            // Time label above playhead
+            Text(formatTimeWithCentiseconds(playheadPosition))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(palette.playheadColor)
+                .clipShape(Capsule())
+                .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
+                .offset(y: -height / 2 - 10)
         }
         .offset(x: x - 1)
         .accessibilityLabel("Playhead")
@@ -390,11 +401,24 @@ struct EditableWaveformView: View {
         let compensatedTime = max(0, currentTime - 0.05)
         let x = timeToX(compensatedTime, width: width)
 
-        return Rectangle()
-            .fill(palette.playheadColor)
-            .frame(width: 2, height: height)
-            .offset(x: x - 1)
-            .allowsHitTesting(false)
+        return ZStack {
+            Rectangle()
+                .fill(palette.playheadColor)
+                .frame(width: 2, height: height)
+
+            // Time label above playhead
+            Text(formatTimeWithCentiseconds(currentTime))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(palette.playheadColor)
+                .clipShape(Capsule())
+                .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
+                .offset(y: -height / 2 - 10)
+        }
+        .offset(x: x - 1)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Selection Handles
@@ -402,12 +426,7 @@ struct EditableWaveformView: View {
     private func leftHandle(width: CGFloat, height: CGFloat) -> some View {
         let x = timeToX(selectionStart, width: width)
 
-        return ZStack {
-            // Visual handle
-            HandleShape(isLeft: true)
-                .fill(palette.accent)
-                .frame(width: handleWidth, height: height * 0.7)
-        }
+        return Color.clear
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
@@ -463,12 +482,7 @@ struct EditableWaveformView: View {
     private func rightHandle(width: CGFloat, height: CGFloat) -> some View {
         let x = timeToX(selectionEnd, width: width)
 
-        return ZStack {
-            // Visual handle
-            HandleShape(isLeft: false)
-                .fill(palette.accent)
-                .frame(width: handleWidth, height: height * 0.7)
-        }
+        return Color.clear
         .frame(width: handleHitAreaWidth, height: height)
         .contentShape(Rectangle())
         .offset(x: x - handleHitAreaWidth / 2)
@@ -588,7 +602,7 @@ struct HandleShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let cornerRadius: CGFloat = 4
+        let cornerRadius: CGFloat = 3
 
         if isLeft {
             // Left handle: rounded on left, flat on right

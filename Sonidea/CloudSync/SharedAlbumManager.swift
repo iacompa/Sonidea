@@ -186,7 +186,8 @@ final class SharedAlbumManager {
             isSystem: false,
             isShared: true,
             participantCount: 1,
-            isOwner: true
+            isOwner: true,
+            currentUserRole: .admin
         )
 
         // Create a custom zone for this shared album
@@ -372,7 +373,7 @@ final class SharedAlbumManager {
         }
 
         do {
-            try await db.save(record)
+            try await saveWithRetry(record, to: db)
 
             // Log activity
             let event = SharedAlbumActivityEvent.recordingAdded(
@@ -385,6 +386,9 @@ final class SharedAlbumManager {
             try? await logActivity(event: event, for: album)
 
             logger.info("Added recording to shared album")
+        } catch where isZoneOrShareDeletedError(error) {
+            handleZoneNotFound(for: album)
+            throw SharedAlbumError.shareNoLongerExists
         } catch {
             logger.error("Failed to add recording to shared album: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
@@ -537,6 +541,54 @@ final class SharedAlbumManager {
         }
     }
 
+    /// Resolve the current user's role in a shared album by checking the CKShare participants.
+    /// Returns the updated album with `currentUserRole` populated, or the original album if resolution fails.
+    func resolveCurrentUserRole(for album: Album) async -> Album {
+        guard album.isShared else { return album }
+
+        // Owner always gets admin
+        if album.isOwner {
+            var updated = album
+            updated.currentUserRole = .admin
+            return updated
+        }
+
+        do {
+            guard let share = try await getShare(for: album) else {
+                return album
+            }
+
+            // Get current user's CloudKit record ID
+            guard let currentUserId = await getCurrentUserId() else {
+                return album
+            }
+
+            // Check if current user is the share owner
+            if share.owner.userIdentity.userRecordID?.recordName == currentUserId {
+                var updated = album
+                updated.currentUserRole = .admin
+                return updated
+            }
+
+            // Fetch stored custom roles
+            let storedRoles = await fetchStoredParticipantRoles(for: album)
+
+            // Find current user in participants
+            for participant in share.participants where participant.role != .owner {
+                if participant.userIdentity.userRecordID?.recordName == currentUserId {
+                    let role = storedRoles[currentUserId] ?? .member
+                    var updated = album
+                    updated.currentUserRole = role
+                    return updated
+                }
+            }
+        } catch {
+            logger.error("Failed to resolve current user role: \(error.localizedDescription)")
+        }
+
+        return album
+    }
+
     /// Validate that a file is audio-only
     func validateAudioOnly(url: URL) -> Bool {
         let audioExtensions = ["m4a", "mp3", "wav", "aiff", "aac", "caf", "flac", "alac"]
@@ -585,8 +637,11 @@ final class SharedAlbumManager {
         record["role"] = newRole.rawValue
 
         do {
-            try await db.save(record)
+            try await saveWithRetry(record, to: db)
             logger.info("Saved participant role to CloudKit")
+        } catch where isZoneOrShareDeletedError(error) {
+            handleZoneNotFound(for: album)
+            throw SharedAlbumError.shareNoLongerExists
         } catch {
             logger.error("Failed to save participant role: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
@@ -1192,8 +1247,11 @@ final class SharedAlbumManager {
         record["requireSensitiveApproval"] = settings.requireSensitiveApproval
 
         do {
-            try await db.save(record)
+            try await saveWithRetry(record, to: db)
             logger.info("Updated album settings successfully")
+        } catch where isZoneOrShareDeletedError(error) {
+            handleZoneNotFound(for: album)
+            throw SharedAlbumError.shareNoLongerExists
         } catch {
             logger.error("Failed to update settings: \(error.localizedDescription)")
             throw SharedAlbumError.networkError(error)
@@ -1400,7 +1458,7 @@ final class SharedAlbumManager {
                 record["sensitiveApprovedBy"] = approved ? currentUserId : nil
                 record["sensitiveApprovedAt"] = approved ? Date() : nil
 
-                try await db.save(record)
+                try await saveWithRetry(record, to: db)
 
                 // Log activity
                 let eventType: ActivityEventType = approved ? .sensitiveRecordingApproved : .sensitiveRecordingRejected
@@ -1440,7 +1498,7 @@ final class SharedAlbumManager {
             // Update the SharedAlbum record's name field
             let record = try await db.record(for: recordID)
             record["name"] = newName
-            try await db.save(record)
+            try await saveWithRetry(record, to: db)
 
             // Update CKShare title so share metadata reflects the new name
             if let share = try await getShare(for: album) {
@@ -1957,7 +2015,7 @@ final class SharedAlbumManager {
             return true
         }
         if let ckError = error as? CKError {
-            return ckError.code == .zoneNotFound || ckError.code == .unknownItem
+            return ckError.code == .zoneNotFound || ckError.code == .unknownItem || ckError.code == .userDeletedZone
         }
         return false
     }

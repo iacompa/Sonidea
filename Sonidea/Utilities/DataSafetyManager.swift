@@ -28,6 +28,23 @@ struct SafeEnvelope<T: Codable>: Codable {
     static var currentSchemaVersion: Int { 1 }
 }
 
+// MARK: - Schema Migration
+
+/// Framework for future schema migrations. Each version bump adds a case
+/// with a migration closure. Currently a no-op (version 1 is the baseline).
+enum SchemaMigration {
+    /// Migrate payload data from `fromVersion` to `currentSchemaVersion`.
+    /// Returns the payload data re-encoded at the current schema version,
+    /// or nil if no migration was needed.
+    static func migrate<T: Codable>(payload: [T], from fromVersion: Int) -> [T] {
+        // No migrations yet — version 1 is the only version.
+        // Future migrations would be chained here:
+        // if fromVersion < 2 { payload = migrateV1toV2(payload) }
+        // if fromVersion < 3 { payload = migrateV2toV3(payload) }
+        return payload
+    }
+}
+
 // MARK: - Data Safety Error
 
 enum DataSafetyError: LocalizedError {
@@ -310,6 +327,12 @@ enum DataSafetyFileOps {
         guard actualChecksum == envelope.checksum else {
             logger.error("Checksum mismatch for \(url.lastPathComponent): expected \(envelope.checksum.prefix(8))…, got \(actualChecksum.prefix(8))…")
             return nil
+        }
+
+        // Run schema migration if the envelope is from an older version
+        if envelope.schemaVersion < SafeEnvelope<[T]>.currentSchemaVersion {
+            logger.info("Migrating \(url.lastPathComponent) from schema v\(envelope.schemaVersion) to v\(SafeEnvelope<[T]>.currentSchemaVersion)")
+            return SchemaMigration.migrate(payload: envelope.payload, from: envelope.schemaVersion)
         }
 
         return envelope.payload

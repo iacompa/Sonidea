@@ -543,6 +543,9 @@ GeometryReader { outerProxy in
 - ShareSheet iPad popover configuration (not confirmed as an issue when presented via SwiftUI .sheet)
 - Watch: no audio session interruption handling, no crash recovery for in-progress recordings
 
+**Post-launch idea (pending user feedback):**
+- **Auto-icon learning from corrections**: When a user overrides an auto-assigned icon, store the correction locally (top SoundAnalysis labels + rejected icon + chosen icon) in a UserDefaults-backed bias table. Apply confidence offsets (+0.10 per positive match, -0.05 per rejection) during future classifications. Purely on-device, no data leaves the phone. Needs ~10-20 corrections before it's useful — only worth building if users actually interact with icon selection enough to generate that data.
+
 ## Logic Pro-Style Knob EQ Controls (latest session)
 
 ### Overview

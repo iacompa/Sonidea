@@ -128,8 +128,18 @@ final class iCloudSyncManager {
     }
 
     private func observeCloudKitStatus() {
-        // This will be called frequently as status changes
-        // In a real app, use Combine or async streams
+        withObservationTracking {
+            // Access tracked properties to register observation
+            _ = self.cloudKitEngine.status
+            _ = self.cloudKitEngine.lastSyncDate
+            _ = self.cloudKitEngine.uploadProgress
+        } onChange: {
+            // Re-register observation and apply updated status on next main actor turn
+            Task { @MainActor [weak self] in
+                self?.updateStatusFromEngine()
+                self?.observeCloudKitStatus()
+            }
+        }
     }
 
     // MARK: - Public API
@@ -594,30 +604,32 @@ extension AppState {
 
     /// Apply synced data from iCloud
     func applySyncedData(_ data: SyncableData) {
+        // Persist BEFORE updating in-memory state to guarantee durability
+        // Use data.recordings (the parameter) — not self.recordings which is stale
+        DataSafetyFileOps.saveSync(data.recordings, collection: .recordings)
+        DataSafetyFileOps.saveSync(data.tags, collection: .tags)
+        DataSafetyFileOps.saveSync(data.albums, collection: .albums)
+        DataSafetyFileOps.saveSync(data.projects, collection: .projects)
+        DataSafetyFileOps.saveSync(data.overdubGroups, collection: .overdubGroups)
+        // UserDefaults fallback for transition period
+        if let encoded = try? JSONEncoder().encode(data.recordings) {
+            UserDefaults.standard.set(encoded, forKey: "savedRecordings")
+        }
+        if let encoded = try? JSONEncoder().encode(data.tags) {
+            UserDefaults.standard.set(encoded, forKey: "savedTags")
+        }
+        if let encoded = try? JSONEncoder().encode(data.albums) {
+            UserDefaults.standard.set(encoded, forKey: "savedAlbums")
+        }
+        if let encoded = try? JSONEncoder().encode(data.projects) {
+            UserDefaults.standard.set(encoded, forKey: "savedProjects")
+        }
+        // Now update in-memory state (triggers SwiftUI reactivity)
         recordings = data.recordings
         tags = data.tags
         albums = data.albums
         projects = data.projects
         overdubGroups = data.overdubGroups
-        // Persist through DataSafetyManager (primary) + UserDefaults (fallback)
-        DataSafetyFileOps.saveSync(recordings, collection: .recordings)
-        DataSafetyFileOps.saveSync(tags, collection: .tags)
-        DataSafetyFileOps.saveSync(albums, collection: .albums)
-        DataSafetyFileOps.saveSync(projects, collection: .projects)
-        DataSafetyFileOps.saveSync(overdubGroups, collection: .overdubGroups)
-        // UserDefaults fallback for transition period
-        if let data = try? JSONEncoder().encode(recordings) {
-            UserDefaults.standard.set(data, forKey: "savedRecordings")
-        }
-        if let data = try? JSONEncoder().encode(tags) {
-            UserDefaults.standard.set(data, forKey: "savedTags")
-        }
-        if let data = try? JSONEncoder().encode(albums) {
-            UserDefaults.standard.set(data, forKey: "savedAlbums")
-        }
-        if let data = try? JSONEncoder().encode(projects) {
-            UserDefaults.standard.set(data, forKey: "savedProjects")
-        }
     }
 
     // MARK: - Sync Trigger Hooks

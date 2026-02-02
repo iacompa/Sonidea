@@ -138,6 +138,15 @@ struct WatchContentView: View {
         } message: {
             Text("Sonidea needs microphone access to record. Please enable it in Settings > Privacy & Security > Microphone on your iPhone.")
         }
+        .onAppear {
+            // Handle pending start recording from complication intent
+            if UserDefaults.standard.bool(forKey: "pendingStartRecording") {
+                UserDefaults.standard.set(false, forKey: "pendingStartRecording")
+                if !recorder.isRecording {
+                    handleRecordTap()
+                }
+            }
+        }
     }
 
     // MARK: - Recording HUD with live waveform animation
@@ -221,12 +230,26 @@ struct WatchContentView: View {
                     Button {
                         showSyncInfo = true
                     } label: {
-                        Image(systemName: "info.circle")
-                            .font(.system(size: 14))
-                            .foregroundColor(palette.textSecondary)
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 14))
+                                .foregroundColor(palette.textSecondary)
+                            if appState.pendingTransferCount > 0 {
+                                Text("\(appState.pendingTransferCount)")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(2)
+                                    .background(Color.orange)
+                                    .clipShape(Circle())
+                                    .offset(x: 6, y: -6)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
+            }
+            .onAppear {
+                appState.retryPendingTransfers()
             }
             .alert("Sync to iPhone", isPresented: $showSyncInfo) {
                 Button("OK", role: .cancel) { }

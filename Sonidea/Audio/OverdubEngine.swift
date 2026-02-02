@@ -116,6 +116,24 @@ final class OverdubEngine {
     // Base recording info
     private var baseDuration: TimeInterval = 0
 
+    // MARK: - Scheduling Helpers
+
+    /// Compute a sample-accurate AVAudioTime for scheduling a player `delay` seconds in the future.
+    /// Uses `engine.outputNode.lastRenderTime` when available (sample-accurate), falling back to
+    /// `mach_absolute_time()` when the engine hasn't rendered yet.
+    private func audioTime(afterDelay delay: TimeInterval) -> AVAudioTime {
+        if let engine = audioEngine,
+           let lastRender = engine.outputNode.lastRenderTime,
+           lastRender.isSampleTimeValid {
+            let sampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+            let delaySamples = AVAudioFramePosition(delay * sampleRate)
+            return AVAudioTime(sampleTime: lastRender.sampleTime + delaySamples, atRate: sampleRate)
+        }
+        // Fallback: host-time based scheduling
+        let delayHostTime = AVAudioTime.hostTime(forSeconds: delay)
+        return AVAudioTime(hostTime: mach_absolute_time() + delayHostTime)
+    }
+
     // MARK: - Initialization
 
     init() {}
@@ -357,8 +375,7 @@ final class OverdubEngine {
                     // Looped layer — schedule with .loops
                     if currentPlaybackTime < offset {
                         let delaySec = offset - currentPlaybackTime
-                        let delayHostTime = AVAudioTime.hostTime(forSeconds: delaySec)
-                        let startTime = AVAudioTime(hostTime: mach_absolute_time() + delayHostTime)
+                        let startTime = audioTime(afterDelay: delaySec)
                         layerPlayer.scheduleBuffer(buffer, at: startTime, options: .loops)
                     } else {
                         layerPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
@@ -369,8 +386,7 @@ final class OverdubEngine {
                 } else if currentPlaybackTime < offset {
                     // Playback position is before this layer starts — schedule with a delay
                     let delaySec = offset - currentPlaybackTime
-                    let delayHostTime = AVAudioTime.hostTime(forSeconds: delaySec)
-                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + delayHostTime)
+                    let startTime = audioTime(afterDelay: delaySec)
                     layerPlayer.scheduleFile(layerFile, at: startTime)
                     if monitorLayers {
                         layerPlayer.play()
@@ -890,8 +906,7 @@ final class OverdubEngine {
             if isLooped, let buffer = (index < layerLoopBuffers.count ? layerLoopBuffers[index] : nil) {
                 // Looped layer — schedule buffer with .loops
                 if offset > 0 {
-                    let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
-                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
+                    let startTime = audioTime(afterDelay: offset)
                     layerPlayer.scheduleBuffer(buffer, at: startTime, options: .loops)
                 } else {
                     layerPlayer.scheduleBuffer(buffer, at: nil, options: .loops)
@@ -899,8 +914,7 @@ final class OverdubEngine {
             } else {
                 // Non-looped layer — schedule with offset (existing behavior)
                 if offset > 0 {
-                    let hostTimeOffset = AVAudioTime.hostTime(forSeconds: offset)
-                    let startTime = AVAudioTime(hostTime: mach_absolute_time() + hostTimeOffset)
+                    let startTime = audioTime(afterDelay: offset)
                     layerPlayer.scheduleFile(layerFile, at: startTime)
                 } else if offset < 0 {
                     let skipSeconds = -offset

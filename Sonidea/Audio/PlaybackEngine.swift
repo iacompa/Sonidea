@@ -52,12 +52,19 @@ final class PlaybackEngine {
     /// Interruption observer
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
 
+    /// Route change observer (headphone unplug, etc.)
+    nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
+
     init() {
         setupInterruptionHandling()
+        setupRouteChangeHandling()
     }
 
     deinit {
         if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = routeChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -439,6 +446,38 @@ final class PlaybackEngine {
                 }
             }
         @unknown default:
+            break
+        }
+    }
+
+    // MARK: - Route Change Handling
+
+    private func setupRouteChangeHandling() {
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleRouteChange(notification)
+            }
+        }
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+
+        switch reason {
+        case .oldDeviceUnavailable:
+            // Headphones were unplugged — pause playback (standard iOS behavior)
+            if isPlaying {
+                pause()
+            }
+        default:
             break
         }
     }

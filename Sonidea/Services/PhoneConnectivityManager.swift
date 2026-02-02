@@ -60,6 +60,14 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
         WCSession.default.activate()
     }
 
+    // MARK: - Transfer Confirmation
+
+    /// Send confirmation to watch that a recording was successfully imported
+    private func sendTransferConfirmation(uuid: String) {
+        guard WCSession.default.activationState == .activated else { return }
+        WCSession.default.transferUserInfo(["transferConfirmed": uuid])
+    }
+
     // MARK: - Receive File Transfer from Watch
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
@@ -148,6 +156,9 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
                     importedUUIDs = Array(importedUUIDs.suffix(500))
                 }
                 UserDefaults.standard.set(importedUUIDs, forKey: self.importedUUIDsKey)
+
+                // Send confirmation back to watch
+                self.sendTransferConfirmation(uuid: uuidString)
 
                 #if DEBUG
                 print("PhoneConnectivity: Imported watch recording '\(title)'")

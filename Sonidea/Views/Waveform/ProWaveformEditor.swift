@@ -1161,7 +1161,7 @@ struct SelectionHandleView: View {
     @State private var lastHapticTime: TimeInterval = 0
     @State private var last100msHapticTime: TimeInterval = 0  // For 0.1s boundary haptics
 
-    private let handleWidth: CGFloat = 14
+    private let handleWidth: CGFloat = 6
     private let hitAreaWidth: CGFloat = 44
     private let minGap: TimeInterval = 0.02
 
@@ -1177,15 +1177,13 @@ struct SelectionHandleView: View {
         let x = timeline.timeToX(time, width: width)
 
         if x >= -hitAreaWidth && x <= width + hitAreaWidth {
-            // Visual handle only - tooltip is rendered in parent overlay
-            SelectionHandleShape(isLeft: isLeft)
-                .fill(palette.accent)
-                .frame(width: handleWidth, height: height * 0.6)
+            // Invisible drag zone at selection edge
+            Color.clear
                 .frame(width: hitAreaWidth, height: height)
                 .contentShape(Rectangle())
                 .offset(x: x - hitAreaWidth / 2)
                 .highPriorityGesture(dragGesture)
-                .zIndex(isDragging ? 200 : 50)  // Bring to front while dragging
+                .zIndex(isDragging ? 200 : 50)
         }
     }
 
@@ -1263,7 +1261,7 @@ struct SelectionHandleShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let cornerRadius: CGFloat = 4
+        let cornerRadius: CGFloat = 3
 
         if isLeft {
             path.move(to: CGPoint(x: rect.minX + cornerRadius, y: rect.minY))

@@ -125,8 +125,14 @@ final class SupportManager {
     }
 
     var subscriptionStatus: SubscriptionStatus {
-        if isSubscribed, let plan = currentPlan {
-            return .subscribed(plan)
+        if isSubscribed {
+            if isOnTrial {
+                return .trial
+            }
+            if let plan = currentPlan {
+                return .subscribed(plan)
+            }
+            return .trial // Subscribed but no plan = likely trial
         } else {
             return .expired
         }
@@ -146,6 +152,26 @@ final class SupportManager {
         static let currentPlan = "subscription.currentPlan"
         static let sharedAlbumWarningScheduled = "subscription.sharedAlbumWarningScheduled"
         static let sharedAlbumRemovalScheduled = "subscription.sharedAlbumRemovalScheduled"
+        static let isOnTrial = "subscription.isOnTrial"
+        static let trialStartDate = "subscription.trialStartDate"
+        static let trialEndDate = "subscription.trialEndDate"
+    }
+
+    // MARK: - Trial State
+
+    var isOnTrial: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.isOnTrial) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.isOnTrial) }
+    }
+
+    var trialStartDate: Date? {
+        get { UserDefaults.standard.object(forKey: Keys.trialStartDate) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.trialStartDate) }
+    }
+
+    var trialEndDate: Date? {
+        get { UserDefaults.standard.object(forKey: Keys.trialEndDate) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.trialEndDate) }
     }
 
     // MARK: - Shared Album Trial Warning
@@ -281,6 +307,7 @@ final class SupportManager {
             if currentPlanRawValue == transaction.productID {
                 isSubscribed = false
                 currentPlanRawValue = nil
+                isOnTrial = false
                 onProAccessLost?()
             }
         } else {
@@ -290,6 +317,7 @@ final class SupportManager {
                 let wasSubscribed = isSubscribed
                 isSubscribed = false
                 currentPlanRawValue = nil
+                isOnTrial = false
                 if wasSubscribed {
                     onProAccessLost?()
                 }
@@ -297,6 +325,18 @@ final class SupportManager {
             }
             isSubscribed = true
             currentPlanRawValue = transaction.productID
+
+            // Detect introductory offer (trial period)
+            if transaction.offerType == .introductory {
+                if !isOnTrial {
+                    isOnTrial = true
+                    trialStartDate = transaction.purchaseDate
+                    trialEndDate = transaction.expirationDate
+                }
+            } else {
+                // Paid subscription (not intro offer) — clear trial state
+                isOnTrial = false
+            }
         }
     }
 

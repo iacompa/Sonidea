@@ -148,6 +148,9 @@ final class CloudKitSyncEngine {
     /// Tracks the last synced modifiedAt date per record ID to avoid re-uploading unchanged items
     private var lastSyncedDates: [String: Date] = [:]
 
+    /// Tracks content fingerprints for lightweight records (tags, albums) to skip unchanged items during full sync
+    private var lastSyncedFingerprints: [String: String] = [:]
+
     // Weak reference to AppState
     weak var appState: AppState?
 
@@ -159,6 +162,7 @@ final class CloudKitSyncEngine {
     private let zoneCreatedKey = "cloudkit.zoneCreated"
     private let subscriptionCreatedKey = "cloudkit.subscriptionCreated"
     private let lastSyncedDatesKey = "cloudkit.lastSyncedDates"
+    private let lastSyncedFingerprintsKey = "cloudkit.lastSyncedFingerprints"
     private let pendingOperationsKey = "cloudkit.pendingOperations"
 
     // MARK: - Initialization
@@ -274,6 +278,8 @@ final class CloudKitSyncEngine {
                 saveChangeToken()
                 lastSyncedDates.removeAll()
                 saveLastSyncedDates()
+                lastSyncedFingerprints.removeAll()
+                saveLastSyncedFingerprints()
                 UserDefaults.standard.removeObject(forKey: zoneCreatedKey)
                 UserDefaults.standard.removeObject(forKey: subscriptionCreatedKey)
 
@@ -304,19 +310,23 @@ final class CloudKitSyncEngine {
             record = CKRecord(recordType: SonideaRecordType.recording.rawValue, recordID: recordID)
         }
 
-        // Set fields on the (possibly existing) record
-        recording.populateCKRecord(record)
+        // Populate fields on the (possibly existing) record
+        let populateFields: (CKRecord) -> Void = { rec in
+            recording.populateCKRecord(rec)
+            // Add audio file as CKAsset if it exists
+            if FileManager.default.fileExists(atPath: recording.fileURL.path) {
+                let asset = CKAsset(fileURL: recording.fileURL)
+                rec["audioFile"] = asset
+            }
+        }
+        populateFields(record)
 
-        // Add audio file as CKAsset if it exists
+        // Check file size — warn for very large files (>200MB)
         if FileManager.default.fileExists(atPath: recording.fileURL.path) {
-            // Check file size — warn for very large files (>200MB)
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: recording.fileURL.path)[.size] as? Int) ?? 0
             if fileSize > 200_000_000 {
                 logger.warning("Large audio file (\(fileSize / 1_000_000)MB) for recording \(recording.id) — upload may be slow")
             }
-
-            let asset = CKAsset(fileURL: recording.fileURL)
-            record["audioFile"] = asset
 
             // Track upload progress
             let progress = UploadProgress(
@@ -331,7 +341,7 @@ final class CloudKitSyncEngine {
         status = .syncing(progress: 0, description: "Uploading \(recording.title)...")
 
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            try await saveWithConflictResolution(record, populate: populateFields)
 
             // Mark upload complete
             if let index = uploadProgress.firstIndex(where: { $0.id == recording.id }) {
@@ -400,7 +410,9 @@ final class CloudKitSyncEngine {
         tag.populateCKRecord(record)
 
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            try await saveWithConflictResolution(record) { rec in
+                tag.populateCKRecord(rec)
+            }
             logger.info("Saved tag: \(tag.id)")
             updateLastSync()
         } catch {
@@ -424,7 +436,9 @@ final class CloudKitSyncEngine {
         album.populateCKRecord(record)
 
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            try await saveWithConflictResolution(record) { rec in
+                album.populateCKRecord(rec)
+            }
             logger.info("Saved album: \(album.id)")
             updateLastSync()
         } catch {
@@ -448,7 +462,9 @@ final class CloudKitSyncEngine {
         project.populateCKRecord(record)
 
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            try await saveWithConflictResolution(record) { rec in
+                project.populateCKRecord(rec)
+            }
             logger.info("Saved project: \(project.id)")
             updateLastSync()
         } catch {
@@ -571,7 +587,9 @@ final class CloudKitSyncEngine {
         group.populateCKRecord(record)
 
         do {
-            try await privateDatabase.modifyRecords(saving: [record], deleting: [])
+            try await saveWithConflictResolution(record) { rec in
+                group.populateCKRecord(rec)
+            }
             logger.info("Saved overdub group: \(group.id)")
             updateLastSync()
         } catch {
@@ -682,12 +700,20 @@ final class CloudKitSyncEngine {
             guard let lastSynced = lastSyncedDates[project.id.uuidString] else { return true }
             return project.updatedAt > lastSynced
         }
-        // Tags and albums are lightweight — always sync them
-        let totalItems = recordingsToSync.count + tags.count + albums.count + projectsToSync.count
+        // Filter tags and albums to only those whose content has changed since last sync
+        let tagsToSync = tags.filter { tag in
+            let fingerprint = "\(tag.name)|\(tag.colorHex)"
+            return needsSync(id: tag.id.uuidString, fingerprint: fingerprint)
+        }
+        let albumsToSync = albums.filter { album in
+            let fingerprint = "\(album.name)|\(album.isSystem)|\(album.isShared)"
+            return needsSync(id: album.id.uuidString, fingerprint: fingerprint)
+        }
+        let totalItems = recordingsToSync.count + tagsToSync.count + albumsToSync.count + projectsToSync.count
         var completed = 0
         var quotaExceeded = false
 
-        logger.info("Full sync: \(recordingsToSync.count)/\(recordings.count) recordings, \(projectsToSync.count)/\(projects.count) projects need upload")
+        logger.info("Full sync: \(recordingsToSync.count)/\(recordings.count) recordings, \(tagsToSync.count)/\(tags.count) tags, \(albumsToSync.count)/\(albums.count) albums, \(projectsToSync.count)/\(projects.count) projects need upload")
 
         // Batch upload recordings (only changed ones)
         for recording in recordingsToSync {
@@ -721,12 +747,14 @@ final class CloudKitSyncEngine {
             return
         }
 
-        // Batch upload tags
-        for tag in tags {
+        // Batch upload tags (only changed ones)
+        for tag in tagsToSync {
+            let fingerprint = "\(tag.name)|\(tag.colorHex)"
             do {
                 try await withRetry {
                     try await self.saveTag(tag)
                 }
+                markSyncedFingerprint(id: tag.id.uuidString, fingerprint: fingerprint)
             } catch {
                 logger.error("Failed to sync tag after retries: \(error.localizedDescription)")
             }
@@ -737,12 +765,14 @@ final class CloudKitSyncEngine {
             )
         }
 
-        // Batch upload albums
-        for album in albums {
+        // Batch upload albums (only changed ones)
+        for album in albumsToSync {
+            let fingerprint = "\(album.name)|\(album.isSystem)|\(album.isShared)"
             do {
                 try await withRetry {
                     try await self.saveAlbum(album)
                 }
+                markSyncedFingerprint(id: album.id.uuidString, fingerprint: fingerprint)
             } catch {
                 logger.error("Failed to sync album after retries: \(error.localizedDescription)")
             }
@@ -775,8 +805,9 @@ final class CloudKitSyncEngine {
             }
         }
 
-        // Persist the synced dates
+        // Persist the synced dates and fingerprints
         saveLastSyncedDates()
+        saveLastSyncedFingerprints()
 
         // Fetch remote changes
         let fetchSucceeded = await fetchChanges()
@@ -857,6 +888,24 @@ final class CloudKitSyncEngine {
                 saveChangeToken()
                 return await fetchChanges()
 
+            } catch let ckError as CKError where ckError.code == .zoneNotFound || ckError.code == .userDeletedZone {
+                // Zone was deleted — attempt re-creation and full re-sync
+                logger.warning("Zone deleted (code: \(ckError.code.rawValue)), attempting re-creation...")
+                UserDefaults.standard.set(false, forKey: zoneCreatedKey)
+                UserDefaults.standard.set(false, forKey: subscriptionCreatedKey)
+                changeToken = nil
+                saveChangeToken()
+                do {
+                    try await setupZone()
+                    try await setupSubscription()
+                    logger.info("Zone re-created successfully after deletion")
+                    // Don't retry fetchChanges here — the zone is empty, so let performFullSync re-upload
+                    return true
+                } catch {
+                    logger.error("Failed to re-create zone: \(error.localizedDescription)")
+                    return false
+                }
+
             } catch let ckError as CKError where isFatalCKError(ckError) {
                 // Fundamental infrastructure errors — abort entirely
                 logger.error("Fatal CloudKit error during fetch (page \(pageCount)): \(ckError.localizedDescription)")
@@ -893,8 +942,6 @@ final class CloudKitSyncEngine {
              .networkFailure,
              .serviceUnavailable,
              .notAuthenticated,
-             .zoneNotFound,
-             .userDeletedZone,
              .badContainer,
              .missingEntitlement,
              .managedAccountRestricted,
@@ -953,6 +1000,8 @@ final class CloudKitSyncEngine {
                                         try? fm.moveItem(at: backupURL, to: recording.fileURL)
                                     }
                                     logger.error("Failed to copy synced audio file: \(error.localizedDescription)")
+                                    // Do NOT update metadata when audio copy fails — prevents metadata/audio mismatch
+                                    continue
                                 }
                             }
                             appState.recordings[localIndex] = recording
@@ -1157,6 +1206,11 @@ final class CloudKitSyncEngine {
             lastSyncedDates = dict
         }
 
+        // Load content fingerprints for lightweight records
+        if let dict = UserDefaults.standard.dictionary(forKey: lastSyncedFingerprintsKey) as? [String: String] {
+            lastSyncedFingerprints = dict
+        }
+
         // Load pending operations queue
         if let data = UserDefaults.standard.data(forKey: pendingOperationsKey) {
             pendingOperations = (try? JSONDecoder().decode([PendingSyncOperation].self, from: data)) ?? []
@@ -1170,6 +1224,8 @@ final class CloudKitSyncEngine {
         if let token = changeToken,
            let data = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) {
             UserDefaults.standard.set(data, forKey: changeTokenKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: changeTokenKey)
         }
     }
 
@@ -1181,6 +1237,20 @@ final class CloudKitSyncEngine {
 
     private func saveLastSyncedDates() {
         UserDefaults.standard.set(lastSyncedDates, forKey: lastSyncedDatesKey)
+    }
+
+    private func saveLastSyncedFingerprints() {
+        UserDefaults.standard.set(lastSyncedFingerprints, forKey: lastSyncedFingerprintsKey)
+    }
+
+    /// Check if a lightweight record needs re-syncing by comparing its content fingerprint
+    private func needsSync(id: String, fingerprint: String) -> Bool {
+        lastSyncedFingerprints[id] != fingerprint
+    }
+
+    /// Mark a lightweight record as synced with its content fingerprint
+    private func markSyncedFingerprint(id: String, fingerprint: String) {
+        lastSyncedFingerprints[id] = fingerprint
     }
 
     /// Record that a specific item was successfully synced at a given modifiedAt date
@@ -1315,6 +1385,32 @@ final class CloudKitSyncEngine {
             }
         }
         throw lastError ?? CKError(.internalError)
+    }
+
+    // MARK: - Conflict-Resolving Save
+
+    /// Save a CKRecord with serverRecordChanged conflict resolution.
+    /// On conflict, re-applies fields from the populate closure onto the server record and retries.
+    private func saveWithConflictResolution(
+        _ record: CKRecord,
+        maxRetries: Int = 2,
+        populate: (CKRecord) -> Void
+    ) async throws {
+        var currentRecord = record
+        for attempt in 0...maxRetries {
+            do {
+                try await privateDatabase.modifyRecords(saving: [currentRecord], deleting: [])
+                return
+            } catch let error as CKError where error.code == .serverRecordChanged {
+                guard attempt < maxRetries else { throw error }
+                guard let serverRecord = error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord else {
+                    throw error
+                }
+                logger.info("serverRecordChanged on \(currentRecord.recordType), re-applying fields (attempt \(attempt + 1)/\(maxRetries + 1))")
+                populate(serverRecord)
+                currentRecord = serverRecord
+            }
+        }
     }
 }
 

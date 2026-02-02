@@ -29,6 +29,7 @@ struct GPSInsightsMapView: View {
     @Environment(AppState.self) var appState
     @Environment(\.themePalette) var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.colorScheme) private var colorScheme
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var selectedRecording: RecordingItem?
     @State private var selectedSpot: RecordingSpot?
@@ -107,6 +108,7 @@ struct GPSInsightsMapView: View {
         }
         .mapStyle(.standard(
             elevation: .flat,
+            emphasis: colorScheme == .dark ? .muted : .automatic,
             pointsOfInterest: .excludingAll,
             showsTraffic: false
         ))

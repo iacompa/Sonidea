@@ -174,6 +174,18 @@ enum EditToolType: String, CaseIterable, Identifiable {
         }
     }
 
+    var accessibilityName: String {
+        switch self {
+        case .eq: return "Equalizer"
+        case .fade: return "Fade"
+        case .peak: return "Normalize"
+        case .gate: return "Noise Gate"
+        case .compress: return "Compressor"
+        case .reverb: return "Reverb"
+        case .echo: return "Echo"
+        }
+    }
+
     var icon: String {
         switch self {
         case .eq: return "slider.horizontal.3"
@@ -284,6 +296,7 @@ struct UnifiedEditToolbar: View {
             }
         }
         .disabled(isProcessing)
+        .accessibilityLabel("\(tool.accessibilityName) effect\(appliedEffects.contains(tool) ? ", applied" : "")")
     }
 
     private func buttonForeground(for tool: EditToolType) -> Color {

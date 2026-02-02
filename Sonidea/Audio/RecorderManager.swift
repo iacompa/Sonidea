@@ -375,6 +375,9 @@ final class RecorderManager: NSObject {
                     #if DEBUG
                     print("Failed to set up audio session: \(error)")
                     #endif
+                    if self.appSettings.preventSleepWhileRecording {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                    }
                     self.isPreparing = false
                     return
                 }
@@ -391,6 +394,9 @@ final class RecorderManager: NSObject {
                 #if DEBUG
                 print("Failed to set up audio session: \(error)")
                 #endif
+                if appSettings.preventSleepWhileRecording {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                }
                 isPreparing = false
                 return
             }
@@ -736,14 +742,14 @@ final class RecorderManager: NSObject {
             print("🎙️ [RecorderManager] Started engine recording with gain: \(inputSettings.gainDb) dB, limiter: \(inputSettings.limiterEnabled ? "ON" : "OFF")")
             #endif
 
-            // Post-start buffer validation: verify audio is actually flowing after 1.5 seconds.
+            // Post-start buffer validation: verify audio is actually flowing after 0.5 seconds.
             // If zero buffers written, the input route is likely broken (common with Bluetooth).
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self = self, self.isUsingEngine, self.recordingState == .recording else { return }
 
                 if self.bufferWriteCount == 0 {
-                    print("[RecorderManager] WARNING: No audio buffers received after 1.5s")
+                    print("[RecorderManager] WARNING: No audio buffers received after 0.5s")
                     AudioDiagnostics.logNoAudioCaptured(
                         context: "RecorderManager.postStartValidation",
                         fileURL: self.currentFileURL ?? URL(fileURLWithPath: "/unknown"),

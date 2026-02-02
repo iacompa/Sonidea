@@ -12,5 +12,7 @@ import WidgetKit
 struct SonideaRecordingWidgetBundle: WidgetBundle {
     var body: some Widget {
         RecordingLiveActivityWidget()
+        QuickRecordWidget()
+        RecentRecordingsWidget()
     }
 }

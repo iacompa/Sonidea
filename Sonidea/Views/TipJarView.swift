@@ -76,8 +76,7 @@ struct TipJarView: View {
         Group {
             switch manager.subscriptionStatus {
             case .trial:
-                // Trial is now handled via StoreKit intro offer (shows as subscribed)
-                EmptyView()
+                trialBanner
 
             case .subscribed(let plan):
                 VStack(spacing: 4) {
@@ -112,6 +111,30 @@ struct TipJarView: View {
                 .cornerRadius(12)
             }
         }
+    }
+
+    private var trialBanner: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "clock.fill")
+                    .foregroundColor(.orange)
+                Text("Free Trial Active")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(palette.textPrimary)
+            }
+            if let endDate = manager.trialEndDate {
+                let daysLeft = max(0, Calendar.current.dateComponents([.day], from: Date(), to: endDate).day ?? 0)
+                Text(daysLeft == 1 ? "1 day remaining" : "\(daysLeft) days remaining")
+                    .font(.caption)
+                    .foregroundColor(palette.textSecondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(12)
     }
 
     // MARK: - Plans
@@ -199,6 +222,16 @@ struct TipJarView: View {
 
     private var featuresSection: some View {
         VStack(spacing: 16) {
+            // Feature-loss list when not subscribed
+            if case .expired = manager.subscriptionStatus {
+                featureLossSection
+            }
+
+            // Price anchoring
+            if !manager.isSubscribed {
+                priceAnchoringSection
+            }
+
             // Free tier
             VStack(spacing: 0) {
                 HStack {
@@ -259,9 +292,20 @@ struct TipJarView: View {
                     Divider().padding(.leading, 52)
                     FeatureCheckRow(icon: "square.on.square", text: "Multi-track overdub", included: true)
                     Divider().padding(.leading, 52)
-                    FeatureCheckRow(icon: "square.and.arrow.up.fill", text: "Export in all formats", included: true)
+                    FeatureCheckRow(icon: "slider.vertical.3", text: "Mixer & mixdown", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "music.note", text: "Metronome & click track", included: true)
+                    Divider().padding(.leading, 52)
+                    FeatureCheckRow(icon: "slider.horizontal.3", text: "Live recording effects", included: true)
                 }
                 .padding(.vertical, 4)
+
+                // Export demoted to small text
+                Text("Plus: export in WAV, M4A, ALAC formats")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
             .background(palette.cardBackground)
             .cornerRadius(12)
@@ -270,6 +314,71 @@ struct TipJarView: View {
                     .stroke(palette.accent.opacity(0.2), lineWidth: 1)
             )
         }
+    }
+
+    // MARK: - Feature Loss
+
+    private var featureLossSection: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.orange)
+                Text("You're missing out on")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(palette.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.orange.opacity(0.08))
+
+            VStack(spacing: 0) {
+                FeatureLossRow(icon: "waveform", text: "Pro waveform editor")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "person.2.fill", text: "Shared albums")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "tag.fill", text: "Tags & filtering")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "icloud.fill", text: "iCloud sync")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "square.on.square", text: "Multi-track overdub")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "sparkles", text: "Auto-select icons")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "slider.vertical.3", text: "Mixer & mixdown")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "music.note", text: "Metronome & click track")
+            }
+            .padding(.vertical, 4)
+        }
+        .background(palette.cardBackground)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Price Anchoring
+
+    private var priceAnchoringSection: some View {
+        VStack(spacing: 6) {
+            Text("Just $2.50/month")
+                .font(.title3.weight(.bold))
+                .foregroundColor(palette.accent)
+            Text("with the annual plan ($29.99/year)")
+                .font(.caption)
+                .foregroundColor(palette.textSecondary)
+            Text("Monthly: $3.99/month ($47.88/year)")
+                .font(.caption)
+                .foregroundColor(palette.textTertiary)
+                .strikethrough(true, color: palette.textTertiary)
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(palette.accent.opacity(0.05))
+        .cornerRadius(12)
     }
 
     // MARK: - Roadmap
@@ -569,6 +678,30 @@ struct FeatureCheckRow: View {
     }
 }
 
+struct FeatureLossRow: View {
+    @Environment(\.themePalette) private var palette
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(.orange)
+                .frame(width: 24)
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(palette.textPrimary)
+            Spacer()
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.red.opacity(0.7))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+}
+
 // MARK: - Paywall View (shown when trial expired)
 
 struct PaywallView: View {
@@ -594,11 +727,43 @@ struct PaywallView: View {
                     .fontWeight(.bold)
                     .foregroundColor(palette.textPrimary)
 
-                Text("Subscribe to continue using Sonidea, or export your recordings.")
+                Text("Subscribe to keep these features:")
                     .font(.subheadline)
                     .foregroundColor(palette.textSecondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+            }
+
+            // Feature-loss list with icons
+            VStack(spacing: 0) {
+                FeatureLossRow(icon: "waveform", text: "Pro waveform editor")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "person.2.fill", text: "Shared albums")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "tag.fill", text: "Tags & filtering")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "icloud.fill", text: "iCloud sync")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "square.on.square", text: "Multi-track overdub")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "sparkles", text: "Auto-select icons")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "slider.vertical.3", text: "Mixer & mixdown")
+                Divider().padding(.leading, 52)
+                FeatureLossRow(icon: "music.note", text: "Metronome & click track")
+            }
+            .padding(.vertical, 4)
+            .background(palette.cardBackground)
+            .cornerRadius(12)
+            .padding(.horizontal, 24)
+
+            // Price anchoring
+            VStack(spacing: 4) {
+                Text("Just $2.50/month")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(palette.accent)
+                Text("with the annual plan")
+                    .font(.caption)
+                    .foregroundColor(palette.textSecondary)
             }
 
             VStack(spacing: 14) {
@@ -615,25 +780,6 @@ struct PaywallView: View {
                 }
 
                 Button {
-                    exportAllRecordings()
-                } label: {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Export All Recordings")
-                    }
-                    .font(.headline)
-                    .foregroundColor(palette.accent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(palette.cardBackground)
-                    .cornerRadius(14)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(palette.accent.opacity(0.3), lineWidth: 1)
-                    )
-                }
-
-                Button {
                     Task {
                         await appState.supportManager.restorePurchases()
                     }
@@ -641,6 +787,16 @@ struct PaywallView: View {
                     Text("Restore Purchases")
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)
+                }
+
+                // Export demoted to small text link
+                Button {
+                    exportAllRecordings()
+                } label: {
+                    Text("Export all recordings")
+                        .font(.caption)
+                        .foregroundColor(palette.textTertiary)
+                        .underline()
                 }
             }
             .padding(.horizontal, 32)
