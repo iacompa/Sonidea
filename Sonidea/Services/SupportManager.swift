@@ -188,13 +188,17 @@ final class SupportManager {
         set { UserDefaults.standard.set(newValue, forKey: Keys.sharedAlbumRemovalScheduled) }
     }
 
-    // MARK: - Intro Offer (Annual plan only)
-    // Trial is only available via the annual plan's intro offer (configured in App Store Connect).
+    // MARK: - Intro Offers
+    // Trials are configured in App Store Connect as intro offers.
     // StoreKit automatically prevents multiple trials via isEligibleForIntroOffer.
 
     var isAnnualTrialEligible: Bool = false
     var annualIntroOfferDuration: String?
     var annualIntroOfferPrice: String?
+
+    var isMonthlyTrialEligible: Bool = false
+    var monthlyIntroOfferDuration: String?
+    var monthlyIntroOfferPrice: String?
 
     // MARK: - Transaction listener
 
@@ -235,6 +239,7 @@ final class SupportManager {
             products = try await Product.products(for: SubscriptionPlan.allProductIDs)
             productsLoadFailed = false
             await updateAnnualIntroOfferEligibility()
+            await updateMonthlyIntroOfferEligibility()
             isLoadingProducts = false
         } catch {
             print("[SupportManager] Failed to load products: \(error)")
@@ -273,6 +278,33 @@ final class SupportManager {
         } else {
             annualIntroOfferDuration = nil
             annualIntroOfferPrice = nil
+        }
+    }
+
+    func updateMonthlyIntroOfferEligibility() async {
+        guard let monthlyProduct = products.first(where: { $0.id == SubscriptionPlan.monthly.rawValue }),
+              let subscription = monthlyProduct.subscription else {
+            isMonthlyTrialEligible = false
+            return
+        }
+
+        let eligible = await subscription.isEligibleForIntroOffer
+        isMonthlyTrialEligible = eligible
+
+        if eligible, let introOffer = subscription.introductoryOffer {
+            monthlyIntroOfferPrice = introOffer.displayPrice
+            let period = introOffer.period
+            let value = period.value
+            switch period.unit {
+            case .day: monthlyIntroOfferDuration = "\(value)-day"
+            case .week: monthlyIntroOfferDuration = "\(value)-week"
+            case .month: monthlyIntroOfferDuration = "\(value)-month"
+            case .year: monthlyIntroOfferDuration = "\(value)-year"
+            @unknown default: monthlyIntroOfferDuration = nil
+            }
+        } else {
+            monthlyIntroOfferDuration = nil
+            monthlyIntroOfferPrice = nil
         }
     }
 

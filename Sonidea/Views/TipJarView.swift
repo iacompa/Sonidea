@@ -195,8 +195,18 @@ struct TipJarView: View {
                         }
                     }
 
-                    if plan == .annual && manager.isAnnualTrialEligible {
-                        Text("Cancel anytime during the 14-day trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
+                    if plan == .monthly && manager.isMonthlyTrialEligible,
+                       let duration = manager.monthlyIntroOfferDuration {
+                        Text("Cancel anytime during the \(duration) trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
+                            .font(.system(size: 10))
+                            .foregroundColor(palette.textSecondary)
+                            .padding(.horizontal, 4)
+                            .padding(.top, -4)
+                    }
+
+                    if plan == .annual && manager.isAnnualTrialEligible,
+                       let duration = manager.annualIntroOfferDuration {
+                        Text("Cancel anytime during the \(duration) trial. You'll be charged after the trial ends unless you cancel at least 24 hours before.")
                             .font(.system(size: 10))
                             .foregroundColor(palette.textSecondary)
                             .padding(.horizontal, 4)
@@ -473,7 +483,7 @@ struct TipJarView: View {
                 .foregroundColor(palette.accent)
 
                 Button("Terms of Use") {
-                    if let url = URL(string: "https://www.notion.so/sonidea/Sonidea-Terms-of-Use-2f72934c965380b19a42f7967e2295df") {
+                    if let url = URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490") {
                         openURL(url)
                     }
                 }
@@ -572,21 +582,27 @@ struct PlanCard: View {
     let isBestValue: Bool
     let action: () -> Void
 
-    private var isAnnualWithTrial: Bool {
-        plan == .annual && appState.supportManager.isAnnualTrialEligible
+    private var hasTrialOffer: Bool {
+        switch plan {
+        case .annual: return appState.supportManager.isAnnualTrialEligible
+        case .monthly: return appState.supportManager.isMonthlyTrialEligible
+        }
+    }
+
+    private var trialDuration: String? {
+        switch plan {
+        case .annual: return appState.supportManager.annualIntroOfferDuration
+        case .monthly: return appState.supportManager.monthlyIntroOfferDuration
+        }
     }
 
     private var taglineText: String {
-        if isAnnualWithTrial {
-            let price = appState.supportManager.priceForPlan(plan) ?? plan.description
-            return "14 days free, then \(price)/year"
-        }
-        return plan.tagline
+        plan.tagline
     }
 
     private var buttonText: String {
-        if isAnnualWithTrial {
-            return "Try 14 days free"
+        if hasTrialOffer, let duration = trialDuration {
+            return "Try \(duration) free"
         }
         return appState.supportManager.priceForPlan(plan) ?? plan.description
     }
@@ -609,9 +625,20 @@ struct PlanCard: View {
                                 .cornerRadius(4)
                         }
                     }
-                    Text(taglineText)
-                        .font(.caption)
-                        .foregroundColor(palette.textSecondary)
+                    HStack(spacing: 6) {
+                        Text(taglineText)
+                            .font(.caption)
+                            .foregroundColor(palette.textSecondary)
+                        if hasTrialOffer, let duration = trialDuration {
+                            Text("\(duration) free trial")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(palette.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(palette.accent.opacity(0.12))
+                                .cornerRadius(4)
+                        }
+                    }
                 }
 
                 Spacer()

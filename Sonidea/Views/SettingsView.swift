@@ -1013,7 +1013,7 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
 
-                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Terms-of-Use-2f72934c965380b19a42f7967e2295df")!) {
+                    Link(destination: URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490")!) {
                         HStack {
                             Image(systemName: "doc.text")
                                 .foregroundColor(palette.accent)
