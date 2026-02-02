@@ -9,7 +9,7 @@ import AppIntents
 
 struct WatchStartRecordingIntent: AppIntent {
     static var title: LocalizedStringResource = "Start Recording"
-    static var description = IntentDescription("Start a new voice recording on Apple Watch")
+    static var description = IntentDescription("Start a new voice recording on your watch")
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult {
