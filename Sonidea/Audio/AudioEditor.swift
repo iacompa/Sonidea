@@ -849,11 +849,14 @@ final class AudioEditor {
                         let wetSample = drySample * compGain
                         floatData[ch][frame] = drySample * (1.0 - clampedMix) + wetSample * clampedMix
                         // Soft clip to prevent overs from makeup gain
+                        // Uses tanh-style curve: approaches ±1.0 asymptotically
                         let val = floatData[ch][frame]
                         if val > 1.0 {
-                            floatData[ch][frame] = 1.0 - 1.0 / (1.0 + val - 1.0)
+                            let excess = val - 1.0
+                            floatData[ch][frame] = 1.0 - 1.0 / (1.0 + excess * 2.0)
                         } else if val < -1.0 {
-                            floatData[ch][frame] = -(1.0 - 1.0 / (1.0 + (-val) - 1.0))
+                            let excess = -val - 1.0
+                            floatData[ch][frame] = -(1.0 - 1.0 / (1.0 + excess * 2.0))
                         }
                     }
                 }
@@ -1319,6 +1322,124 @@ final class AudioEditor {
             return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
         } catch {
             return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
+    // MARK: - Combined Preset (Compress → Reverb → Echo in single operation)
+
+    /// Parameters for a combined preset application
+    struct CombinedPresetParams {
+        // Compression (set to nil to skip)
+        var compGain: Float?
+        var compReduction: Float?
+        var compMix: Float?
+
+        // Reverb (set wetDry to nil or 0 to skip)
+        var reverbRoomSize: Float?
+        var reverbPreDelayMs: Float?
+        var reverbDecay: Float?
+        var reverbDamping: Float?
+        var reverbWetDry: Float?
+
+        // Echo (set wetDry to nil or 0 to skip)
+        var echoDelay: Float?
+        var echoFeedback: Float?
+        var echoDamping: Float?
+        var echoWetDry: Float?
+
+        var hasCompression: Bool {
+            guard let g = compGain, let r = compReduction, let m = compMix else { return false }
+            return g > 0 || r > 0 || m < 1.0
+        }
+
+        var hasReverb: Bool { (reverbWetDry ?? 0) > 0 }
+        var hasEcho: Bool { (echoWetDry ?? 0) > 0 }
+    }
+
+    /// Apply compression, reverb, and echo sequentially in a single atomic operation.
+    /// Each stage writes to a temp file that becomes the input for the next stage.
+    /// Returns the final output URL and duration.
+    func applyCombinedPreset(
+        sourceURL: URL,
+        params: CombinedPresetParams
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performCombinedPreset(sourceURL: sourceURL, params: params)
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performCombinedPreset(
+        sourceURL: URL,
+        params: CombinedPresetParams
+    ) -> AudioEditResult {
+        var currentURL = sourceURL
+        var tempFiles: [URL] = []
+
+        // Stage 1: Compression
+        if params.hasCompression {
+            let result = performCompressor(
+                sourceURL: currentURL,
+                makeupGainDb: params.compGain ?? 0,
+                peakReduction: params.compReduction ?? 0,
+                mix: params.compMix ?? 1.0
+            )
+            guard result.success else {
+                cleanupTempFiles(tempFiles)
+                return result
+            }
+            if currentURL != sourceURL { tempFiles.append(currentURL) }
+            currentURL = result.outputURL
+        }
+
+        // Stage 2: Reverb
+        if params.hasReverb {
+            let result = performReverb(
+                sourceURL: currentURL,
+                roomSize: params.reverbRoomSize ?? 1.0,
+                preDelayMs: params.reverbPreDelayMs ?? 20,
+                decay: params.reverbDecay ?? 2.0,
+                damping: params.reverbDamping ?? 0.5,
+                wetDry: params.reverbWetDry ?? 0.3
+            )
+            guard result.success else {
+                cleanupTempFiles(tempFiles)
+                return result
+            }
+            if currentURL != sourceURL { tempFiles.append(currentURL) }
+            currentURL = result.outputURL
+        }
+
+        // Stage 3: Echo
+        if params.hasEcho {
+            let result = performEcho(
+                sourceURL: currentURL,
+                delayTime: params.echoDelay ?? 0.25,
+                feedback: params.echoFeedback ?? 0.3,
+                damping: params.echoDamping ?? 0.3,
+                wetDry: params.echoWetDry ?? 0.3
+            )
+            guard result.success else {
+                cleanupTempFiles(tempFiles)
+                return result
+            }
+            if currentURL != sourceURL { tempFiles.append(currentURL) }
+            currentURL = result.outputURL
+        }
+
+        // Clean up intermediate temp files (keep source and final output)
+        cleanupTempFiles(tempFiles)
+
+        // Get final duration
+        let duration = getDuration(of: currentURL) ?? 0
+        return AudioEditResult(outputURL: currentURL, newDuration: duration, success: true, error: nil)
+    }
+
+    private func cleanupTempFiles(_ files: [URL]) {
+        for file in files {
+            try? FileManager.default.removeItem(at: file)
         }
     }
 

@@ -7,6 +7,203 @@
 
 import SwiftUI
 
+// MARK: - Effect Presets
+
+struct ReverbPreset: Identifiable {
+    let id: String
+    let name: String
+    let roomSize: Float
+    let preDelay: Float
+    let decay: Float
+    let damping: Float
+    let wetDry: Float
+}
+
+struct CompressPreset: Identifiable {
+    let id: String
+    let name: String
+    let gain: Float
+    let reduction: Float
+    let mix: Float
+}
+
+struct EchoPreset: Identifiable {
+    let id: String
+    let name: String
+    let delay: Float
+    let feedback: Float
+    let damping: Float
+    let wetDry: Float
+}
+
+struct MasterPreset: Identifiable {
+    let id: String
+    let name: String
+    let icon: String
+    // Compression
+    let compGain: Float
+    let compReduction: Float
+    let compMix: Float
+    // Reverb
+    let reverbRoomSize: Float
+    let reverbPreDelay: Float
+    let reverbDecay: Float
+    let reverbDamping: Float
+    let reverbWetDry: Float
+    // Echo
+    let echoDelay: Float
+    let echoFeedback: Float
+    let echoDamping: Float
+    let echoWetDry: Float
+}
+
+enum EffectPresets {
+    // MARK: - Reverb Presets
+    static let reverb: [ReverbPreset] = [
+        ReverbPreset(id: "r1", name: "Small Room", roomSize: 0.4, preDelay: 5, decay: 0.5, damping: 0.6, wetDry: 0.2),
+        ReverbPreset(id: "r2", name: "Concert Hall", roomSize: 2.0, preDelay: 30, decay: 3.0, damping: 0.4, wetDry: 0.3),
+        ReverbPreset(id: "r3", name: "Cathedral", roomSize: 3.0, preDelay: 50, decay: 5.0, damping: 0.3, wetDry: 0.35),
+        ReverbPreset(id: "r4", name: "Plate", roomSize: 0.8, preDelay: 10, decay: 1.5, damping: 0.7, wetDry: 0.25),
+        ReverbPreset(id: "r5", name: "Ambient", roomSize: 1.5, preDelay: 40, decay: 4.0, damping: 0.5, wetDry: 0.15),
+    ]
+
+    // MARK: - Compression Presets
+    static let compress: [CompressPreset] = [
+        CompressPreset(id: "c1", name: "Gentle", gain: 1.0, reduction: 2.0, mix: 1.0),
+        CompressPreset(id: "c2", name: "Vocal", gain: 2.5, reduction: 4.0, mix: 1.0),
+        CompressPreset(id: "c3", name: "Punchy", gain: 3.5, reduction: 6.0, mix: 0.8),
+        CompressPreset(id: "c4", name: "Broadcast", gain: 4.5, reduction: 7.5, mix: 1.0),
+        CompressPreset(id: "c5", name: "Squash", gain: 4.5, reduction: 7.0, mix: 1.0),
+    ]
+
+    // MARK: - Echo Presets
+    static let echo: [EchoPreset] = [
+        EchoPreset(id: "e1", name: "Slapback", delay: 0.08, feedback: 0.1, damping: 0.2, wetDry: 0.3),
+        EchoPreset(id: "e2", name: "Doubler", delay: 0.03, feedback: 0.05, damping: 0.1, wetDry: 0.2),
+        EchoPreset(id: "e3", name: "Tape Echo", delay: 0.35, feedback: 0.45, damping: 0.6, wetDry: 0.25),
+        EchoPreset(id: "e4", name: "Spacious", delay: 0.5, feedback: 0.5, damping: 0.4, wetDry: 0.2),
+        EchoPreset(id: "e5", name: "Rhythmic", delay: 0.2, feedback: 0.6, damping: 0.3, wetDry: 0.3),
+    ]
+
+    // MARK: - Master Presets (combined genre presets)
+    static let master: [MasterPreset] = [
+        // 1. Sonidea Signature — balanced warmth, polished
+        MasterPreset(id: "m1", name: "Sonidea", icon: "waveform",
+                     compGain: 2.0, compReduction: 3.5, compMix: 1.0,
+                     reverbRoomSize: 1.0, reverbPreDelay: 20, reverbDecay: 1.8, reverbDamping: 0.5, reverbWetDry: 0.2,
+                     echoDelay: 0.25, echoFeedback: 0.0, echoDamping: 0.3, echoWetDry: 0.0),
+        // 2. Hip-Hop / Rap — punchy compression, tight room
+        MasterPreset(id: "m2", name: "Hip-Hop", icon: "beats.headphones",
+                     compGain: 3.0, compReduction: 5.0, compMix: 0.9,
+                     reverbRoomSize: 0.4, reverbPreDelay: 5, reverbDecay: 0.4, reverbDamping: 0.7, reverbWetDry: 0.1,
+                     echoDelay: 0.15, echoFeedback: 0.15, echoDamping: 0.5, echoWetDry: 0.08),
+        // 3. Reggaeton — warm compression, medium hall, rhythmic echo
+        MasterPreset(id: "m3", name: "Reggaeton", icon: "music.note.list",
+                     compGain: 3.0, compReduction: 5.0, compMix: 1.0,
+                     reverbRoomSize: 1.2, reverbPreDelay: 25, reverbDecay: 1.5, reverbDamping: 0.4, reverbWetDry: 0.2,
+                     echoDelay: 0.22, echoFeedback: 0.35, echoDamping: 0.4, echoWetDry: 0.2),
+        // 4. Pop Vocal — bright, polished, plate reverb
+        MasterPreset(id: "m4", name: "Pop", icon: "star",
+                     compGain: 2.5, compReduction: 4.5, compMix: 1.0,
+                     reverbRoomSize: 0.8, reverbPreDelay: 15, reverbDecay: 1.2, reverbDamping: 0.6, reverbWetDry: 0.22,
+                     echoDelay: 0.3, echoFeedback: 0.1, echoDamping: 0.3, echoWetDry: 0.08),
+        // 5. R&B Smooth — warm reverb, gentle compression, subtle echo
+        MasterPreset(id: "m5", name: "R&B", icon: "moon.stars",
+                     compGain: 1.5, compReduction: 3.0, compMix: 1.0,
+                     reverbRoomSize: 1.5, reverbPreDelay: 30, reverbDecay: 2.5, reverbDamping: 0.4, reverbWetDry: 0.25,
+                     echoDelay: 0.4, echoFeedback: 0.2, echoDamping: 0.5, echoWetDry: 0.12),
+        // 6. Lo-Fi — warm compression, damped echo, dark reverb
+        MasterPreset(id: "m6", name: "Lo-Fi", icon: "radio",
+                     compGain: 3.0, compReduction: 5.5, compMix: 0.9,
+                     reverbRoomSize: 1.0, reverbPreDelay: 10, reverbDecay: 1.8, reverbDamping: 0.8, reverbWetDry: 0.15,
+                     echoDelay: 0.3, echoFeedback: 0.3, echoDamping: 0.7, echoWetDry: 0.15),
+        // 7. Robot — tight compression, metallic short echo
+        MasterPreset(id: "m7", name: "Robot", icon: "cpu",
+                     compGain: 4.0, compReduction: 6.5, compMix: 1.0,
+                     reverbRoomSize: 0.3, reverbPreDelay: 0, reverbDecay: 0.2, reverbDamping: 0.9, reverbWetDry: 0.08,
+                     echoDelay: 0.05, echoFeedback: 0.5, echoDamping: 0.1, echoWetDry: 0.3),
+        // 8. Podcast — clean, tight compression, no effects
+        MasterPreset(id: "m8", name: "Podcast", icon: "mic.badge.plus",
+                     compGain: 3.0, compReduction: 5.5, compMix: 1.0,
+                     reverbRoomSize: 1.0, reverbPreDelay: 20, reverbDecay: 2.0, reverbDamping: 0.5, reverbWetDry: 0.0,
+                     echoDelay: 0.25, echoFeedback: 0.0, echoDamping: 0.3, echoWetDry: 0.0),
+        // 9. Cinematic — cathedral reverb, gentle compression, long echo
+        MasterPreset(id: "m9", name: "Cinematic", icon: "film",
+                     compGain: 1.5, compReduction: 2.5, compMix: 1.0,
+                     reverbRoomSize: 2.5, reverbPreDelay: 45, reverbDecay: 4.5, reverbDamping: 0.3, reverbWetDry: 0.3,
+                     echoDelay: 0.6, echoFeedback: 0.35, echoDamping: 0.4, echoWetDry: 0.15),
+        // 10. Live Stage — natural room, light compression
+        MasterPreset(id: "m10", name: "Live", icon: "person.wave.2",
+                     compGain: 1.0, compReduction: 2.0, compMix: 1.0,
+                     reverbRoomSize: 1.8, reverbPreDelay: 20, reverbDecay: 2.0, reverbDamping: 0.5, reverbWetDry: 0.18,
+                     echoDelay: 0.25, echoFeedback: 0.0, echoDamping: 0.3, echoWetDry: 0.0),
+    ]
+}
+
+// MARK: - Preset Picker (horizontal stepper with arrows)
+
+struct PresetPicker<P: Identifiable>: View {
+    let presets: [P]
+    let nameKeyPath: KeyPath<P, String>
+    @Binding var selectedIndex: Int  // -1 = Default (no preset)
+    let onSelect: (P?) -> Void
+
+    @Environment(\.themePalette) private var palette
+
+    private var displayName: String {
+        if selectedIndex < 0 || selectedIndex >= presets.count {
+            return "Default"
+        }
+        return presets[selectedIndex][keyPath: nameKeyPath]
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                if selectedIndex <= -1 {
+                    selectedIndex = presets.count - 1
+                } else {
+                    selectedIndex -= 1
+                }
+                onSelect(selectedIndex >= 0 ? presets[selectedIndex] : nil)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(palette.accent)
+                    .frame(width: 24, height: 24)
+                    .background(palette.accent.opacity(0.12))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text(displayName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(selectedIndex >= 0 ? palette.accent : palette.textSecondary)
+                .frame(minWidth: 70)
+                .lineLimit(1)
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                if selectedIndex >= presets.count - 1 {
+                    selectedIndex = -1
+                } else {
+                    selectedIndex += 1
+                }
+                onSelect(selectedIndex >= 0 ? presets[selectedIndex] : nil)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(palette.accent)
+                    .frame(width: 24, height: 24)
+                    .background(palette.accent.opacity(0.12))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
 // MARK: - Edit Tool Button (inline toolbar)
 
 struct EditToolButton: View {
@@ -158,7 +355,7 @@ struct FadeCurveOverlay: View {
 // MARK: - Edit Tool Type
 
 enum EditToolType: String, CaseIterable, Identifiable {
-    case eq, fade, peak, gate, compress, reverb, echo
+    case eq, fade, peak, gate, compress, reverb, echo, presets
 
     var id: String { rawValue }
 
@@ -171,6 +368,7 @@ enum EditToolType: String, CaseIterable, Identifiable {
         case .compress: return "Comp"
         case .reverb: return "Reverb"
         case .echo: return "Echo"
+        case .presets: return "Presets"
         }
     }
 
@@ -183,6 +381,7 @@ enum EditToolType: String, CaseIterable, Identifiable {
         case .compress: return "Compressor"
         case .reverb: return "Reverb"
         case .echo: return "Echo"
+        case .presets: return "Master Presets"
         }
     }
 
@@ -195,6 +394,7 @@ enum EditToolType: String, CaseIterable, Identifiable {
         case .compress: return "waveform.badge.magnifyingglass"
         case .reverb: return "dot.radiowaves.left.and.right"
         case .echo: return "repeat"
+        case .presets: return "sparkles"
         }
     }
 }
@@ -380,6 +580,16 @@ struct EffectParameterPanel: View {
     @Binding var eqSettings: EQSettings
     let onEQChanged: () -> Void
 
+    // Combined preset (single atomic operation)
+    let onApplyPreset: (AudioEditor.CombinedPresetParams) -> Void
+    let onRemovePreset: () -> Void
+
+    // Preset selection indices (-1 = default/no preset)
+    @State private var compPresetIndex: Int = -1
+    @State private var reverbPresetIndex: Int = -1
+    @State private var echoPresetIndex: Int = -1
+    @State private var masterPresetIndex: Int = -1
+
     // Per-tool debounce tasks
     @State private var debounceTasks: [EditToolType: Task<Void, Never>] = [:]
 
@@ -397,6 +607,7 @@ struct EffectParameterPanel: View {
         case .compress: return hasCompressApplied
         case .reverb: return hasReverbApplied
         case .echo: return hasEchoApplied
+        case .presets: return masterPresetIndex >= 0
         }
     }
 
@@ -439,6 +650,8 @@ struct EffectParameterPanel: View {
         case .echo:
             return echoDelay == Self.defaultEchoDelay && echoFeedback == Self.defaultEchoFeedback
                 && echoDamping == Self.defaultEchoDamping && echoWetDry == Self.defaultEchoWetDry
+        case .presets:
+            return masterPresetIndex < 0
         }
     }
 
@@ -510,6 +723,7 @@ struct EffectParameterPanel: View {
         case .compress: compressControls
         case .reverb: reverbControls
         case .echo: echoControls
+        case .presets: presetsControls
         }
     }
 
@@ -554,6 +768,14 @@ struct EffectParameterPanel: View {
     }
 
     private var compressControls: some View {
+        VStack(spacing: 10) {
+        PresetPicker(presets: EffectPresets.compress, nameKeyPath: \.name, selectedIndex: $compPresetIndex) { preset in
+            if let p = preset {
+                compGain = p.gain; compReduction = p.reduction; compMix = p.mix
+            } else {
+                compGain = Self.defaultCompGain; compReduction = Self.defaultCompReduction; compMix = Self.defaultCompMix
+            }
+        }
         HStack(spacing: 0) {
             VStack(spacing: 4) {
                 Text("Gain")
@@ -603,9 +825,21 @@ struct EffectParameterPanel: View {
             }
             .frame(maxWidth: .infinity)
         }
+        }
     }
 
     private var reverbControls: some View {
+        VStack(spacing: 10) {
+        PresetPicker(presets: EffectPresets.reverb, nameKeyPath: \.name, selectedIndex: $reverbPresetIndex) { preset in
+            if let p = preset {
+                reverbRoomSize = p.roomSize; reverbPreDelay = p.preDelay; reverbDecay = p.decay
+                reverbDamping = p.damping; reverbWetDry = p.wetDry
+            } else {
+                reverbRoomSize = Self.defaultReverbRoomSize; reverbPreDelay = Self.defaultReverbPreDelay
+                reverbDecay = Self.defaultReverbDecay; reverbDamping = Self.defaultReverbDamping
+                reverbWetDry = Self.defaultReverbWetDry
+            }
+        }
         VStack(spacing: 12) {
             HStack(spacing: 0) {
                 VStack(spacing: 4) {
@@ -695,9 +929,20 @@ struct EffectParameterPanel: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        }
     }
 
     private var echoControls: some View {
+        VStack(spacing: 10) {
+        PresetPicker(presets: EffectPresets.echo, nameKeyPath: \.name, selectedIndex: $echoPresetIndex) { preset in
+            if let p = preset {
+                echoDelay = p.delay; echoFeedback = p.feedback
+                echoDamping = p.damping; echoWetDry = p.wetDry
+            } else {
+                echoDelay = Self.defaultEchoDelay; echoFeedback = Self.defaultEchoFeedback
+                echoDamping = Self.defaultEchoDamping; echoWetDry = Self.defaultEchoWetDry
+            }
+        }
         VStack(spacing: 12) {
             HStack(spacing: 0) {
                 VStack(spacing: 4) {
@@ -767,6 +1012,103 @@ struct EffectParameterPanel: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        }
+    }
+
+    private var presetsControls: some View {
+        VStack(spacing: 12) {
+            Text("Master Presets")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(palette.textPrimary)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8)
+            ], spacing: 10) {
+                ForEach(Array(EffectPresets.master.enumerated()), id: \.element.id) { index, preset in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        if masterPresetIndex == index {
+                            // Deselect
+                            masterPresetIndex = -1
+                        } else {
+                            masterPresetIndex = index
+                            applyMasterPreset(preset)
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: preset.icon)
+                                .font(.system(size: 16, weight: .medium))
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(masterPresetIndex == index ? palette.accent : palette.inputBackground)
+                                )
+                                .foregroundColor(masterPresetIndex == index ? .white : palette.textSecondary)
+                            Text(preset.name)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(masterPresetIndex == index ? palette.accent : palette.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if masterPresetIndex >= 0, masterPresetIndex < EffectPresets.master.count {
+                let preset = EffectPresets.master[masterPresetIndex]
+                VStack(spacing: 4) {
+                    Text("Applies: Compression + Reverb + Echo")
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.textTertiary)
+                    Text("Comp \(String(format: "%.0f", preset.compGain))dB · Reverb \(String(format: "%.0f%%", preset.reverbWetDry * 100)) · Echo \(String(format: "%.0f%%", preset.echoWetDry * 100))")
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundColor(palette.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func applyMasterPreset(_ preset: MasterPreset) {
+        // Set all UI parameters for display
+        compGain = preset.compGain
+        compReduction = preset.compReduction
+        compMix = preset.compMix
+        reverbRoomSize = preset.reverbRoomSize
+        reverbPreDelay = preset.reverbPreDelay
+        reverbDecay = preset.reverbDecay
+        reverbDamping = preset.reverbDamping
+        reverbWetDry = preset.reverbWetDry
+        echoDelay = preset.echoDelay
+        echoFeedback = preset.echoFeedback
+        echoDamping = preset.echoDamping
+        echoWetDry = preset.echoWetDry
+
+        // Reset per-effect preset indices
+        compPresetIndex = -1
+        reverbPresetIndex = -1
+        echoPresetIndex = -1
+
+        // Build combined params and apply as single atomic operation
+        cancelAllDebounceTasks()
+        let params = AudioEditor.CombinedPresetParams(
+            compGain: preset.compGain,
+            compReduction: preset.compReduction,
+            compMix: preset.compMix,
+            reverbRoomSize: preset.reverbRoomSize,
+            reverbPreDelayMs: preset.reverbPreDelay,
+            reverbDecay: preset.reverbDecay,
+            reverbDamping: preset.reverbDamping,
+            reverbWetDry: preset.reverbWetDry,
+            echoDelay: preset.echoDelay,
+            echoFeedback: preset.echoFeedback,
+            echoDamping: preset.echoDamping,
+            echoWetDry: preset.echoWetDry
+        )
+        onApplyPreset(params)
     }
 
     // MARK: - Helpers
@@ -915,6 +1257,25 @@ struct EffectParameterPanel: View {
             echoFeedback = Self.defaultEchoFeedback
             echoDamping = Self.defaultEchoDamping
             echoWetDry = Self.defaultEchoWetDry
+        case .presets:
+            masterPresetIndex = -1
+            onRemovePreset()
+            // Reset UI parameters to defaults
+            compGain = Self.defaultCompGain
+            compReduction = Self.defaultCompReduction
+            compMix = Self.defaultCompMix
+            compPresetIndex = -1
+            reverbRoomSize = Self.defaultReverbRoomSize
+            reverbPreDelay = Self.defaultReverbPreDelay
+            reverbDecay = Self.defaultReverbDecay
+            reverbDamping = Self.defaultReverbDamping
+            reverbWetDry = Self.defaultReverbWetDry
+            reverbPresetIndex = -1
+            echoDelay = Self.defaultEchoDelay
+            echoFeedback = Self.defaultEchoFeedback
+            echoDamping = Self.defaultEchoDamping
+            echoWetDry = Self.defaultEchoWetDry
+            echoPresetIndex = -1
         }
     }
 }
@@ -971,6 +1332,8 @@ private struct ToolOnChangeModifier: ViewModifier {
                 .onChange(of: echoFeedback) { onEchoChanged() }
                 .onChange(of: echoDamping) { onEchoChanged() }
                 .onChange(of: echoWetDry) { onEchoChanged() }
+        case .presets:
+            content
         }
     }
 }

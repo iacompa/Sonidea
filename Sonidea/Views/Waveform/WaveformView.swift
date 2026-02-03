@@ -209,61 +209,48 @@ struct DetailsWaveformView: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let totalHeight = geometry.size.height
-            // Reserve space for the minimal ruler at the top
-            let waveformHeight = max(0, totalHeight - detailsRulerHeight)
+            let waveformHeight = totalHeight
 
             if let timeline = timeline, waveformData != nil {
-                VStack(spacing: 0) {
-                    // Apple Voice Memos-style minimal time ruler
-                    TimelineRulerView_Minimal(
+                ZStack {
+                    // Waveform bars (no selection, no grid — clean playback look)
+                    WaveformBarsView(
+                        waveformData: waveformData,
                         timeline: timeline,
+                        selectionStart: 0,
+                        selectionEnd: 0,
+                        width: width,
+                        height: waveformHeight,
                         palette: palette,
-                        rulerHeight: detailsRulerHeight
+                        colorScheme: colorScheme,
+                        showsSelectionHighlight: false,
+                        showsHorizontalGrid: false
                     )
 
-                    ZStack {
-                        // Use the SAME WaveformBarsView as Edit mode, but simplified for Details:
-                        // - No selection highlight
-                        // - No horizontal grid lines (cleaner look)
-                        WaveformBarsView(
-                            waveformData: waveformData,
-                            timeline: timeline,
-                            selectionStart: 0,  // No selection in Details mode
-                            selectionEnd: 0,
-                            width: width,
-                            height: waveformHeight,
-                            palette: palette,
-                            colorScheme: colorScheme,
-                            showsSelectionHighlight: false,
-                            showsHorizontalGrid: false  // Cleaner look for Details
-                        )
-
-                        // Marker flags
-                        if !markers.isEmpty {
-                            MarkerFlagsOverlay(
-                                markers: markers,
-                                playheadPosition: progress * duration,
-                                timeline: timeline,
-                                width: width,
-                                palette: palette
-                            )
-                        }
-
-                        // Playhead overlay (same style as Edit mode)
-                        DetailsPlayheadView(
-                            progress: progress,
+                    // Marker flags
+                    if !markers.isEmpty {
+                        MarkerFlagsOverlay(
+                            markers: markers,
+                            playheadPosition: progress * duration,
                             timeline: timeline,
                             width: width,
-                            height: waveformHeight,
-                            palette: palette,
-                            isPlaying: isPlaying
+                            palette: palette
                         )
                     }
-                    .frame(height: waveformHeight)
-                    .background(palette.waveformBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                    // Playhead overlay
+                    DetailsPlayheadView(
+                        progress: progress,
+                        timeline: timeline,
+                        width: width,
+                        height: waveformHeight,
+                        palette: palette,
+                        isPlaying: isPlaying
+                    )
                 }
-                .frame(height: totalHeight)
+                .frame(height: waveformHeight)
+                .background(palette.waveformBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 // Pinch to zoom (same as Edit mode)
                 .gesture(
                     MagnificationGesture()

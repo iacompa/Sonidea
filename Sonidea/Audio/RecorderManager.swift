@@ -129,24 +129,26 @@ final class RecorderManager: NSObject {
         if let limiter = limiterNode {
             let audioUnit = limiter.audioUnit
             if inputSettings.limiterEnabled {
-                // Configure dynamics processor as a limiter
-                // kDynamicsProcessorParam_Threshold: dB level above which compression starts
-                // kDynamicsProcessorParam_HeadRoom: dB above threshold before hard limiting
-                // kDynamicsProcessorParam_ExpansionRatio: 1.0 = no expansion
-                // kDynamicsProcessorParam_AttackTime: seconds
-                // kDynamicsProcessorParam_ReleaseTime: seconds
-                // kDynamicsProcessorParam_CompressionAmount: read-only output
+                // Configure dynamics processor as a brick-wall peak limiter.
+                // HeadRoom minimum is 0.1 dB (Apple's documented range). Setting 0.0
+                // may be silently rejected, leaving the default of 11 dB — which makes
+                // the limiter useless. Use 0.1 for near-brick-wall behavior.
+                // Sample-level clamping in the tap callback catches any transient overshoot.
 
                 let threshold = inputSettings.limiterCeilingDb
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, threshold, 0)
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 0.1, 0)
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ExpansionRatio, kAudioUnitScope_Global, 0, 1.0, 0)
-                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.001, 0)
-                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.05, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ExpansionThreshold, kAudioUnitScope_Global, 0, -60.0, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.0001, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.01, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_OverallGain, kAudioUnitScope_Global, 0, 0.0, 0)
             } else {
-                // Bypass by setting threshold to +40 dB so the limiter never engages
+                // Bypass: set threshold to +40 dB and headroom to +40 dB so the limiter
+                // never engages (signal would need to exceed +80 dBFS to trigger).
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, 40, 0)
                 AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 40, 0)
+                AudioUnitSetParameter(audioUnit, kDynamicsProcessorParam_OverallGain, kAudioUnitScope_Global, 0, 0.0, 0)
             }
         }
     }
@@ -414,8 +416,12 @@ final class RecorderManager: NSObject {
         currentFileURL = fileURL
 
         // Decide which recording method to use:
-        // Use AVAudioEngine if gain/limiter are active, otherwise use AVAudioRecorder (simpler)
-        let needsEngine = !inputSettings.isDefault || metronome.isEnabled || monitorEffects.isEnabled
+        // Always use AVAudioEngine so the limiter and gain nodes are available.
+        // The limiter can be enabled mid-recording (e.g. via the draggable ceiling
+        // marker on the level meter), so the engine must always be in the signal chain.
+        // Previously this only used the engine when gain/limiter were non-default,
+        // which meant enabling the limiter during AVAudioRecorder recording had no effect.
+        let needsEngine = true
         isUsingEngine = needsEngine
 
         if needsEngine {
@@ -630,6 +636,25 @@ final class RecorderManager: NSObject {
                     for ch in 0..<channelCount {
                         memcpy(dst[ch], src[ch], frameCount * MemoryLayout<Float>.size)
                     }
+
+                    // Brick-wall sample clamp: DynamicsProcessor may overshoot during
+                    // transients (attack time > 0). Clamp every sample to the ceiling
+                    // amplitude so the recorded file never exceeds the limiter ceiling.
+                    if let s = self, s.inputSettings.limiterEnabled {
+                        let ceilingDb = s.inputSettings.limiterCeilingDb
+                        let ceilingLinear = pow(10.0, ceilingDb / 20.0) // dB → amplitude
+                        for ch in 0..<channelCount {
+                            let ptr = dst[ch]
+                            for i in 0..<frameCount {
+                                let sample = ptr[i]
+                                if sample > ceilingLinear {
+                                    ptr[i] = ceilingLinear
+                                } else if sample < -ceilingLinear {
+                                    ptr[i] = -ceilingLinear
+                                }
+                            }
+                        }
+                    }
                 }
 
                 writeQueue.async { [weak self] in
@@ -666,13 +691,14 @@ final class RecorderManager: NSObject {
                     }
                 }
 
-                // Compute peak on audio thread (buffer may be recycled before MainActor runs)
-                let channelCount = Int(buffer.format.channelCount)
-                let frameLength = Int(buffer.frameLength)
+                // Compute peak from the COPY buffer (post-clamp) so the meter reflects
+                // the actual recorded level, not the pre-limiter input.
+                let peakChannelCount = Int(copy.format.channelCount)
+                let peakFrameLength = Int(copy.frameLength)
                 var peak: Float = 0
-                if let channelData = buffer.floatChannelData, frameLength > 0 {
-                    for ch in 0..<channelCount {
-                        for i in 0..<frameLength {
+                if let channelData = copy.floatChannelData, peakFrameLength > 0 {
+                    for ch in 0..<peakChannelCount {
+                        for i in 0..<peakFrameLength {
                             let absSample = abs(channelData[ch][i])
                             if absSample > peak { peak = absSample }
                         }
@@ -1270,6 +1296,23 @@ final class RecorderManager: NSObject {
                     for ch in 0..<channelCount {
                         memcpy(dst[ch], src[ch], frameCount * MemoryLayout<Float>.size)
                     }
+
+                    // Brick-wall sample clamp (same as primary tap)
+                    if let s = self, s.inputSettings.limiterEnabled {
+                        let ceilingDb = s.inputSettings.limiterCeilingDb
+                        let ceilingLinear = pow(10.0, ceilingDb / 20.0)
+                        for ch in 0..<channelCount {
+                            let ptr = dst[ch]
+                            for i in 0..<frameCount {
+                                let sample = ptr[i]
+                                if sample > ceilingLinear {
+                                    ptr[i] = ceilingLinear
+                                } else if sample < -ceilingLinear {
+                                    ptr[i] = -ceilingLinear
+                                }
+                            }
+                        }
+                    }
                 }
 
                 writeQueue.async {
@@ -1282,11 +1325,11 @@ final class RecorderManager: NSObject {
                     }
                 }
 
-                // Compute peak on audio thread (buffer may be recycled before MainActor runs)
-                let chCount = Int(buffer.format.channelCount)
-                let fLen = Int(buffer.frameLength)
+                // Compute peak from COPY buffer (post-clamp) for accurate meter
+                let chCount = Int(copy.format.channelCount)
+                let fLen = Int(copy.frameLength)
                 var peak: Float = 0
-                if let chData = buffer.floatChannelData, fLen > 0 {
+                if let chData = copy.floatChannelData, fLen > 0 {
                     for ch in 0..<chCount {
                         for i in 0..<fLen {
                             let absSample = abs(chData[ch][i])

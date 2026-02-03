@@ -83,12 +83,12 @@ struct IconCatalog {
     /// All icon definitions
     static let allIcons: [IconDefinition] = [
         // MARK: - Music (first)
-        IconDefinition(sfSymbol: "music.note", displayName: "Music", category: .music,
+        IconDefinition(sfSymbol: "music.quarternote.3", displayName: "Music", category: .music,
                       classifierLabels: ["music", "orchestra", "musical_ensemble"]),
-        IconDefinition(sfSymbol: "music.note.list", displayName: "Piano", category: .music,
+        IconDefinition(sfSymbol: "pianokeys", displayName: "Piano", category: .music,
                       classifierLabels: ["piano", "electric_piano", "keyboard_musical", "synthesizer",
                                         "organ", "electronic_organ", "hammond_organ", "harpsichord"]),
-        IconDefinition(sfSymbol: "music.quarternote.3", displayName: "Notes", category: .music),
+        IconDefinition(sfSymbol: "music.note", displayName: "Note", category: .music),
         IconDefinition(sfSymbol: "cylinder.fill", displayName: "Drums", category: .music,
                       classifierLabels: ["drum", "drum_kit", "bass_drum", "snare_drum", "timpani", "tabla",
                                         "cymbal", "hi_hat", "tambourine", "mallet_percussion", "gong",
@@ -166,7 +166,7 @@ struct IconCatalog {
         IconDefinition(sfSymbol: "person.2.fill", displayName: "People", category: .voice,
                       classifierLabels: ["crowd", "babble", "children_shouting", "children_playing"]),
         IconDefinition(sfSymbol: "person.wave.2.fill", displayName: "Greeting", category: .voice),
-        IconDefinition(sfSymbol: "bubble.left.fill", displayName: "Speech", category: .voice,
+        IconDefinition(sfSymbol: "text.bubble.fill", displayName: "Speech", category: .voice,
                       classifierLabels: ["whispering", "narration"]),
         IconDefinition(sfSymbol: "bubble.left.and.bubble.right.fill", displayName: "Conversation", category: .voice),
         IconDefinition(sfSymbol: "face.smiling.fill", displayName: "Laughter", category: .voice,

@@ -38,6 +38,7 @@ struct OverdubSessionView: View {
     @State private var showMaxLayersAlert = false
     @State private var showDiscardConfirmation = false
     @State private var showRecordingCloseConfirmation = false
+    @State private var discardShouldDismiss = false  // true when discard triggered from Close button
     @State private var showSaveConfirmation = false
     @State private var errorMessage: String?
     @State private var showErrorAlert = false
@@ -120,8 +121,15 @@ struct OverdubSessionView: View {
                 maxLayers: OverdubGroup.maxLayers,
                 onDiscard: {
                     discardRecording()
-                    engine.cleanup()
-                    dismiss()
+                    if discardShouldDismiss {
+                        // Triggered from Close button — leave the session
+                        discardShouldDismiss = false
+                        engine.cleanup()
+                        dismiss()
+                    } else {
+                        // Triggered from Discard button — stay and re-prepare for another take
+                        prepareEngine()
+                    }
                 },
                 onStopAndClose: {
                     stopRecording()
@@ -497,13 +505,36 @@ struct OverdubSessionView: View {
 
                     Spacer()
 
-                    // Offset indicator
-                    Text(formatOffset(layer.overdubOffsetSeconds))
-                        .font(.caption2)
-                        .foregroundColor(layer.overdubOffsetSeconds == 0 ? palette.textTertiary : palette.accent)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(palette.inputBackground))
+                    // Mute / Solo
+                    HStack(spacing: 2) {
+                        Button {
+                            toggleMuteForLayer(at: index)
+                        } label: {
+                            let isMuted = layerIsMuted(at: index)
+                            Text("M")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(isMuted ? .white : palette.textTertiary)
+                                .frame(width: 24, height: 24)
+                                .background(isMuted ? Color.red : palette.inputBackground)
+                                .cornerRadius(4)
+                                .animation(.easeInOut(duration: 0.15), value: isMuted)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            toggleSoloForLayer(at: index)
+                        } label: {
+                            let isSoloed = layerIsSoloed(at: index)
+                            Text("S")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(isSoloed ? .black : palette.textTertiary)
+                                .frame(width: 24, height: 24)
+                                .background(isSoloed ? Color.yellow : palette.inputBackground)
+                                .cornerRadius(4)
+                                .animation(.easeInOut(duration: 0.15), value: isSoloed)
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     // Loop toggle for layer
                     Button {
@@ -863,6 +894,7 @@ struct OverdubSessionView: View {
             // Save/Discard buttons
             HStack(spacing: 12) {
                 Button {
+                    discardShouldDismiss = false
                     showDiscardConfirmation = true
                 } label: {
                     Text("Discard")
@@ -1101,6 +1133,50 @@ struct OverdubSessionView: View {
         guard let group = overdubGroup else { return false }
         guard index < group.mixSettings.layerChannels.count else { return false }
         return group.mixSettings.layerChannels[index].isLooped
+    }
+
+    private func toggleMuteForLayer(at index: Int) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if overdubGroup == nil {
+            overdubGroup = appState.createOverdubGroup(baseRecording: baseRecording)
+        }
+        guard var group = overdubGroup else { return }
+        var settings = group.mixSettings
+        settings.syncLayerCount(existingLayers.count)
+        guard index < settings.layerChannels.count else { return }
+        settings.layerChannels[index].isMuted.toggle()
+        group.mixSettings = settings
+        overdubGroup = group
+        persistMixSettings()
+        engine.applyMixSettings(settings)
+    }
+
+    private func toggleSoloForLayer(at index: Int) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if overdubGroup == nil {
+            overdubGroup = appState.createOverdubGroup(baseRecording: baseRecording)
+        }
+        guard var group = overdubGroup else { return }
+        var settings = group.mixSettings
+        settings.syncLayerCount(existingLayers.count)
+        guard index < settings.layerChannels.count else { return }
+        settings.layerChannels[index].isSolo.toggle()
+        group.mixSettings = settings
+        overdubGroup = group
+        persistMixSettings()
+        engine.applyMixSettings(settings)
+    }
+
+    private func layerIsMuted(at index: Int) -> Bool {
+        guard let group = overdubGroup else { return false }
+        guard index < group.mixSettings.layerChannels.count else { return false }
+        return group.mixSettings.layerChannels[index].isMuted
+    }
+
+    private func layerIsSoloed(at index: Int) -> Bool {
+        guard let group = overdubGroup else { return false }
+        guard index < group.mixSettings.layerChannels.count else { return false }
+        return group.mixSettings.layerChannels[index].isSolo
     }
 
     private func persistMixSettings() {
@@ -1373,6 +1449,7 @@ struct OverdubSessionView: View {
         }
 
         if recordedLayerURL != nil {
+            discardShouldDismiss = true
             showDiscardConfirmation = true
         } else {
             dismiss()

@@ -414,58 +414,60 @@ struct RecordingControlsSheet: View {
 // MARK: - Level Meter Bar (professional DAW-style dB meter)
 
 struct LevelMeterBar: View {
-    let level: Float   // 0.0 – 1.0 normalized (represents -60 to +6 dB)
+    let level: Float   // 0.0 – 1.0 normalized (represents -60 to +6 dB from RecorderManager)
     var isPaused: Bool = false
 
     @Environment(\.themePalette) private var palette
+    @Environment(AppState.self) private var appState
 
-    // Professional DAW dB color ranges:
-    //   Green:  -60 dB to -12 dB  (safe recording level)
-    //   Yellow: -12 dB to  -6 dB  (optimal level)
-    //   Orange:  -6 dB to   0 dB  (hot)
-    //   Red:      0 dB to  +6 dB  (clipping / over)
+    // Input level mapping: level 0.0 = -60 dB, level 1.0 = +6 dB (66 dB range from RecorderManager)
+    private let inputMinDB: Float = -60
+    private let inputMaxDB: Float = 6
 
-    // Meter range constants
-    private let meterMinDB: Float = -60
-    private let meterMaxDB: Float = 6
+    // Visible meter range: -48 to 0 dB
+    // Below -48 = bar is empty. At/above 0 = bar is full + clip indicator.
+    private let meterMinDB: Float = -48
+    private let meterMaxDB: Float = 0
 
-    // Color boundary dB values
-    private let greenEndDB: Float = -12
-    private let yellowEndDB: Float = -6
-    private let orangeEndDB: Float = 0
-    // Red ends at +6 dB
+    // Color boundaries:
+    //   Green:  -48 to -12 dB (safe)
+    //   Yellow: -12 to  -6 dB (optimal)
+    //   Orange:  -6 to  -3 dB (hot)
+    //   Red:     -3 to   0 dB (near clipping)
 
-    // dB scale tick marks at key boundaries (positions computed from dB)
+    // Limiter ceiling drag range
+    private let limiterMinDB: Float = -6
+    private let limiterMaxDB: Float = 0
+
+    // Tick marks at key dB boundaries
     private var scaleMarks: [(db: String, position: CGFloat)] {
         [
-            ("-48", dbToPosition(-48)),
             ("-36", dbToPosition(-36)),
             ("-24", dbToPosition(-24)),
-            ("-18", dbToPosition(-18)),
             ("-12", dbToPosition(-12)),
             ("-6",  dbToPosition(-6)),
             ("0",   dbToPosition(0)),
-            ("+6",  dbToPosition(6)),
         ]
     }
 
-    // Single flat color based on current peak level
+    // Meter color based on current dB level
     private var meterColor: Color {
-        let greenEnd = dbToPosition(greenEndDB)   // -18 dB → ~0.70
-        let yellowEnd = dbToPosition(yellowEndDB)  // -12 dB → ~0.80
-        let orangeEnd = dbToPosition(orangeEndDB)  // -6 dB → ~0.90
-        if displayLevel >= orangeEnd {
+        let dB = displayLevelDb
+        if dB >= -3 {
             return .red
-        } else if displayLevel >= yellowEnd {
+        } else if dB >= -6 {
             return .orange
-        } else if displayLevel >= greenEnd {
+        } else if dB >= -12 {
             return .yellow
         } else {
             return .green
         }
     }
 
-    private let clipThreshold: Float = 60.0 / 66.0  // 0 dBFS triggers clip indicator (0 dB position in -60..+6 range)
+    // Current display level in dB (for color logic)
+    private var displayLevelDb: Float {
+        Float(displayLevel) * (meterMaxDB - meterMinDB) + meterMinDB
+    }
 
     @State private var displayLevel: CGFloat = 0
     @State private var peakHoldLevel: CGFloat = 0
@@ -473,92 +475,239 @@ struct LevelMeterBar: View {
     @State private var clipTask: Task<Void, Never>?
     @State private var peakHoldTask: Task<Void, Never>?
 
-    /// Convert a dB value (-60..+6) to a normalized position (0..1) on the meter.
-    /// Uses a linear dB scale — since dB is already logarithmic, a linear mapping
-    /// of dB values produces the correct perceptual spacing for a professional meter.
+    // Limiter ceiling drag state
+    @State private var isDraggingCeiling = false
+    @State private var dragStartDb: Float?
+    @State private var showCeilingLabel = false
+    @State private var ceilingLabelTask: Task<Void, Never>?
+
+    /// Convert a dB value to a normalized position (0..1) on the visible meter (-12..0).
     private func dbToPosition(_ dB: Float) -> CGFloat {
         let clamped = max(meterMinDB, min(meterMaxDB, dB))
         return CGFloat((clamped - meterMinDB) / (meterMaxDB - meterMinDB))
     }
 
-    /// Convert a normalized level (0..1, representing -60..+6 dB linearly)
-    /// to a meter display position. Since the input is already in linear-dB space
-    /// (computed in RecorderManager), we use it directly — no additional warping needed.
+    /// Convert a normalized meter position (0..1) back to dB value (-12..0)
+    private func positionToDb(_ position: CGFloat) -> Float {
+        return Float(position) * (meterMaxDB - meterMinDB) + meterMinDB
+    }
+
+    /// Convert input level (0..1 representing -60..+6 dB) to display position (0..1 on -12..0 range).
+    /// Levels below -12 dB map to 0 (empty bar). Levels at/above 0 dB map to 1 (full bar).
     private func levelToPosition(_ level: Float) -> CGFloat {
-        return CGFloat(max(0, min(1, level)))
+        // Convert input level to dB
+        let inputRange = inputMaxDB - inputMinDB  // 66
+        let dB = Float(level) * inputRange + inputMinDB
+        // Map to display range
+        let displayRange = meterMaxDB - meterMinDB  // 12
+        let position = (dB - meterMinDB) / displayRange
+        return CGFloat(max(0, min(1, position)))
+    }
+
+    /// Check if the input level is at or above 0 dBFS (clipping)
+    private func isLevelClipping(_ level: Float) -> Bool {
+        let inputRange = inputMaxDB - inputMinDB
+        let dB = Float(level) * inputRange + inputMinDB
+        return dB >= 0
+    }
+
+    /// Snap a dB value to the nearest 0.5 dB increment, clamped to limiter range
+    private func snapCeilingDb(_ dB: Float) -> Float {
+        let clamped = max(limiterMinDB, min(limiterMaxDB, dB))
+        return (clamped * 2).rounded() / 2
+    }
+
+    /// Current limiter ceiling dB from app state
+    private var limiterCeilingDb: Float {
+        appState.appSettings.recordingInputSettings.limiterCeilingDb
+    }
+
+    /// Whether the limiter is enabled
+    private var limiterEnabled: Bool {
+        appState.appSettings.recordingInputSettings.limiterEnabled
+    }
+
+    /// Format ceiling dB for display
+    private var ceilingDisplayString: String {
+        let db = limiterCeilingDb
+        if db == 0 { return "0 dB" }
+        return String(format: "%.1f dB", db)
     }
 
     var body: some View {
-        VStack(spacing: 2) {
-            // Meter bar with gradient
+        VStack(spacing: 0) {
+            // Combined meter + limiter in a single geometry
             GeometryReader { geo in
                 let width = geo.size.width
+                let meterY: CGFloat = 22 // vertical center of the 4pt meter bar
+                let meterHeight: CGFloat = 4
 
-                ZStack(alignment: .leading) {
-                    // Background track with subtle segmented dB marks
-                    Capsule()
-                        .fill(Color.gray.opacity(0.15))
+                ZStack(alignment: .topLeading) {
+                    // ── Meter bar (centered at meterY) ──
+                    ZStack(alignment: .leading) {
+                        // Background track
+                        Capsule()
+                            .fill(Color.gray.opacity(0.15))
 
-                    // Filled meter with single flat color based on level
-                    Capsule()
-                        .fill(meterColor)
-                        .frame(width: max(0, min(displayLevel * width, width)))
+                        // Filled meter
+                        Capsule()
+                            .fill(meterColor)
+                            .frame(width: max(0, min(displayLevel * width, width)))
 
-                    // Peak hold indicator (thin white line that holds then decays)
-                    if peakHoldLevel > 0.01 && !isPaused {
-                        let peakX = min(peakHoldLevel * width, width - 1)
+                        // Peak hold indicator
+                        if peakHoldLevel > 0.01 && !isPaused {
+                            let peakX = min(peakHoldLevel * width, width - 1)
+                            Rectangle()
+                                .fill(Color.white.opacity(0.9))
+                                .frame(width: 2, height: meterHeight)
+                                .position(x: peakX, y: meterHeight / 2)
+                                .shadow(color: .white.opacity(0.5), radius: 1)
+                        }
+
+                        // Clip dot at far right
+                        if isClipping && !isPaused {
+                            HStack {
+                                Spacer()
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 6, height: 6)
+                                    .shadow(color: .red.opacity(0.8), radius: 3)
+                            }
+                        }
+
+                        // dB tick lines
+                        ForEach(scaleMarks, id: \.db) { mark in
+                            let x = mark.position * width
+                            Rectangle()
+                                .fill(palette.textSecondary.opacity(0.3))
+                                .frame(width: 1, height: meterHeight)
+                                .position(x: min(x, width - 1), y: meterHeight / 2)
+                        }
+                    }
+                    .frame(height: meterHeight)
+                    .clipShape(Capsule())
+                    .offset(y: meterY - meterHeight / 2)
+
+                    // ── Limiter ceiling handle ──
+                    let ceilingPos = dbToPosition(limiterCeilingDb) * width
+                    let handleX = min(max(ceilingPos, 6), width - 6)
+                    let isActive = limiterEnabled || isDraggingCeiling
+
+                    // Vertical line from handle down through meter
+                    if isActive {
                         Rectangle()
-                            .fill(Color.white.opacity(0.9))
-                            .frame(width: 2, height: geo.size.height)
-                            .position(x: peakX, y: geo.size.height / 2)
-                            .shadow(color: .white.opacity(0.5), radius: 1)
+                            .fill(Color.orange.opacity(isDraggingCeiling ? 0.9 : 0.5))
+                            .frame(width: isDraggingCeiling ? 2 : 1.5, height: 28)
+                            .position(x: handleX, y: meterY - 2)
                     }
 
-                    // Clip dot at far right
-                    if isClipping && !isPaused {
-                        HStack {
-                            Spacer()
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                                .shadow(color: .red.opacity(0.8), radius: 3)
+                    // Handle pill — larger, clearly draggable
+                    Group {
+                        if isActive || showCeilingLabel {
+                            // Active state: orange capsule with dB label
+                            HStack(spacing: 2) {
+                                if isDraggingCeiling || showCeilingLabel {
+                                    Text(ceilingDisplayString)
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.white)
+                                        .transition(.opacity)
+                                }
+                                Image(systemName: "line.3.horizontal")
+                                    .font(.system(size: 7, weight: .bold))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                            .padding(.horizontal, isDraggingCeiling || showCeilingLabel ? 6 : 4)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color.orange)
+                                    .shadow(color: Color.orange.opacity(0.4), radius: isDraggingCeiling ? 4 : 2)
+                            )
+                            .position(x: handleX, y: 8)
+                            .animation(.easeInOut(duration: 0.15), value: isDraggingCeiling)
+                            .animation(.easeInOut(duration: 0.15), value: showCeilingLabel)
+                        } else {
+                            // Inactive ghost: subtle capsule at 0 dB
+                            let ghostX = min(max(dbToPosition(0) * width, 6), width - 6)
+                            HStack(spacing: 2) {
+                                Image(systemName: "line.3.horizontal")
+                                    .font(.system(size: 7, weight: .medium))
+                                    .foregroundColor(palette.textSecondary.opacity(0.3))
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(palette.textSecondary.opacity(0.1))
+                            )
+                            .position(x: ghostX, y: 8)
                         }
                     }
 
-                    // dB tick lines at key boundaries
-                    ForEach(scaleMarks, id: \.db) { mark in
+                    // ── dB labels below meter ──
+                    let labelMarks: [(db: String, position: CGFloat)] = [
+                        ("-12", dbToPosition(-12)),
+                        ("-6",  dbToPosition(-6)),
+                        ("0",   dbToPosition(0)),
+                    ]
+                    ForEach(labelMarks, id: \.db) { mark in
                         let x = mark.position * width
-                        Rectangle()
-                            .fill(palette.textSecondary.opacity(0.3))
-                            .frame(width: 1)
-                            .position(x: min(x, width - 1), y: geo.size.height / 2)
+                        Text(mark.db)
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundColor(palette.textSecondary.opacity(0.6))
+                            .position(x: min(max(x, 10), width - 8), y: meterY + meterHeight / 2 + 7)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            if !isDraggingCeiling {
+                                isDraggingCeiling = true
+                                showCeilingLabel = true
+                                dragStartDb = limiterCeilingDb
+                                ceilingLabelTask?.cancel()
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            }
+                            let normalizedX = value.location.x / width
+                            let rawDb = positionToDb(normalizedX)
+                            let snappedDb = snapCeilingDb(rawDb)
+
+                            appState.appSettings.recordingInputSettings.limiterCeilingDb = snappedDb
+                            if !appState.appSettings.recordingInputSettings.limiterEnabled {
+                                appState.appSettings.recordingInputSettings.limiterEnabled = true
+                            }
+                            appState.recorder.inputSettings = appState.appSettings.recordingInputSettings
+                        }
+                        .onEnded { _ in
+                            isDraggingCeiling = false
+                            dragStartDb = nil
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            // Keep label visible for 2 seconds after release
+                            ceilingLabelTask?.cancel()
+                            ceilingLabelTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                                guard !Task.isCancelled else { return }
+                                showCeilingLabel = false
+                            }
+                        }
+                )
+                .onTapGesture {
+                    // Single tap toggles the dB label visibility
+                    if limiterEnabled {
+                        showCeilingLabel.toggle()
+                        if showCeilingLabel {
+                            ceilingLabelTask?.cancel()
+                            ceilingLabelTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                                guard !Task.isCancelled else { return }
+                                showCeilingLabel = false
+                            }
+                        }
                     }
                 }
             }
-            .frame(height: 4)
-            .clipShape(Capsule())
-
-            // dB labels below the meter
-            GeometryReader { geo in
-                let width = geo.size.width
-                // Show a subset of labels to avoid crowding
-                let labelMarks: [(db: String, position: CGFloat)] = [
-                    ("-48", dbToPosition(-48)),
-                    ("-24", dbToPosition(-24)),
-                    ("-12", dbToPosition(-12)),
-                    ("-6",  dbToPosition(-6)),
-                    ("0",   dbToPosition(0)),
-                    ("+6",  dbToPosition(6)),
-                ]
-                ForEach(labelMarks, id: \.db) { mark in
-                    let x = mark.position * width
-                    Text(mark.db)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(palette.textSecondary.opacity(0.6))
-                        .position(x: min(max(x, 10), width - 8), y: 5)
-                }
-            }
-            .frame(height: 10)
+            .frame(height: 34)
         }
         .animation(.easeOut(duration: 0.08), value: displayLevel)
         .onChange(of: level) { _, newLevel in
@@ -585,7 +734,7 @@ struct LevelMeterBar: View {
             }
 
             // Hold clip indicator for 1 second after clipping detected
-            if newLevel >= clipThreshold && !isPaused {
+            if isLevelClipping(newLevel) && !isPaused {
                 isClipping = true
                 clipTask?.cancel()
                 clipTask = Task { @MainActor in

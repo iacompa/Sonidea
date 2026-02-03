@@ -163,6 +163,7 @@ struct RecordingDetailView: View {
     @State private var appliedEchoDamping: Float = 0.3
     @State private var appliedEchoWetDry: Float = 0.3
     @State private var hasEchoApplied = false
+    @State private var hasPresetApplied = false
     @State private var showDiscardEffectsAlert = false
 
     @State private var editedIconColor: Color
@@ -1187,7 +1188,11 @@ struct RecordingDetailView: View {
                             eqSettings: $localEQSettings,
                             onEQChanged: {
                                 saveEQSettings()
-                            }
+                            },
+                            onApplyPreset: { params in
+                                applyPreset(params: params)
+                            },
+                            onRemovePreset: { removePreset() }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -1361,6 +1366,7 @@ struct RecordingDetailView: View {
         if hasCompressApplied { effects.insert(.compress) }
         if hasReverbApplied { effects.insert(.reverb) }
         if hasEchoApplied { effects.insert(.echo) }
+        if hasPresetApplied { effects.insert(.presets) }
         return effects
     }
 
@@ -1379,6 +1385,7 @@ struct RecordingDetailView: View {
         hasCompressApplied = false
         hasReverbApplied = false
         hasEchoApplied = false
+        hasPresetApplied = false
         appliedFadeIn = 0
         appliedFadeOut = 0
         appliedFadeCurve = .sCurve
@@ -1970,6 +1977,53 @@ struct RecordingDetailView: View {
                     if wasPlaying { playback.play() }
                 }
             }
+        }
+    }
+
+    private func applyPreset(params: AudioEditor.CombinedPresetParams) {
+        silenceMode = .idle
+        if hasPresetApplied { undoLastEdit() }
+        hasPresetApplied = true
+        // Also mark individual effects as applied for the appliedEffects dot indicators
+        if params.hasCompression { hasCompressApplied = true }
+        if params.hasReverb { hasReverbApplied = true }
+        if params.hasEcho { hasEchoApplied = true }
+
+        let undoSnapshot = createUndoSnapshot(description: "Preset")
+        editHistory.pushUndo(undoSnapshot)
+
+        let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
+
+        Task {
+            let result = await AudioEditor.shared.applyCombinedPreset(
+                sourceURL: sourceURL,
+                params: params
+            )
+            await MainActor.run {
+                if result.success {
+                    pendingAudioEdit = result.outputURL
+                    pendingDuration = result.newDuration
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = 0
+                    playback.load(url: result.outputURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
+                }
+            }
+        }
+    }
+
+    private func removePreset() {
+        if hasPresetApplied {
+            undoLastEdit()
+            hasPresetApplied = false
+            hasCompressApplied = false
+            hasReverbApplied = false
+            hasEchoApplied = false
         }
     }
 

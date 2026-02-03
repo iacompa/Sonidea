@@ -19,6 +19,7 @@ struct MixerView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 // Channel strips + Master fader
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -84,6 +85,7 @@ struct MixerView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            }
             .background(palette.background)
             .navigationTitle("Mixer")
             .navigationBarTitleDisplayMode(.inline)
@@ -139,7 +141,7 @@ struct MixerView: View {
                         }
                     }
                 }
-                .frame(width: 28, height: 150)
+                .frame(width: 28, height: 200)
             }
 
             // Match channel strip height (pan area)
@@ -216,7 +218,7 @@ struct ChannelStripView: View {
                         }
                     }
                 }
-                .frame(width: 28, height: 150)
+                .frame(width: 28, height: 200)
             }
 
             // Pan knob (simplified as slider)

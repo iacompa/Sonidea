@@ -304,8 +304,6 @@ struct TipJarView: View {
                     Divider().padding(.leading, 52)
                     FeatureCheckRow(icon: "slider.vertical.3", text: "Mixer & mixdown", included: true)
                     Divider().padding(.leading, 52)
-                    FeatureCheckRow(icon: "music.note", text: "Metronome & click track", included: true)
-                    Divider().padding(.leading, 52)
                     FeatureCheckRow(icon: "slider.horizontal.3", text: "Live recording effects", included: true)
                 }
                 .padding(.vertical, 4)
@@ -775,8 +773,6 @@ struct PaywallView: View {
                 FeatureLossRow(icon: "sparkles", text: "Auto-select icons")
                 Divider().padding(.leading, 52)
                 FeatureLossRow(icon: "slider.vertical.3", text: "Mixer & mixdown")
-                Divider().padding(.leading, 52)
-                FeatureLossRow(icon: "music.note", text: "Metronome & click track")
             }
             .padding(.vertical, 4)
             .background(palette.cardBackground)

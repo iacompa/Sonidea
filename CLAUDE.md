@@ -170,7 +170,8 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 - iPad uses `sizeClass == .regular` checks for adaptive layout (wider top padding, fullScreenCover for sheets)
 - Watch uses PBXFileSystemSynchronizedRootGroup — Xcode auto-syncs with filesystem
 - Watch app icon matches iOS app icon (Sonidea waveform logo)
-- **watchOS asset catalog rule:** The watch AppIcon.appiconset `Contents.json` must use `"platform": "watchos"` (lowercase). Using `"watchOS"` (camelCase) causes App Store Connect to reject the upload with "Missing Icons" errors. File: `SonideaWatch Watch App/Assets.xcassets/AppIcon.appiconset/Contents.json`
+- **watchOS asset catalog rule:** The watch AppIcon.appiconset `Contents.json` must use `"platform": "watchos"` (lowercase). Using `"watchOS"` (camelCase) causes App Store Connect to reject the upload with "Missing Icons" errors. File: `SonideaWatch Watch App/Assets.xcassets/AppIcon.appiconset/Contents.json`. The Contents.json has both a `"platform": "watchos"` entry and a `"platform": "ios"` entry (same PNG) so the asset catalog compiles on both platforms.
+- **CRITICAL: xcodebuild for simulator** — Do NOT use `-sdk iphonesimulator` when building the Sonidea scheme. It forces ALL targets (including the Watch app) to compile against the iOS simulator SDK, which breaks WatchKit imports and watchOS-only assets. Instead, use: `xcodebuild -project Sonidea.xcodeproj -scheme Sonidea -destination 'id=<simulator-id>' build` — Xcode automatically picks the correct SDK per target.
 
 ## Recent Changes (this session)
 - Removed Dual Mono and Spatial recording modes (were not functionally different from Stereo)

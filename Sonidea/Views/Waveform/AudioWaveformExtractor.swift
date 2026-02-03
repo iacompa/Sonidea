@@ -122,6 +122,7 @@ struct WaveformData: Equatable, Codable {
             for i in 0..<targetCount {
                 let start = Int(Float(i) * samplesPerBucket)
                 let end = min(Int(Float(i + 1) * samplesPerBucket), count)
+                guard start < end else { result.append(0); continue }
                 var maxVal: Float = 0
                 for j in start..<end {
                     if samples[base + j] > maxVal { maxVal = samples[base + j] }
@@ -155,6 +156,7 @@ struct WaveformData: Equatable, Codable {
             for i in 0..<targetCount {
                 let start = Int(Float(i) * samplesPerBucket)
                 let end = min(Int(Float(i + 1) * samplesPerBucket), samples.count)
+                guard start < end else { result.append(0); continue }
                 var maxVal: Float = 0
                 for j in start..<end {
                     if samples[j] > maxVal { maxVal = samples[j] }
@@ -525,7 +527,12 @@ actor AudioWaveformExtractor {
         let exitHoldCount = Int(ceil(silenceExitHoldMs / rmsHopMs))
 
         // Calculate number of analysis frames
-        let frameCount2 = max(0, (length - windowSizeSamples) / hopSizeSamples + 1)
+        let frameCount2 = length > windowSizeSamples ? (length - windowSizeSamples) / hopSizeSamples + 1 : 0
+
+        guard frameCount2 > 0 else {
+            logger.info("Audio too short for silence detection (length=\(length), windowSize=\(windowSizeSamples))")
+            return []
+        }
 
         logger.debug("Silence detection: threshold=\(silenceThreshold)dB, hysteresis=\(nonSilenceThreshold)dB, window=\(self.rmsWindowMs)ms, hop=\(self.rmsHopMs)ms, enterHold=\(enterHoldCount), exitHold=\(exitHoldCount)")
 
@@ -559,6 +566,13 @@ actor AudioWaveformExtractor {
             // Process analysis windows whose start falls in [chunkStartSample, chunkStartSample + silenceChunkFrameCount)
             let firstFrameIndex = chunkStartSample == 0 ? 0 : (chunkStartSample + hopSizeSamples - 1) / hopSizeSamples
 
+            // Guard: firstFrameIndex can exceed frameCount2 when audio properties change
+            // (e.g., after an effect modifies the file). Avoid Range crash.
+            guard firstFrameIndex < frameCount2 else {
+                chunkStartSample += silenceChunkFrameCount
+                continue
+            }
+
             for frameIndex in firstFrameIndex..<frameCount2 {
                 let sampleStart = frameIndex * hopSizeSamples
                 if sampleStart >= chunkStartSample + silenceChunkFrameCount { break }
@@ -567,7 +581,7 @@ actor AudioWaveformExtractor {
                 let localStart = sampleStart - chunkStartSample
                 let localEnd = sampleEnd - chunkStartSample
 
-                guard localEnd <= actualFrames else { break }
+                guard localEnd <= actualFrames, localStart < localEnd else { break }
                 let sampleCount = localEnd - localStart
                 guard sampleCount > 0 else { continue }
 
@@ -845,6 +859,7 @@ actor AudioWaveformExtractor {
         for i in 0..<targetCount {
             let start = Int(Double(i) * bucketSize)
             let end = min(Int(Double(i + 1) * bucketSize), source.count)
+            guard start < end else { result.append(0); continue }
             var maxVal: Float = 0
             for j in start..<end {
                 if source[j] > maxVal { maxVal = source[j] }

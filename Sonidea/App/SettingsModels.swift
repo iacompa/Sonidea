@@ -335,7 +335,7 @@ struct RecordingInputSettings: Codable, Equatable {
             parts.append("Gain \(gainDisplayString)")
         }
 
-        if limiterEnabled {
+        if limiterEnabled && limiterCeilingDb < 0 {
             parts.append("Limiter \(ceilingDisplayString)")
         }
 
