@@ -30,6 +30,9 @@ struct RecordingsListView: View {
     @State private var recordingToMove: RecordingItem?
     @State private var recordingToTag: RecordingItem?
 
+    // Bulk export format picker
+    @State private var showBulkFormatPicker = false
+
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext? = nil
     @State private var showTipJar = false
@@ -124,6 +127,11 @@ struct RecordingsListView: View {
                 ShareSheet(items: [url])
             }
         }
+        .sheet(isPresented: $showBulkFormatPicker) {
+            BulkExportFormatPicker { formats in
+                exportSelectedRecordings(formats: formats)
+            }
+        }
         .iPadSheet(item: $recordingToMove) { recording in
             MoveToAlbumSheet(recording: recording)
         }
@@ -167,6 +175,13 @@ struct RecordingsListView: View {
         }
         .onChange(of: appState.recordingsContentVersion) { _, _ in
             cachedGroupedRecordings = computeGroupedRecordings()
+        }
+        .onChange(of: appState.pendingNavigationRecordingID) { _, newID in
+            guard let recordingID = newID else { return }
+            appState.pendingNavigationRecordingID = nil
+            if let recording = appState.activeRecordings.first(where: { $0.id == recordingID }) {
+                selectedRecording = recording
+            }
         }
     }
 
@@ -291,7 +306,7 @@ struct RecordingsListView: View {
                 isEnabled: hasSelection,
                 isDestructive: false
             ) {
-                exportSelectedRecordings()
+                showBulkFormatPicker = true
             }
 
             Divider()
@@ -476,13 +491,14 @@ struct RecordingsListView: View {
         }
     }
 
-    private func exportSelectedRecordings() {
+    private func exportSelectedRecordings(formats: Set<ExportFormat>) {
         let selectedRecordings = appState.activeRecordings.filter { selectedRecordingIDs.contains($0.id) }
         Task {
             do {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
                     selectedRecordings,
                     scope: .all,
+                    formats: formats,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )

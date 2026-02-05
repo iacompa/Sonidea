@@ -737,6 +737,7 @@ struct PaywallView: View {
     @State private var isExporting = false
     @State private var showShareSheet = false
     @State private var exportedZIPURL: URL?
+    @State private var showBulkFormatPicker = false
 
     var body: some View {
         VStack(spacing: 32) {
@@ -814,7 +815,7 @@ struct PaywallView: View {
 
                 // Export demoted to small text link
                 Button {
-                    exportAllRecordings()
+                    showBulkFormatPicker = true
                 } label: {
                     Text("Export all recordings")
                         .font(.caption)
@@ -852,15 +853,21 @@ struct PaywallView: View {
                 ShareSheet(items: [url])
             }
         }
+        .sheet(isPresented: $showBulkFormatPicker) {
+            BulkExportFormatPicker { formats in
+                exportAllRecordings(formats: formats)
+            }
+        }
     }
 
-    private func exportAllRecordings() {
+    private func exportAllRecordings(formats: Set<ExportFormat>) {
         isExporting = true
         Task {
             do {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
                     appState.activeRecordings,
                     scope: .all,
+                    formats: formats,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )

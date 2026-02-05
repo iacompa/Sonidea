@@ -36,6 +36,22 @@ struct EchoPreset: Identifiable {
     let wetDry: Float
 }
 
+struct GatePreset: Identifiable {
+    let id: String
+    let name: String
+    let threshold: Float
+    let attack: Float
+    let release: Float
+    let hold: Float
+    let floor: Float
+}
+
+struct EQPreset: Identifiable {
+    let id: String
+    let name: String
+    let bands: [EQBandSettings]  // 4 bands
+}
+
 struct MasterPreset: Identifiable {
     let id: String
     let name: String
@@ -58,6 +74,40 @@ struct MasterPreset: Identifiable {
 }
 
 enum EffectPresets {
+    // MARK: - EQ Presets
+    static let eq: [EQPreset] = [
+        EQPreset(id: "eq1", name: "Vocal Presence", bands: [
+            EQBandSettings(frequency: 100, gain: 0, q: 1.0),
+            EQBandSettings(frequency: 400, gain: -1.5, q: 0.8),
+            EQBandSettings(frequency: 3000, gain: 4, q: 1.2),
+            EQBandSettings(frequency: 10000, gain: 2, q: 0.7)
+        ]),
+        EQPreset(id: "eq2", name: "Bass Boost", bands: [
+            EQBandSettings(frequency: 80, gain: 6, q: 0.8),
+            EQBandSettings(frequency: 250, gain: 3, q: 1.0),
+            EQBandSettings(frequency: 2000, gain: 0, q: 1.0),
+            EQBandSettings(frequency: 8000, gain: -1, q: 0.7)
+        ]),
+        EQPreset(id: "eq3", name: "Bright & Airy", bands: [
+            EQBandSettings(frequency: 100, gain: -1, q: 1.0),
+            EQBandSettings(frequency: 350, gain: -2.5, q: 0.9),
+            EQBandSettings(frequency: 5000, gain: 3, q: 1.0),
+            EQBandSettings(frequency: 12000, gain: 5, q: 0.6)
+        ]),
+        EQPreset(id: "eq4", name: "Warm & Smooth", bands: [
+            EQBandSettings(frequency: 120, gain: 3, q: 0.7),
+            EQBandSettings(frequency: 500, gain: 1, q: 1.0),
+            EQBandSettings(frequency: 3000, gain: -1, q: 1.2),
+            EQBandSettings(frequency: 8000, gain: -3.5, q: 0.6)
+        ]),
+        EQPreset(id: "eq5", name: "De-Mud", bands: [
+            EQBandSettings(frequency: 80, gain: -2, q: 1.0),
+            EQBandSettings(frequency: 300, gain: -4, q: 1.2),
+            EQBandSettings(frequency: 4000, gain: 3.5, q: 1.0),
+            EQBandSettings(frequency: 10000, gain: 2.5, q: 0.7)
+        ]),
+    ]
+
     // MARK: - Reverb Presets
     static let reverb: [ReverbPreset] = [
         ReverbPreset(id: "r1", name: "Small Room", roomSize: 0.4, preDelay: 5, decay: 0.5, damping: 0.6, wetDry: 0.2),
@@ -83,6 +133,15 @@ enum EffectPresets {
         EchoPreset(id: "e3", name: "Tape Echo", delay: 0.35, feedback: 0.45, damping: 0.6, wetDry: 0.25),
         EchoPreset(id: "e4", name: "Spacious", delay: 0.5, feedback: 0.5, damping: 0.4, wetDry: 0.2),
         EchoPreset(id: "e5", name: "Rhythmic", delay: 0.2, feedback: 0.6, damping: 0.3, wetDry: 0.3),
+    ]
+
+    // MARK: - Gate Presets
+    static let gate: [GatePreset] = [
+        GatePreset(id: "g1", name: "Light", threshold: -50, attack: 3, release: 80, hold: 60, floor: -20),
+        GatePreset(id: "g2", name: "Voice", threshold: -40, attack: 5, release: 50, hold: 50, floor: -40),
+        GatePreset(id: "g3", name: "Interview", threshold: -35, attack: 5, release: 60, hold: 80, floor: -30),
+        GatePreset(id: "g4", name: "Podcast", threshold: -30, attack: 3, release: 40, hold: 40, floor: -60),
+        GatePreset(id: "g5", name: "Aggressive", threshold: -25, attack: 2, release: 30, hold: 30, floor: -80),
     ]
 
     // MARK: - Master Presets (combined genre presets)
@@ -248,7 +307,8 @@ struct EditToolButton: View {
 struct FadeCurveOverlay: View {
     let fadeInDuration: TimeInterval
     let fadeOutDuration: TimeInterval
-    let curve: FadeCurve
+    let fadeInCurve: FadeCurve
+    let fadeOutCurve: FadeCurve
     let totalDuration: TimeInterval
 
     @Environment(\.themePalette) private var palette
@@ -272,7 +332,8 @@ struct FadeCurveOverlay: View {
                     startX: 0,
                     endX: fadeInEndX,
                     height: h,
-                    isFadeIn: true
+                    isFadeIn: true,
+                    curve: fadeInCurve
                 )
             }
 
@@ -283,7 +344,8 @@ struct FadeCurveOverlay: View {
                     startX: fadeOutStartX,
                     endX: w,
                     height: h,
-                    isFadeIn: false
+                    isFadeIn: false,
+                    curve: fadeOutCurve
                 )
             }
         }
@@ -295,7 +357,8 @@ struct FadeCurveOverlay: View {
         startX: CGFloat,
         endX: CGFloat,
         height: CGFloat,
-        isFadeIn: Bool
+        isFadeIn: Bool,
+        curve: FadeCurve
     ) {
         let regionWidth = endX - startX
         guard regionWidth > 0 else { return }
@@ -355,7 +418,7 @@ struct FadeCurveOverlay: View {
 // MARK: - Edit Tool Type
 
 enum EditToolType: String, CaseIterable, Identifiable {
-    case eq, fade, peak, gate, compress, reverb, echo, presets
+    case presets, eq, fade, peak, gate, compress, reverb, echo
 
     var id: String { rawValue }
 
@@ -502,6 +565,7 @@ struct UnifiedEditToolbar: View {
     private func buttonForeground(for tool: EditToolType) -> Color {
         if activeEffect == tool { return .white }
         if !isPro { return palette.textTertiary }
+        if tool == .presets { return .white }
         if appliedEffects.contains(tool) { return palette.accent }
         return palette.accent
     }
@@ -509,6 +573,7 @@ struct UnifiedEditToolbar: View {
     private func buttonBackground(for tool: EditToolType) -> Color {
         if activeEffect == tool { return palette.accent }
         if !isPro { return palette.inputBackground }
+        if tool == .presets { return palette.accent.opacity(0.7) }
         if appliedEffects.contains(tool) { return palette.accent.opacity(0.15) }
         return palette.accent.opacity(0.12)
     }
@@ -531,22 +596,29 @@ struct EffectParameterPanel: View {
     // Fade
     @Binding var fadeIn: Double
     @Binding var fadeOut: Double
-    @Binding var fadeCurve: FadeCurve
+    @Binding var fadeInCurve: FadeCurve
+    @Binding var fadeOutCurve: FadeCurve
     let fadeDuration: TimeInterval
     let hasFadeApplied: Bool
-    let onApplyFade: (TimeInterval, TimeInterval, FadeCurve) -> Void
+    let onApplyFade: (TimeInterval, TimeInterval, FadeCurve, FadeCurve) -> Void
     let onRemoveFade: () -> Void
 
-    // Peak
+    // Peak / LUFS Normalize
+    @Binding var normalizeMode: NormalizeMode
     @Binding var peakTarget: Float
+    @Binding var lufsTarget: Float
     let hasPeakApplied: Bool
-    let onApplyPeak: (Float) -> Void
+    let onApplyPeak: (NormalizeMode, Float) -> Void
     let onRemovePeak: () -> Void
 
     // Gate
     @Binding var gateThreshold: Float
+    @Binding var gateAttack: Float
+    @Binding var gateRelease: Float
+    @Binding var gateHold: Float
+    @Binding var gateFloor: Float
     let hasGateApplied: Bool
-    let onApplyGate: (Float) -> Void
+    let onApplyGate: (Float, Float, Float, Float, Float) -> Void
     let onRemoveGate: () -> Void
 
     // Compress
@@ -584,17 +656,26 @@ struct EffectParameterPanel: View {
     let onApplyPreset: (AudioEditor.CombinedPresetParams) -> Void
     let onRemovePreset: () -> Void
 
+    // Reset to Original
+    let hasOriginalBackup: Bool
+    let onResetToOriginal: () -> Void
+
     // Preset selection indices (-1 = default/no preset)
+    @State private var gatePresetIndex: Int = -1
     @State private var compPresetIndex: Int = -1
     @State private var reverbPresetIndex: Int = -1
     @State private var echoPresetIndex: Int = -1
+    @State private var eqPresetIndex: Int = -1
     @State private var masterPresetIndex: Int = -1
 
-    // Per-tool debounce tasks
+    // Per-tool debounce tasks (only used for EQ which is non-destructive real-time)
     @State private var debounceTasks: [EditToolType: Task<Void, Never>] = [:]
 
-    // Debounce interval in nanoseconds (400ms)
+    // Debounce interval in nanoseconds (400ms) - only for EQ
     private let debounceNanos: UInt64 = 400_000_000
+
+    // Reset to Original confirmation alert
+    @State private var showResetToOriginalAlert = false
 
     private var maxFade: Double { min(5.0, fadeDuration / 2) }
 
@@ -615,9 +696,16 @@ struct EffectParameterPanel: View {
 
     static let defaultFadeIn: Double = 0
     static let defaultFadeOut: Double = 0
-    static let defaultFadeCurve: FadeCurve = .sCurve
+    static let defaultFadeInCurve: FadeCurve = .sCurve
+    static let defaultFadeOutCurve: FadeCurve = .sCurve
+    static let defaultNormalizeMode: NormalizeMode = .peak
     static let defaultPeakTarget: Float = -0.3
+    static let defaultLufsTarget: Float = -16.0
     static let defaultGateThreshold: Float = -40
+    static let defaultGateAttack: Float = 5
+    static let defaultGateRelease: Float = 50
+    static let defaultGateHold: Float = 50
+    static let defaultGateFloor: Float = -80
     static let defaultCompGain: Float = 0
     static let defaultCompReduction: Float = 0
     static let defaultCompMix: Float = 1.0
@@ -636,11 +724,13 @@ struct EffectParameterPanel: View {
         case .eq:
             return eqSettings == .flat
         case .fade:
-            return fadeIn == Self.defaultFadeIn && fadeOut == Self.defaultFadeOut && fadeCurve == Self.defaultFadeCurve
+            return fadeIn == Self.defaultFadeIn && fadeOut == Self.defaultFadeOut && fadeInCurve == Self.defaultFadeInCurve && fadeOutCurve == Self.defaultFadeOutCurve
         case .peak:
-            return peakTarget == Self.defaultPeakTarget
+            return normalizeMode == Self.defaultNormalizeMode && peakTarget == Self.defaultPeakTarget && lufsTarget == Self.defaultLufsTarget
         case .gate:
-            return gateThreshold == Self.defaultGateThreshold
+            return gateThreshold == Self.defaultGateThreshold && gateAttack == Self.defaultGateAttack
+                && gateRelease == Self.defaultGateRelease && gateHold == Self.defaultGateHold
+                && gateFloor == Self.defaultGateFloor
         case .compress:
             return compGain == Self.defaultCompGain && compReduction == Self.defaultCompReduction && compMix == Self.defaultCompMix
         case .reverb:
@@ -666,6 +756,27 @@ struct EffectParameterPanel: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
             }
+
+            if hasOriginalBackup && activeEffect == .presets {
+                Button {
+                    showResetToOriginalAlert = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Reset to Original")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .foregroundColor(.red)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(10)
+                }
+                .disabled(isProcessing)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .background(
@@ -673,6 +784,14 @@ struct EffectParameterPanel: View {
                 .fill(palette.cardBackground.opacity(0.97))
                 .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
         )
+        .alert("Reset to Original", isPresented: $showResetToOriginalAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset", role: .destructive) {
+                onResetToOriginal()
+            }
+        } message: {
+            Text("This will discard all audio edits and restore the original recording. This cannot be undone.")
+        }
         .modifier(ToolOnChangeModifier(
             selectedTool: activeEffect,
             onFadeChanged: debouncedApplyFade,
@@ -681,9 +800,9 @@ struct EffectParameterPanel: View {
             onCompressChanged: debouncedApplyCompress,
             onReverbChanged: debouncedApplyReverb,
             onEchoChanged: debouncedApplyEcho,
-            fadeIn: fadeIn, fadeOut: fadeOut, fadeCurve: fadeCurve,
-            peakTarget: peakTarget,
-            gateThreshold: gateThreshold,
+            fadeIn: fadeIn, fadeOut: fadeOut, fadeInCurve: fadeInCurve, fadeOutCurve: fadeOutCurve,
+            normalizeMode: normalizeMode, peakTarget: peakTarget, lufsTarget: lufsTarget,
+            gateThreshold: gateThreshold, gateAttack: gateAttack, gateRelease: gateRelease, gateHold: gateHold, gateFloor: gateFloor,
             compGain: compGain, compReduction: compReduction, compMix: compMix,
             reverbRoomSize: reverbRoomSize, reverbPreDelay: reverbPreDelay,
             reverbDecay: reverbDecay, reverbDamping: reverbDamping, reverbWetDry: reverbWetDry,
@@ -728,19 +847,38 @@ struct EffectParameterPanel: View {
     }
 
     private var eqControls: some View {
-        ParametricEQView(
-            settings: $eqSettings,
-            onSettingsChanged: {
-                debouncedApplyEQ()
+        VStack(spacing: 10) {
+            PresetPicker(presets: EffectPresets.eq, nameKeyPath: \.name, selectedIndex: $eqPresetIndex) { preset in
+                if let p = preset {
+                    eqSettings = EQSettings(bands: p.bands)
+                } else {
+                    eqSettings = .flat
+                }
+                onEQChanged()
             }
-        )
+
+            ParametricEQView(
+                settings: $eqSettings,
+                onSettingsChanged: {
+                    eqPresetIndex = -1
+                    debouncedApplyEQ()
+                }
+            )
+        }
     }
 
     private var fadeControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             sliderRowDouble("Fade In", value: $fadeIn, range: 0...maxFade, step: 0.1, display: String(format: "%.1fs", fadeIn))
+            Picker("In Curve", selection: $fadeInCurve) {
+                ForEach(FadeCurve.allCases) { curve in
+                    Text(curve.displayName).tag(curve)
+                }
+            }
+            .pickerStyle(.segmented)
+
             sliderRowDouble("Fade Out", value: $fadeOut, range: 0...maxFade, step: 0.1, display: String(format: "%.1fs", fadeOut))
-            Picker("Curve", selection: $fadeCurve) {
+            Picker("Out Curve", selection: $fadeOutCurve) {
                 ForEach(FadeCurve.allCases) { curve in
                     Text(curve.displayName).tag(curve)
                 }
@@ -751,19 +889,131 @@ struct EffectParameterPanel: View {
 
     private var peakControls: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sliderRowFloat("Target Peak", value: $peakTarget, range: -6...0, step: 0.1, display: String(format: "%.1f dB", peakTarget))
-            Text("Adjusts volume so the loudest peak reaches the target level.")
-                .font(.caption2)
-                .foregroundColor(palette.textTertiary)
+            Picker("Mode", selection: $normalizeMode) {
+                ForEach(NormalizeMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if normalizeMode == .peak {
+                sliderRowFloat("Target Peak", value: $peakTarget, range: -6...0, step: 0.1, display: String(format: "%.1f dB", peakTarget))
+                Text("Adjusts volume so the loudest peak reaches the target level.")
+                    .font(.caption2)
+                    .foregroundColor(palette.textTertiary)
+            } else {
+                sliderRowFloat("Target LUFS", value: $lufsTarget, range: -24...(-9), step: 0.5, display: String(format: "%.1f LUFS", lufsTarget))
+                Text("Adjusts volume to match a target loudness (ITU-R BS.1770-4). -16 LUFS is standard for podcasts.")
+                    .font(.caption2)
+                    .foregroundColor(palette.textTertiary)
+            }
         }
     }
 
     private var gateControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sliderRowFloat("Threshold", value: $gateThreshold, range: -60...(-10), step: 1, display: String(format: "%.0f dB", gateThreshold))
-            Text("Silences audio below the threshold. Removes background noise between phrases.")
-                .font(.caption2)
-                .foregroundColor(palette.textTertiary)
+        VStack(spacing: 10) {
+        PresetPicker(presets: EffectPresets.gate, nameKeyPath: \.name, selectedIndex: $gatePresetIndex) { preset in
+            if let p = preset {
+                gateThreshold = p.threshold; gateAttack = p.attack; gateRelease = p.release
+                gateHold = p.hold; gateFloor = p.floor
+            } else {
+                gateThreshold = Self.defaultGateThreshold; gateAttack = Self.defaultGateAttack
+                gateRelease = Self.defaultGateRelease; gateHold = Self.defaultGateHold
+                gateFloor = Self.defaultGateFloor
+            }
+        }
+        VStack(spacing: 12) {
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Threshold")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $gateThreshold,
+                        range: -60...(-10),
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f dB", gateThreshold))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Floor")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $gateFloor,
+                        range: -80...(-6),
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f dB", gateFloor))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Attack")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $gateAttack,
+                        range: 1...50,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f ms", gateAttack))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    Text("Hold")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $gateHold,
+                        range: 10...500,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f ms", gateHold))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 4) {
+                    Text("Release")
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    EQKnob(
+                        value: $gateRelease,
+                        range: 10...500,
+                        color: palette.accent
+                    )
+                    Text(String(format: "%.0f ms", gateRelease))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                // Spacer column to balance the 3-2 layout
+                Color.clear
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        Text("Attenuates audio below the threshold. Removes background noise between phrases.")
+            .font(.caption2)
+            .foregroundColor(palette.textTertiary)
         }
     }
 
@@ -985,7 +1235,7 @@ struct EffectParameterPanel: View {
                         .foregroundColor(palette.textSecondary)
                     EQKnob(
                         value: $echoDamping,
-                        range: 0...1,
+                        range: 0...0.95,
                         color: palette.accent
                     )
                     Text(String(format: "%.0f%%", echoDamping * 100))
@@ -1167,7 +1417,7 @@ struct EffectParameterPanel: View {
         debounceTasks[.fade] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
-            onApplyFade(fadeIn, fadeOut, fadeCurve)
+            onApplyFade(fadeIn, fadeOut, fadeInCurve, fadeOutCurve)
         }
     }
 
@@ -1176,7 +1426,8 @@ struct EffectParameterPanel: View {
         debounceTasks[.peak] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
-            onApplyPeak(peakTarget)
+            let target = normalizeMode == .peak ? peakTarget : lufsTarget
+            onApplyPeak(normalizeMode, target)
         }
     }
 
@@ -1185,7 +1436,7 @@ struct EffectParameterPanel: View {
         debounceTasks[.gate] = Task {
             try? await Task.sleep(nanoseconds: debounceNanos)
             guard !Task.isCancelled else { return }
-            onApplyGate(gateThreshold)
+            onApplyGate(gateThreshold, gateAttack, gateRelease, gateHold, gateFloor)
         }
     }
 
@@ -1227,18 +1478,27 @@ struct EffectParameterPanel: View {
         switch activeEffect {
         case .eq:
             eqSettings = .flat
+            eqPresetIndex = -1
             onEQChanged()
         case .fade:
             if hasFadeApplied { onRemoveFade() }
             fadeIn = Self.defaultFadeIn
             fadeOut = Self.defaultFadeOut
-            fadeCurve = Self.defaultFadeCurve
+            fadeInCurve = Self.defaultFadeInCurve
+            fadeOutCurve = Self.defaultFadeOutCurve
         case .peak:
             if hasPeakApplied { onRemovePeak() }
+            normalizeMode = Self.defaultNormalizeMode
             peakTarget = Self.defaultPeakTarget
+            lufsTarget = Self.defaultLufsTarget
         case .gate:
             if hasGateApplied { onRemoveGate() }
             gateThreshold = Self.defaultGateThreshold
+            gateAttack = Self.defaultGateAttack
+            gateRelease = Self.defaultGateRelease
+            gateHold = Self.defaultGateHold
+            gateFloor = Self.defaultGateFloor
+            gatePresetIndex = -1
         case .compress:
             if hasCompressApplied { onRemoveCompress() }
             compGain = Self.defaultCompGain
@@ -1292,9 +1552,9 @@ private struct ToolOnChangeModifier: ViewModifier {
     let onEchoChanged: () -> Void
 
     // Values to observe
-    let fadeIn: Double, fadeOut: Double, fadeCurve: FadeCurve
-    let peakTarget: Float
-    let gateThreshold: Float
+    let fadeIn: Double, fadeOut: Double, fadeInCurve: FadeCurve, fadeOutCurve: FadeCurve
+    let normalizeMode: NormalizeMode, peakTarget: Float, lufsTarget: Float
+    let gateThreshold: Float, gateAttack: Float, gateRelease: Float, gateHold: Float, gateFloor: Float
     let compGain: Float, compReduction: Float, compMix: Float
     let reverbRoomSize: Float, reverbPreDelay: Float, reverbDecay: Float, reverbDamping: Float, reverbWetDry: Float
     let echoDelay: Float, echoFeedback: Float, echoDamping: Float, echoWetDry: Float
@@ -1307,13 +1567,20 @@ private struct ToolOnChangeModifier: ViewModifier {
             content
                 .onChange(of: fadeIn) { onFadeChanged() }
                 .onChange(of: fadeOut) { onFadeChanged() }
-                .onChange(of: fadeCurve) { onFadeChanged() }
+                .onChange(of: fadeInCurve) { onFadeChanged() }
+                .onChange(of: fadeOutCurve) { onFadeChanged() }
         case .peak:
             content
+                .onChange(of: normalizeMode) { onPeakChanged() }
                 .onChange(of: peakTarget) { onPeakChanged() }
+                .onChange(of: lufsTarget) { onPeakChanged() }
         case .gate:
             content
                 .onChange(of: gateThreshold) { onGateChanged() }
+                .onChange(of: gateAttack) { onGateChanged() }
+                .onChange(of: gateRelease) { onGateChanged() }
+                .onChange(of: gateHold) { onGateChanged() }
+                .onChange(of: gateFloor) { onGateChanged() }
         case .compress:
             content
                 .onChange(of: compGain) { onCompressChanged() }

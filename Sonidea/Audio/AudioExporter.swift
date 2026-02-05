@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CoreMedia
 import Foundation
 
 enum ExportScope: Equatable {
@@ -269,11 +270,22 @@ final class AudioExporter {
         let shareURL = shareDirectory.appendingPathComponent(filename)
         try? FileManager.default.removeItem(at: shareURL)
 
-        do {
-            try FileManager.default.linkItem(at: cachedURL, to: shareURL)
-        } catch {
-            try FileManager.default.copyItem(at: cachedURL, to: shareURL)
+        // Always copy (not link) so chapter embedding can modify the share file
+        // without altering the cached version
+        try FileManager.default.copyItem(at: cachedURL, to: shareURL)
+
+        // Embed chapter markers if the recording has any
+        if !recording.markers.isEmpty {
+            do {
+                try await embedChapters(in: shareURL, markers: recording.markers, duration: recording.duration)
+            } catch {
+                // Chapter embedding is optional — log warning but return the file without chapters
+                #if DEBUG
+                print("[AudioExporter] Warning: Failed to embed chapters in M4A: \(error.localizedDescription)")
+                #endif
+            }
         }
+
         return shareURL
     }
 
@@ -314,7 +326,7 @@ final class AudioExporter {
     func exportRecordings(
         _ recordings: [RecordingItem],
         scope: ExportScope,
-        format: ExportFormat = .wav,
+        formats: Set<ExportFormat> = [.wav],
         albumLookup: (UUID?) -> Album?,
         tagsLookup: ([UUID]) -> [Tag]
     ) async throws -> URL {
@@ -334,78 +346,100 @@ final class AudioExporter {
         var manifestItems: [ExportManifestItem] = []
         let dateFormatter = ISO8601DateFormatter()
 
-        // Track used filenames per folder to ensure uniqueness
-        var usedNamesByFolder: [String: Set<String>] = [:]
+        let useSubDirectories = formats.count > 1
 
-        for recording in recordings {
-            let album = albumLookup(recording.albumID)
-            let tags = tagsLookup(recording.tagIDs)
+        for format in formats {
+            // Track used filenames per folder to ensure uniqueness
+            var usedNamesByFolder: [String: Set<String>] = [:]
 
-            // Determine folder structure
-            let folderName: String
-            switch scope {
-            case .all:
-                if let album = album {
-                    folderName = "Albums/\(sanitizeFilename(album.name))"
-                } else {
-                    folderName = "Unsorted"
+            // Format sub-directory name (e.g., "WAV/", "M4A/")
+            let formatDirName: String
+            if useSubDirectories {
+                switch format {
+                case .original: formatDirName = "Original"
+                case .wav: formatDirName = "WAV"
+                case .m4a: formatDirName = "M4A"
+                case .alac: formatDirName = "ALAC"
                 }
-            case .album:
-                folderName = ""
-            }
-
-            let folder: URL
-            if folderName.isEmpty {
-                folder = exportFolder
             } else {
-                folder = exportFolder.appendingPathComponent(folderName, isDirectory: true)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                formatDirName = ""
             }
 
-            // Get or create the set of used names for this folder
-            var usedNames = usedNamesByFolder[folderName] ?? []
+            for recording in recordings {
+                let album = albumLookup(recording.albumID)
+                let tags = tagsLookup(recording.tagIDs)
 
-            // Generate unique filename in chosen format
-            let exportFilename = safeFileName(for: recording, format: format, existingNames: usedNames)
+                // Determine folder structure
+                var folderComponents: [String] = []
+                if !formatDirName.isEmpty {
+                    folderComponents.append(formatDirName)
+                }
+                switch scope {
+                case .all:
+                    if let album = album {
+                        folderComponents.append("Albums/\(sanitizeFilename(album.name))")
+                    } else {
+                        folderComponents.append("Unsorted")
+                    }
+                case .album:
+                    break
+                }
 
-            // Track this name (without extension) as used
-            let actualExt = format == .original ? recording.fileURL.pathExtension : format.fileExtension
-            let extLength = actualExt.count + 1 // +1 for the dot
-            let nameWithoutExtension = String(exportFilename.dropLast(extLength))
-            usedNames.insert(nameWithoutExtension)
-            usedNamesByFolder[folderName] = usedNames
+                let folderName = folderComponents.joined(separator: "/")
 
-            let destination = folder.appendingPathComponent(exportFilename)
+                let folder: URL
+                if folderName.isEmpty {
+                    folder = exportFolder
+                } else {
+                    folder = exportFolder.appendingPathComponent(folderName, isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                }
 
-            do {
-                try await convertFile(sourceURL: recording.fileURL, outputURL: destination, format: format, skipDiskSpaceCheck: true)
-            } catch {
-                // Skip files that fail to convert
-                continue
+                // Get or create the set of used names for this folder
+                var usedNames = usedNamesByFolder[folderName] ?? []
+
+                // Generate unique filename in chosen format
+                let exportFilename = safeFileName(for: recording, format: format, existingNames: usedNames)
+
+                // Track this name (without extension) as used
+                let actualExt = format == .original ? recording.fileURL.pathExtension : format.fileExtension
+                let extLength = actualExt.count + 1 // +1 for the dot
+                let nameWithoutExtension = String(exportFilename.dropLast(extLength))
+                usedNames.insert(nameWithoutExtension)
+                usedNamesByFolder[folderName] = usedNames
+
+                let destination = folder.appendingPathComponent(exportFilename)
+
+                do {
+                    try await convertFile(sourceURL: recording.fileURL, outputURL: destination, format: format, skipDiskSpaceCheck: true)
+                } catch {
+                    // Skip files that fail to convert
+                    continue
+                }
+
+                // Build manifest item
+                let relativePath: String
+                if folderName.isEmpty {
+                    relativePath = exportFilename
+                } else {
+                    relativePath = "\(folderName)/\(exportFilename)"
+                }
+
+                let transcriptSnippet = String(recording.transcript.prefix(200))
+
+                let item = ExportManifestItem(
+                    id: recording.id.uuidString,
+                    title: recording.title,
+                    createdAt: dateFormatter.string(from: recording.createdAt),
+                    duration: recording.duration,
+                    albumName: album?.name,
+                    tagNames: tags.map { $0.name },
+                    location: recording.locationLabel,
+                    transcriptSnippet: transcriptSnippet,
+                    filename: relativePath
+                )
+                manifestItems.append(item)
             }
-
-            // Build manifest item
-            let relativePath: String
-            if folderName.isEmpty {
-                relativePath = exportFilename
-            } else {
-                relativePath = "\(folderName)/\(exportFilename)"
-            }
-
-            let transcriptSnippet = String(recording.transcript.prefix(200))
-
-            let item = ExportManifestItem(
-                id: recording.id.uuidString,
-                title: recording.title,
-                createdAt: dateFormatter.string(from: recording.createdAt),
-                duration: recording.duration,
-                albumName: album?.name,
-                tagNames: tags.map { $0.name },
-                location: recording.locationLabel,
-                transcriptSnippet: transcriptSnippet,
-                filename: relativePath
-            )
-            manifestItems.append(item)
         }
 
         // Write manifest
@@ -620,6 +654,244 @@ final class AudioExporter {
             }
             position += AVAudioFramePosition(framesToRead)
         }
+    }
+
+    // MARK: - Chapter Embedding (M4A only)
+
+    /// Embeds chapter markers as a QuickTime chapter track in an exported M4A file.
+    ///
+    /// This post-processes the file using AVAssetWriter with a timed metadata input for
+    /// chapters, plus AVAssetReader for passthrough audio copying. The audio data is NOT
+    /// re-encoded — compressed samples are copied as-is.
+    ///
+    /// Chapters are visible in Apple Podcasts, iTunes/Music, VLC, and other players that
+    /// support QuickTime/MP4 chapter tracks.
+    ///
+    /// - Parameters:
+    ///   - fileURL: The exported M4A file to add chapters to (modified in place).
+    ///   - markers: The recording's markers to convert to chapters.
+    ///   - duration: The total duration of the recording in seconds.
+    private func embedChapters(in fileURL: URL, markers: [Marker], duration: TimeInterval) async throws {
+        guard !markers.isEmpty else { return }
+
+        let timescale: CMTimeScale = 600
+
+        // Sort markers by time ascending
+        let sortedMarkers = markers.sortedByTime
+
+        // Filter out markers at or beyond the file duration (zero-duration chapters are useless)
+        let validMarkers = sortedMarkers.filter { $0.time < duration }
+        guard !validMarkers.isEmpty else { return }
+
+        // Build timed metadata groups for each chapter
+        var chapterGroups: [AVTimedMetadataGroup] = []
+
+        for (index, marker) in validMarkers.enumerated() {
+            let chapterStart = CMTime(seconds: marker.time, preferredTimescale: timescale)
+
+            let chapterEnd: CMTime
+            if index + 1 < validMarkers.count {
+                chapterEnd = CMTime(seconds: validMarkers[index + 1].time, preferredTimescale: timescale)
+            } else {
+                chapterEnd = CMTime(seconds: duration, preferredTimescale: timescale)
+            }
+
+            // Skip zero-duration chapters (marker at exact end or two markers at same time)
+            let chapterDuration = chapterEnd - chapterStart
+            guard CMTimeGetSeconds(chapterDuration) > 0 else { continue }
+
+            let timeRange = CMTimeRange(start: chapterStart, end: chapterEnd)
+
+            // Chapter title
+            let title = marker.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? marker.label!
+                : "Chapter \(index + 1)"
+
+            // Create metadata item in the QuickTime Metadata keyspace ("mdta")
+            // matching the format description's key: "com.apple.quicktime.chapter"
+            let metadataItem = AVMutableMetadataItem()
+            metadataItem.key = "com.apple.quicktime.chapter" as NSString
+            metadataItem.keySpace = .quickTimeMetadata
+            metadataItem.value = title as NSString
+            metadataItem.locale = Locale.current
+
+            let group = AVTimedMetadataGroup(items: [metadataItem], timeRange: timeRange)
+            chapterGroups.append(group)
+        }
+
+        guard !chapterGroups.isEmpty else { return }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try self.writeM4AWithChapters(fileURL: fileURL, chapterGroups: chapterGroups)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Synchronous implementation of chapter embedding using AVAssetReader + AVAssetWriter.
+    /// Copies audio data as passthrough (no re-encoding) and adds a timed metadata track for chapters.
+    private func writeM4AWithChapters(fileURL: URL, chapterGroups: [AVTimedMetadataGroup]) throws {
+        let sourceAsset = AVURLAsset(url: fileURL)
+
+        // Get the audio track
+        let audioTracks = sourceAsset.tracks(withMediaType: .audio)
+        guard let sourceAudioTrack = audioTracks.first else {
+            throw NSError(domain: "AudioExporter", code: 30,
+                          userInfo: [NSLocalizedDescriptionKey: "No audio tracks found in exported M4A"])
+        }
+
+        // Set up AVAssetReader
+        let reader = try AVAssetReader(asset: sourceAsset)
+        let readerOutput = AVAssetReaderTrackOutput(track: sourceAudioTrack, outputSettings: nil) // nil = passthrough
+        guard reader.canAdd(readerOutput) else {
+            throw NSError(domain: "AudioExporter", code: 31,
+                          userInfo: [NSLocalizedDescriptionKey: "Cannot add audio reader output"])
+        }
+        reader.add(readerOutput)
+
+        // Create temporary output file
+        let tempURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(UUID().uuidString + "_chapters.m4a")
+        try? FileManager.default.removeItem(at: tempURL)
+
+        // Set up AVAssetWriter
+        let writer = try AVAssetWriter(url: tempURL, fileType: .m4a)
+
+        // Audio input (passthrough — copies compressed AAC samples as-is)
+        guard let audioFormatDescriptions = sourceAudioTrack.formatDescriptions as? [CMFormatDescription],
+              let audioFormatDesc = audioFormatDescriptions.first else {
+            throw NSError(domain: "AudioExporter", code: 32,
+                          userInfo: [NSLocalizedDescriptionKey: "No format description found on audio track"])
+        }
+
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: audioFormatDesc)
+        audioInput.expectsMediaDataInRealTime = false
+        guard writer.canAdd(audioInput) else {
+            throw NSError(domain: "AudioExporter", code: 33,
+                          userInfo: [NSLocalizedDescriptionKey: "Cannot add audio writer input"])
+        }
+        writer.add(audioInput)
+
+        // Create metadata format description for the chapter track.
+        // Uses the QuickTime Metadata ("mdta") keyspace with the standard chapter key.
+        let chapterFormatDesc = try createChapterMetadataFormatDescription()
+
+        let chapterInput = AVAssetWriterInput(
+            mediaType: .metadata,
+            outputSettings: nil,
+            sourceFormatHint: chapterFormatDesc
+        )
+        chapterInput.expectsMediaDataInRealTime = false
+        chapterInput.marksOutputTrackAsEnabled = false
+
+        // Create the metadata adaptor for writing timed metadata groups
+        let chapterAdaptor = AVAssetWriterInputMetadataAdaptor(assetWriterInput: chapterInput)
+
+        guard writer.canAdd(chapterInput) else {
+            throw NSError(domain: "AudioExporter", code: 34,
+                          userInfo: [NSLocalizedDescriptionKey: "Cannot add chapter metadata writer input"])
+        }
+        writer.add(chapterInput)
+
+        // Start reading and writing
+        guard reader.startReading() else {
+            throw reader.error ?? NSError(domain: "AudioExporter", code: 35,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to start reading source audio"])
+        }
+
+        guard writer.startWriting() else {
+            throw writer.error ?? NSError(domain: "AudioExporter", code: 36,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to start writing output"])
+        }
+
+        writer.startSession(atSourceTime: .zero)
+
+        // Write chapter metadata groups
+        for group in chapterGroups {
+            while !chapterInput.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            chapterAdaptor.append(group)
+        }
+        chapterInput.markAsFinished()
+
+        // Copy audio samples (passthrough)
+        while let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+            while !audioInput.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            audioInput.append(sampleBuffer)
+        }
+        audioInput.markAsFinished()
+
+        // Finish writing (synchronous wait with 30s timeout)
+        let semaphore = DispatchSemaphore(value: 0)
+        writer.finishWriting {
+            semaphore.signal()
+        }
+        let waitResult = semaphore.wait(timeout: .now() + 30)
+
+        if waitResult == .timedOut {
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: tempURL)
+            throw NSError(domain: "AudioExporter", code: 39,
+                          userInfo: [NSLocalizedDescriptionKey: "Chapter embedding timed out after 30 seconds"])
+        }
+
+        guard writer.status == .completed else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw writer.error ?? NSError(domain: "AudioExporter", code: 37,
+                          userInfo: [NSLocalizedDescriptionKey: "Chapter embedding failed during finalization"])
+        }
+
+        // Replace original file with chaptered version
+        let backupURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(UUID().uuidString + "_backup.m4a")
+
+        try FileManager.default.moveItem(at: fileURL, to: backupURL)
+        do {
+            try FileManager.default.moveItem(at: tempURL, to: fileURL)
+            try? FileManager.default.removeItem(at: backupURL)
+        } catch {
+            // Restore backup if replacement fails
+            try? FileManager.default.moveItem(at: backupURL, to: fileURL)
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+    }
+
+    /// Creates a CMFormatDescription for a timed metadata track suitable for chapter markers.
+    /// Uses the QuickTime Metadata ("mdta") keyspace with the "com.apple.quicktime.chapter" key
+    /// and boxed metadata format, which is the standard for QuickTime/M4A chapter metadata.
+    private func createChapterMetadataFormatDescription() throws -> CMFormatDescription {
+        // Define the metadata key specification:
+        // - Namespace: "mdta" (QuickTime metadata)
+        // - Key: "com.apple.quicktime.chapter"
+        // This tells AVAssetWriter how to map AVMetadataItems in the timed groups to the output track.
+        let keySpec: NSDictionary = [
+            kCMMetadataFormatDescriptionKey_Namespace: "mdta",
+            kCMMetadataFormatDescriptionKey_Value: "com.apple.quicktime.chapter"
+        ]
+
+        var formatDesc: CMFormatDescription?
+        let status = CMMetadataFormatDescriptionCreateWithKeys(
+            allocator: kCFAllocatorDefault,
+            metadataType: kCMMetadataFormatType_Boxed,
+            keys: [keySpec] as NSArray,
+            formatDescriptionOut: &formatDesc
+        )
+
+        guard status == noErr, let formatDesc = formatDesc else {
+            throw NSError(domain: "AudioExporter", code: 38,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create chapter metadata format description (status: \(status))"])
+        }
+
+        return formatDesc
     }
 
     // MARK: - ALAC Conversion

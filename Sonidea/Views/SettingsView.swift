@@ -215,6 +215,9 @@ struct SettingsSheetView: View {
     @State private var importErrors: [String] = []
     @State private var showImportErrorAlert = false
 
+    @State private var showBulkFormatPicker = false
+    @State private var bulkExportScope: ExportScope = .all
+    @State private var bulkExportAlbum: Album?
     @State private var showLockScreenHelp = false
     @State private var showActionButtonHelp = false
     @State private var showMicrophoneSheet = false
@@ -399,6 +402,17 @@ struct SettingsSheetView: View {
                     Toggle("Prevent Sleep", isOn: $appState.appSettings.preventSleepWhileRecording)
                         .tint(palette.accent)
                         .listRowBackground(palette.cardBackground)
+
+                    // Noise Reduction (Voice Processing)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Noise Reduction", isOn: $appState.appSettings.noiseReductionEnabled)
+                            .tint(palette.accent)
+                            .disabled(isRecordingActive)
+                        Text("Reduces background noise during recording. Best for speech. May affect audio quality for music.")
+                            .font(.caption)
+                            .foregroundStyle(palette.textSecondary)
+                    }
+                    .listRowBackground(palette.cardBackground)
 
                     // Metronome (plays through headphones only during recording)
                     Toggle("Metronome", isOn: $appState.appSettings.metronomeEnabled)
@@ -903,7 +917,10 @@ struct SettingsSheetView: View {
                 }
 
                 Section {
-                    Button { exportAllRecordings() } label: {
+                    Button {
+                        bulkExportAlbum = nil
+                        showBulkFormatPicker = true
+                    } label: {
                         HStack {
                             Image(systemName: "square.and.arrow.up")
                                 .foregroundColor(palette.accent)
@@ -1265,7 +1282,10 @@ struct SettingsSheetView: View {
                 }
             }
             .sheet(isPresented: $showAlbumPicker) {
-                ExportAlbumPickerSheet { album in exportAlbum(album) }
+                ExportAlbumPickerSheet { album in
+                    bulkExportAlbum = album
+                    showBulkFormatPicker = true
+                }
             }
             .sheet(isPresented: $showTagManager) {
                 TagManagerView()
@@ -1343,10 +1363,19 @@ struct SettingsSheetView: View {
                     .presentationDetents([.height(280)])
                     .presentationDragIndicator(.visible)
             }
+            .sheet(isPresented: $showBulkFormatPicker) {
+                BulkExportFormatPicker { formats in
+                    if let album = bulkExportAlbum {
+                        exportAlbum(album, formats: formats)
+                    } else {
+                        exportAllRecordings(formats: formats)
+                    }
+                }
+            }
         }
     }
 
-    private func exportAllRecordings() {
+    private func exportAllRecordings(formats: Set<ExportFormat>) {
         isExporting = true
         exportProgress = "all"
         Task {
@@ -1354,6 +1383,7 @@ struct SettingsSheetView: View {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
                     appState.activeRecordings,
                     scope: .all,
+                    formats: formats,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )
@@ -1374,7 +1404,7 @@ struct SettingsSheetView: View {
         }
     }
 
-    private func exportAlbum(_ album: Album) {
+    private func exportAlbum(_ album: Album, formats: Set<ExportFormat>) {
         isExporting = true
         exportProgress = "album"
         Task {
@@ -1383,6 +1413,7 @@ struct SettingsSheetView: View {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
                     recordings,
                     scope: .album(album),
+                    formats: formats,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )

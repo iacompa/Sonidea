@@ -36,6 +36,9 @@ struct RecordingGridView: View {
     @State private var recordingToShare: RecordingItem?
     @State private var showExportFormatPicker = false
 
+    // Bulk export format picker
+    @State private var showBulkFormatPicker = false
+
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext?
     @State private var showTipJar = false
@@ -95,6 +98,11 @@ struct RecordingGridView: View {
         .sheet(isPresented: $showShareSheet) {
             if let url = exportedURL {
                 ShareSheet(items: [url])
+            }
+        }
+        .sheet(isPresented: $showBulkFormatPicker) {
+            BulkExportFormatPicker { formats in
+                exportSelectedRecordings(formats: formats)
             }
         }
         .iPadSheet(isPresented: $showMoveToAlbumSheet) {
@@ -236,7 +244,7 @@ struct RecordingGridView: View {
             Divider().frame(height: 40).background(palette.separator)
 
             SelectionActionButton(icon: "square.and.arrow.up", label: "Export", isEnabled: hasSelection, isDestructive: false) {
-                exportSelectedRecordings()
+                showBulkFormatPicker = true
             }
 
             Divider().frame(height: 40).background(palette.separator)
@@ -351,13 +359,14 @@ struct RecordingGridView: View {
         }
     }
 
-    private func exportSelectedRecordings() {
+    private func exportSelectedRecordings(formats: Set<ExportFormat>) {
         let selectedRecordings = appState.activeRecordings.filter { selectedRecordingIDs.contains($0.id) }
         Task {
             do {
                 let zipURL = try await AudioExporter.shared.exportRecordings(
                     selectedRecordings,
                     scope: .all,
+                    formats: formats,
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )
