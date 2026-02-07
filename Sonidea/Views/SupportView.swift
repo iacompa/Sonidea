@@ -1,5 +1,5 @@
 //
-//  TipJarView.swift
+//  SupportView.swift
 //  Sonidea
 //
 //  Subscription and upgrade page. Shows plans, trial status, and roadmap.
@@ -8,7 +8,7 @@
 import SwiftUI
 import StoreKit
 
-struct TipJarView: View {
+struct SupportView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(AppState.self) private var appState
@@ -372,12 +372,15 @@ struct TipJarView: View {
 
     private var priceAnchoringSection: some View {
         VStack(spacing: 6) {
+            // TODO: Replace with localized StoreKit prices (e.g. annual displayPrice / 12)
             Text("Just $2.50/month")
                 .font(.title3.weight(.bold))
                 .foregroundColor(palette.accent)
+            // TODO: Replace with localized StoreKit prices
             Text("with the annual plan ($29.99/year)")
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
+            // TODO: Replace with localized StoreKit prices
             Text("Monthly: $3.99/month ($47.88/year)")
                 .font(.caption)
                 .foregroundColor(palette.textTertiary)
@@ -781,6 +784,7 @@ struct PaywallView: View {
             .padding(.horizontal, 24)
 
             // Price anchoring
+            // TODO: Replace with localized StoreKit prices
             VStack(spacing: 4) {
                 Text("Just $2.50/month")
                     .font(.title3.weight(.bold))
@@ -844,7 +848,7 @@ struct PaywallView: View {
             }
         }
         .sheet(isPresented: $showSubscription) {
-            TipJarView()
+            SupportView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
         }
@@ -871,11 +875,15 @@ struct PaywallView: View {
                     albumLookup: { appState.album(for: $0) },
                     tagsLookup: { appState.tags(for: $0) }
                 )
-                exportedZIPURL = zipURL
-                isExporting = false
-                showShareSheet = true
+                await MainActor.run {
+                    exportedZIPURL = zipURL
+                    isExporting = false
+                    showShareSheet = true
+                }
             } catch {
-                isExporting = false
+                await MainActor.run {
+                    isExporting = false
+                }
                 #if DEBUG
                 print("Export failed: \(error.localizedDescription)")
                 #endif
@@ -885,6 +893,6 @@ struct PaywallView: View {
 }
 
 #Preview {
-    TipJarView()
+    SupportView()
         .environment(AppState())
 }

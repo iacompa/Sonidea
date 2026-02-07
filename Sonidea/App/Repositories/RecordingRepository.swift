@@ -57,6 +57,7 @@ enum RecordingRepository {
     @discardableResult
     static func updateTranscript(
         _ text: String,
+        segments: [TranscriptionSegment]? = nil,
         for recordingID: UUID,
         recordings: inout [RecordingItem]
     ) -> Bool {
@@ -64,6 +65,7 @@ enum RecordingRepository {
             return false
         }
         recordings[index].transcript = text
+        recordings[index].transcriptionSegments = segments
         recordings[index].modifiedAt = Date()
         return true
     }

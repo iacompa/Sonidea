@@ -242,7 +242,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.accentColor,
         waveformSelectionBackground: Color.accentColor.opacity(0.15),  // Subtle blue tint
         waveformBarColor: Color.fromHex("#48484A"),  // Medium-dark gray bars (visible but not harsh)
-        waveformBackground: Color.fromHex("#E6E6EB")  // ~10% darker than white bg
+        waveformBackground: Color.fromHex("#F2F2F5")  // Very subtle gray, barely off-white
     )
 
     // MARK: - System Dark Palette
@@ -286,7 +286,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.white,
         waveformSelectionBackground: Color.accentColor.opacity(0.20),  // Slightly more visible on dark
         waveformBarColor: Color.fromHex("#8E8E93"),  // Medium gray bars (not too bright)
-        waveformBackground: Color.fromHex("#0A0A0C")  // ~10% darker than black bg
+        waveformBackground: Color.fromHex("#1C1C1E")  // Matches surface, subtle container
     )
 
     // MARK: - Angst Robot (Purple) Palette
@@ -330,7 +330,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#9B8CFF"),  // Light purple
         waveformSelectionBackground: Color.fromHex("#9B8CFF").opacity(0.18),  // Light purple selection
         waveformBarColor: Color.fromHex("#7E76A0"),  // Medium purple-tinted bars
-        waveformBackground: Color.fromHex("#1F183C")  // ~10% darker than #221B43
+        waveformBackground: Color.fromHex("#282050")  // Between bg and surface
     )
 
     // MARK: - Cream (Russian White) Palette
@@ -374,7 +374,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#C4956A"),  // Warm amber
         waveformSelectionBackground: Color.fromHex("#C4956A").opacity(0.12),  // Subtle amber on light bg
         waveformBarColor: Color.fromHex("#7A6B58"),  // Medium warm brown bars
-        waveformBackground: Color.fromHex("#DDD9CF")  // ~10% darker than #F6F1E6
+        waveformBackground: Color.fromHex("#EFEADE")  // Subtle warm tint, close to bg
     )
 
     // MARK: - Logic Pro Palette (Light toolbar + Dark canvas)
@@ -439,7 +439,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#7B8AF4"),  // Periwinkle
         waveformSelectionBackground: Color.fromHex("#7B8AF4").opacity(0.20),  // Periwinkle selection
         waveformBarColor: Color.fromHex("#9E9EA1"),  // Medium gray bars (halfway bright)
-        waveformBackground: Color.fromHex("#292929")  // ~10% darker than #2E2E2E
+        waveformBackground: Color.fromHex("#333333")  // Between bg and surface
     )
 
     // MARK: - Fruity (FL Studio) Palette
@@ -504,7 +504,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#F29A2E"),  // FL orange
         waveformSelectionBackground: Color.fromHex("#F29A2E").opacity(0.15),  // Subtle orange selection
         waveformBarColor: Color.fromHex("#858B92"),  // Medium cool-gray bars
-        waveformBackground: Color.fromHex("#1C262E")  // ~10% darker than #1F2A33
+        waveformBackground: Color.fromHex("#24313B")  // Between bg and surface
     )
 
     // MARK: - AVID (Pro Tools) Palette
@@ -569,7 +569,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#29D3C3"),  // Teal/mint
         waveformSelectionBackground: Color.fromHex("#29D3C3").opacity(0.18),  // Teal selection
         waveformBarColor: Color.fromHex("#787F8A"),  // Medium blue-gray bars
-        waveformBackground: Color.fromHex("#0E0F12")  // ~10% darker than #0F1114
+        waveformBackground: Color.fromHex("#15191F")  // Between bg and surface
     )
 
     // MARK: - Dynamite (Charcoal + Red/Blue) Palette
@@ -623,7 +623,7 @@ struct ThemePalette: Equatable {
         playheadColor: Color.fromHex("#2786BE"),            // Blue playhead (matches Sonidea logo)
         waveformSelectionBackground: Color.fromHex("#F62E38").opacity(0.20),  // Red selection (swapped)
         waveformBarColor: Color.fromHex("#8A8A8A"),  // Medium gray bars
-        waveformBackground: Color.fromHex("#323232")  // ~10% darker than #383838
+        waveformBackground: Color.fromHex("#3E3E3E")  // Between bg and surface
     )
 }
 

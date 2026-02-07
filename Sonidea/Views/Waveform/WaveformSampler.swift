@@ -429,16 +429,22 @@ final class WaveformSampler {
     }
 
     private func persistEnvelopeCache() {
+        let cacheCopy = cache
         let fileURL = Self.cacheDirectory.appendingPathComponent("envelope.json")
-        if let data = try? JSONEncoder().encode(cache) {
-            try? data.write(to: fileURL, options: .atomic)
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(cacheCopy) {
+                try? data.write(to: fileURL, options: .atomic)
+            }
         }
     }
 
     private func persistMinMaxCache() {
+        let cacheCopy = minMaxCache
         let fileURL = Self.cacheDirectory.appendingPathComponent("minmax.json")
-        if let data = try? JSONEncoder().encode(minMaxCache) {
-            try? data.write(to: fileURL, options: .atomic)
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(cacheCopy) {
+                try? data.write(to: fileURL, options: .atomic)
+            }
         }
     }
 

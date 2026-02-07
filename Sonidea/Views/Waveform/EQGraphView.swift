@@ -528,7 +528,8 @@ struct EQKnob: View {
                     // Vertical drag: up = increase, down = decrease
                     // Full range requires ~500pt of drag
                     let delta = -Double(gesture.translation.height) / 500.0
-                    let newNorm = max(0, min(1, dragStartNormalized! + delta))
+                    guard let startNorm = dragStartNormalized else { return }
+                    let newNorm = max(0, min(1, startNorm + delta))
                     value = valueFromNormalized(newNorm)
 
                     // Haptic on detent crossing

@@ -41,7 +41,7 @@ struct RecordingGridView: View {
 
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext?
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     // Grid configuration — adaptive for iPad
     private var columns: [GridItem] {
@@ -129,7 +129,7 @@ struct RecordingGridView: View {
                 context: context,
                 onViewPlans: {
                     proUpgradeContext = nil
-                    showTipJar = true
+                    showSupport = true
                 },
                 onDismiss: {
                     proUpgradeContext = nil
@@ -137,8 +137,9 @@ struct RecordingGridView: View {
             )
             .environment(\.themePalette, palette)
         }
-        .sheet(isPresented: $showTipJar) {
-            TipJarView()
+        .sheet(isPresented: $showSupport) {
+            SupportView()
+                .environment(appState)
                 .environment(\.themePalette, palette)
         }
     }
@@ -349,8 +350,10 @@ struct RecordingGridView: View {
         Task {
             do {
                 let url = try await AudioExporter.shared.export(recording: recording, format: format)
-                exportedURL = url
-                showShareSheet = true
+                await MainActor.run {
+                    exportedURL = url
+                    showShareSheet = true
+                }
             } catch {
                 #if DEBUG
                 print("Export failed: \(error)")

@@ -118,7 +118,7 @@ struct ZoomableWaveformEditor: View {
     // MARK: - Timeline State
 
     @State private var timelineState: TimelineState
-    @State private var initialPinchZoom: CGFloat = 1.0
+    @State private var initialPinchZoom: CGFloat? = nil
     @State private var isPanning = false
     @State private var panStartOffset: TimeInterval = 0
 
@@ -309,11 +309,11 @@ struct ZoomableWaveformEditor: View {
                     isPanning = false
                 }
 
-                if initialPinchZoom == 1.0 {
+                if initialPinchZoom == nil {
                     initialPinchZoom = timelineState.zoomLevel
                 }
 
-                let newZoom = initialPinchZoom * scale
+                let newZoom = (initialPinchZoom ?? timelineState.zoomLevel) * scale
                 let centerTime = (timelineState.visibleStartTime + timelineState.visibleEndTime) / 2
 
                 withAnimation(.interactiveSpring(response: 0.15, dampingFraction: 0.8)) {
@@ -321,7 +321,7 @@ struct ZoomableWaveformEditor: View {
                 }
             }
             .onEnded { _ in
-                initialPinchZoom = 1.0
+                initialPinchZoom = nil
                 isPinching = false
                 impactGenerator.impactOccurred(intensity: 0.3)
             }
@@ -352,7 +352,6 @@ struct ZoomableWaveformEditor: View {
             }
             .onEnded { _ in
                 isPanning = false
-                isPinching = false  // Safety: clear pinch flag if drag ended
                 panStartOffset = 0
             }
     }
@@ -416,15 +415,17 @@ struct ZoomableWaveformCanvas: View {
 
             let visibleSamples = samples[startIdx..<endIdx]
 
-            // Draw bars
+            // Draw bars - Apple Voice Memos style (thin, rounded, centered on midline)
             let barCount = visibleSamples.count
             guard barCount > 0 else { return }
 
-            let barSpacing: CGFloat = 2
-            let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let availableWidth = size.width - totalSpacing
-            let barWidth = Swift.max(2, availableWidth / CGFloat(barCount))
-            let cornerRadius: CGFloat = 1.5
+            let centerY = size.height / 2
+            let maxAmplitude = size.height / 2 * 0.9
+            let xStep = size.width / CGFloat(barCount)
+
+            // Apple Voice Memos style: thin bars with rounded caps
+            let barWidth: CGFloat = Swift.min(1.5, Swift.max(0.75, xStep * 0.55))
+            let minBarHeight: CGFloat = 1.0
 
             // DAW-style waveform: always use accent color for visibility on all themes
             let waveformColor = palette.accent
@@ -442,12 +443,11 @@ struct ZoomableWaveformCanvas: View {
             let hasActiveSelection = isEditing && selectionEndIndex > selectionStartIndex
 
             for (index, sample) in visibleSamples.enumerated() {
-                let x = CGFloat(index) * (barWidth + barSpacing)
-                let barHeight = Swift.max(4, CGFloat(sample) * size.height * 0.9)
-                let y = (size.height - barHeight) / 2
+                let x = CGFloat(index) * xStep + xStep / 2
+                let amplitude = Swift.max(minBarHeight, CGFloat(sample) * maxAmplitude)
 
-                let rect = CGRect(x: x, y: y, width: barWidth, height: barHeight)
-                let path = RoundedRectangle(cornerRadius: cornerRadius).path(in: rect)
+                let yTop = centerY - amplitude
+                let yBottom = centerY + amplitude
 
                 let color: Color
                 if isEditing {
@@ -463,7 +463,15 @@ struct ZoomableWaveformCanvas: View {
                     color = index < playheadIndex ? playedColor : unplayedColor
                 }
 
-                context.fill(path, with: .color(color))
+                var linePath = Path()
+                linePath.move(to: CGPoint(x: x, y: yTop))
+                linePath.addLine(to: CGPoint(x: x, y: yBottom))
+
+                context.stroke(
+                    linePath,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
+                )
             }
         }
     }

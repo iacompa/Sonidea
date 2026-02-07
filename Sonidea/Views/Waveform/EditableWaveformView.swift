@@ -154,11 +154,13 @@ struct EditableWaveformView: View {
             guard !samples.isEmpty else { return }
 
             let barCount = samples.count
-            let barSpacing: CGFloat = 2
-            let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let availableWidth = size.width - totalSpacing
-            let barWidth = Swift.max(2, availableWidth / CGFloat(barCount))
-            let cornerRadius: CGFloat = 1.5
+            let centerY = size.height / 2
+            let maxAmplitude = size.height / 2 * 0.9
+            let xStep = size.width / CGFloat(barCount)
+
+            // Apple Voice Memos style: thin bars with rounded caps, centered on midline
+            let barWidth: CGFloat = Swift.min(1.5, Swift.max(0.75, xStep * 0.55))
+            let minBarHeight: CGFloat = 1.0
 
             // High-contrast neutral bars by default; accent only when selection active
             let neutralBarColor = palette.waveformBarColor
@@ -175,12 +177,11 @@ struct EditableWaveformView: View {
             let hasActiveSelection = isEditing && selectionEndIndex > selectionStartIndex
 
             for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * (barWidth + barSpacing)
-                let barHeight = Swift.max(4, CGFloat(sample) * size.height * 0.9)
-                let y = (size.height - barHeight) / 2
+                let x = CGFloat(index) * xStep + xStep / 2
+                let amplitude = Swift.max(minBarHeight, CGFloat(sample) * maxAmplitude)
 
-                let rect = CGRect(x: x, y: y, width: barWidth, height: barHeight)
-                let path = RoundedRectangle(cornerRadius: cornerRadius).path(in: rect)
+                let yTop = centerY - amplitude
+                let yBottom = centerY + amplitude
 
                 let color: Color
                 if isEditing {
@@ -197,7 +198,15 @@ struct EditableWaveformView: View {
                     color = index < playheadIndex ? playedColor : unplayedColor
                 }
 
-                context.fill(path, with: .color(color))
+                var linePath = Path()
+                linePath.move(to: CGPoint(x: x, y: yTop))
+                linePath.addLine(to: CGPoint(x: x, y: yBottom))
+
+                context.stroke(
+                    linePath,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
+                )
             }
         }
     }

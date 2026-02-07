@@ -829,15 +829,13 @@ actor AudioWaveformExtractor {
             let isStale = (cached.modDate != nil && currentModDate != nil && cached.modDate != currentModDate)
             if !isStale { return }
         }
-        guard loadFromDiskCache(for: url) == nil else {
+        if let diskCached = loadFromDiskCache(for: url) {
             // Load disk cache into memory
-            if let diskCached = loadFromDiskCache(for: url) {
-                let modDate = fileModificationDate(for: url)
-                evictCacheIfNeeded()
-                waveformCache[url] = (data: diskCached, modDate: modDate)
-                cacheAccessOrder.removeAll { $0 == url }
-                cacheAccessOrder.append(url)
-            }
+            let modDate = fileModificationDate(for: url)
+            evictCacheIfNeeded()
+            waveformCache[url] = (data: diskCached, modDate: modDate)
+            cacheAccessOrder.removeAll { $0 == url }
+            cacheAccessOrder.append(url)
             return
         }
 

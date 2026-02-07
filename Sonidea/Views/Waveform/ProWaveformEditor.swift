@@ -223,7 +223,7 @@ struct ProWaveformEditor: View {
 
     // Internal state
     @State private var timeline: WaveformTimeline
-    @State private var initialPinchZoom: CGFloat = 1.0
+    @State private var initialPinchZoom: CGFloat? = nil
     @State private var isPanning = false
     @State private var panStartTime: TimeInterval = 0
 
@@ -587,15 +587,15 @@ struct ProWaveformEditor: View {
                     }
                 }
 
-                if initialPinchZoom == 1.0 {
+                if initialPinchZoom == nil {
                     initialPinchZoom = timeline.zoomScale
                     impactGenerator.impactOccurred(intensity: 0.3)
                 }
                 let centerTime = timeline.visibleStartTime + timeline.visibleDuration / 2
-                timeline.zoom(to: initialPinchZoom * scale, centeredOn: centerTime)
+                timeline.zoom(to: (initialPinchZoom ?? timeline.zoomScale) * scale, centeredOn: centerTime)
             }
             .onEnded { _ in
-                initialPinchZoom = 1.0
+                initialPinchZoom = nil
                 isPinching = false
                 impactGenerator.impactOccurred(intensity: 0.2)
             }
@@ -868,8 +868,9 @@ struct WaveformBarsView: View {
             let actualWidth = size.width
             guard actualWidth > 0 else { return }
 
-            // Get samples for visible range - higher density for smooth line
-            let targetSamples = max(1, Int(actualWidth / 2))
+            // Get samples for visible range - high density for Apple Voice Memos style
+            // Target ~1 sample per 1.5pt for dense, detailed waveform bars
+            let targetSamples = max(1, Int(actualWidth / 1.5))
             let samples = data.samples(
                 from: timeline.visibleStartTime,
                 to: timeline.visibleEndTime,
@@ -923,7 +924,7 @@ struct WaveformBarsView: View {
                 context.stroke(centerLine, with: .color(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.12)), lineWidth: 0.5)
             }
 
-            // === 2. Draw Waveform (vertical bars with optional selection coloring) ===
+            // === 2. Draw Waveform (Apple Voice Memos style thin bars) ===
 
             // Selection bounds in x coordinates (only used if showsSelectionHighlight)
             let visibleDuration = timeline.visibleDuration
@@ -933,8 +934,9 @@ struct WaveformBarsView: View {
             let sampleCount = samples.count
             let xStep = actualWidth / CGFloat(sampleCount)
 
-            // Cap line width: minimum 1, maximum 3 (prevents issues on zoom)
-            let lineWidth = min(3, max(1, xStep * 0.7))
+            // Apple Voice Memos style: thin bars (1-1.5pt) with rounded caps
+            let barWidth: CGFloat = min(1.5, max(0.75, xStep * 0.55))
+            let minBarHeight: CGFloat = 1.0
 
             // Determine if there is an active selection (not zero-length)
             let hasActiveSelection = showsSelectionHighlight && (selEndX - selStartX) > 1
@@ -943,7 +945,7 @@ struct WaveformBarsView: View {
                 let x = CGFloat(index) * xStep + xStep / 2
 
                 // Sample is 0-1 normalized amplitude (louder = higher value)
-                let amplitude = CGFloat(sample) * maxAmplitude
+                let amplitude = max(minBarHeight, CGFloat(sample) * maxAmplitude)
 
                 // Draw symmetric around center - louder sounds = taller bars
                 let yTop = centerY - amplitude
@@ -966,7 +968,7 @@ struct WaveformBarsView: View {
                 context.stroke(
                     linePath,
                     with: .color(barColor),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
                 )
             }
         }

@@ -56,7 +56,7 @@ struct OverdubSessionView: View {
     @State private var bounceToastMessage: String?
     @State private var showBounceConfirmation = false
     @State private var proUpgradeContext: ProFeatureContext?
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     var body: some View {
         NavigationStack {
@@ -76,7 +76,7 @@ struct OverdubSessionView: View {
                     onViewPlans: {
                         proUpgradeContext = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            showTipJar = true
+                            showSupport = true
                         }
                     },
                     onDismiss: {
@@ -85,8 +85,8 @@ struct OverdubSessionView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .sheet(isPresented: $showTipJar) {
-                TipJarView()
+            .sheet(isPresented: $showSupport) {
+                SupportView()
             }
             .sheet(isPresented: $showTrackAlignment) {
                 TrackAlignmentView(

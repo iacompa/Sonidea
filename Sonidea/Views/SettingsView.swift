@@ -234,7 +234,7 @@ struct SettingsSheetView: View {
     @State private var resetConfirmationChecked = false
     @State private var showResetLoading = false
     @State private var proUpgradeContext: ProFeatureContext? = nil
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     private func requirePro(_ context: ProFeatureContext) -> Bool {
         if appState.supportManager.canUseProFeatures { return true }
@@ -1284,7 +1284,9 @@ struct SettingsSheetView: View {
             .sheet(isPresented: $showAlbumPicker) {
                 ExportAlbumPickerSheet { album in
                     bulkExportAlbum = album
-                    showBulkFormatPicker = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showBulkFormatPicker = true
+                    }
                 }
             }
             .sheet(isPresented: $showTagManager) {
@@ -1296,7 +1298,7 @@ struct SettingsSheetView: View {
                     onViewPlans: {
                         proUpgradeContext = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            showTipJar = true
+                            showSupport = true
                         }
                     },
                     onDismiss: {
@@ -1305,8 +1307,8 @@ struct SettingsSheetView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .iPadSheet(isPresented: $showTipJar) {
-                TipJarView()
+            .iPadSheet(isPresented: $showSupport) {
+                SupportView()
                     .environment(appState)
                     .environment(\.themePalette, palette)
             }
@@ -1434,30 +1436,35 @@ struct SettingsSheetView: View {
     }
 
     private func performImport(urls: [URL], albumID: UUID) {
-        var errors: [String] = []
+        Task {
+            var errors: [String] = []
 
-        for url in urls {
-            guard url.startAccessingSecurityScopedResource() else {
-                errors.append("\(url.lastPathComponent): Access denied")
-                continue
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else {
+                    errors.append("\(url.lastPathComponent): Access denied")
+                    continue
+                }
+
+                let duration = await Task.detached {
+                    self.getAudioDuration(url: url)
+                }.value
+                let title = titleFromFilename(url.lastPathComponent)
+
+                do {
+                    try appState.importRecording(from: url, duration: duration, title: title, albumID: albumID)
+                } catch {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+
+                url.stopAccessingSecurityScopedResource()
             }
-            defer { url.stopAccessingSecurityScopedResource() }
 
-            let duration = getAudioDuration(url: url)
-            let title = titleFromFilename(url.lastPathComponent)
+            pendingImportURLs = []
 
-            do {
-                try appState.importRecording(from: url, duration: duration, title: title, albumID: albumID)
-            } catch {
-                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            if !errors.isEmpty {
+                importErrors = errors
+                showImportErrorAlert = true
             }
-        }
-
-        pendingImportURLs = []
-
-        if !errors.isEmpty {
-            importErrors = errors
-            showImportErrorAlert = true
         }
     }
 

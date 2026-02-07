@@ -17,11 +17,27 @@ struct AudioEditResult {
     let error: Error?
 }
 
+/// Normalization mode: peak-based or loudness (LUFS) based.
+enum NormalizeMode: String, CaseIterable, Identifiable {
+    case peak
+    case lufs
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .peak: return "Peak"
+        case .lufs: return "LUFS"
+        }
+    }
+}
+
 /// Fade curve types for audio fade operations.
 enum FadeCurve: String, CaseIterable, Identifiable {
     case linear
     case sCurve
     case exponential
+    case logarithmic
 
     var id: String { rawValue }
 
@@ -29,7 +45,8 @@ enum FadeCurve: String, CaseIterable, Identifiable {
         switch self {
         case .linear: return "Linear"
         case .sCurve: return "S-Curve"
-        case .exponential: return "Exponential"
+        case .exponential: return "Exp"
+        case .logarithmic: return "Log"
         }
     }
 
@@ -50,6 +67,11 @@ enum FadeCurve: String, CaseIterable, Identifiable {
             // Stays near zero for most of the range, then rises sharply at the end
             let k: Float = 4.0
             return (exp(k * clamped) - 1.0) / (exp(k) - 1.0)
+        case .logarithmic:
+            // Logarithmic: rises quickly at first, then levels off — psychoacoustic inverse of exponential
+            // log(1 + k*t) / log(1 + k)
+            let k: Float = 53.0  // e^4 - 1 ≈ 53.6, mirrors the exponential curve's steepness
+            return log(1.0 + k * clamped) / log(1.0 + k)
         }
     }
 }
@@ -387,8 +409,8 @@ final class AudioEditor {
                         let framesToRead = min(chunkFrameCount, framesRemaining)
                         try sourceFile.read(into: buffer, frameCount: framesToRead)
                         try outputFile.write(from: buffer)
-                        framesRemaining -= framesToRead
-                        totalOutputFrames += framesToRead
+                        framesRemaining -= buffer.frameLength
+                        totalOutputFrames += buffer.frameLength
                     }
                 }
             }
@@ -423,7 +445,8 @@ final class AudioEditor {
         sourceURL: URL,
         fadeInDuration: TimeInterval,
         fadeOutDuration: TimeInterval,
-        curve: FadeCurve = .sCurve
+        fadeInCurve: FadeCurve = .sCurve,
+        fadeOutCurve: FadeCurve = .sCurve
     ) async -> AudioEditResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -431,7 +454,8 @@ final class AudioEditor {
                     sourceURL: sourceURL,
                     fadeInDuration: fadeInDuration,
                     fadeOutDuration: fadeOutDuration,
-                    curve: curve
+                    fadeInCurve: fadeInCurve,
+                    fadeOutCurve: fadeOutCurve
                 )
                 continuation.resume(returning: result)
             }
@@ -444,7 +468,8 @@ final class AudioEditor {
         sourceURL: URL,
         fadeInDuration: TimeInterval,
         fadeOutDuration: TimeInterval,
-        curve: FadeCurve
+        fadeInCurve: FadeCurve,
+        fadeOutCurve: FadeCurve
     ) -> AudioEditResult {
         do {
             let sourceFile = try AVAudioFile(forReading: sourceURL)
@@ -488,14 +513,14 @@ final class AudioEditor {
                     // Fade in region
                     if fadeInLen > 0 && globalFrame < fadeInLen {
                         let t = Float(globalFrame) / Float(fadeInLen)
-                        gain *= curve.apply(t)
+                        gain *= fadeInCurve.apply(t)
                     }
 
                     // Fade out region
                     if fadeOutLen > 0 && globalFrame >= fadeOutStart {
                         let localFrame = globalFrame - fadeOutStart
                         let t = Float(localFrame) / Float(fadeOutLen)
-                        gain *= curve.apply(1.0 - t)
+                        gain *= fadeOutCurve.apply(1.0 - t)
                     }
 
                     if gain < 1.0 {
@@ -550,8 +575,12 @@ final class AudioEditor {
                 throw AudioEditorError.editFailed("Failed to allocate audio buffer")
             }
 
-            // Pass 1: scan peak in chunks
+            // Pass 1: scan true-peak in chunks (4x oversampled via 4-point cubic interpolation)
+            // ITU-R BS.1770 recommends 4x oversampling for true-peak detection
             var peak: Float = 0
+            // Ring buffer of last 4 samples per channel for cubic interpolation
+            var history = [[Float]](repeating: [Float](repeating: 0, count: 4), count: channelCount)
+            var sampleCount = 0
             sourceFile.framePosition = 0
             var remaining = totalFrameCount
 
@@ -567,10 +596,36 @@ final class AudioEditor {
                 let chunkLen = Int(buffer.frameLength)
                 for ch in 0..<channelCount {
                     for frame in 0..<chunkLen {
-                        let abs = Swift.abs(floatData[ch][frame])
+                        let s = floatData[ch][frame]
+                        let abs = Swift.abs(s)
                         if abs > peak { peak = abs }
+
+                        // Shift history and push new sample
+                        history[ch][0] = history[ch][1]
+                        history[ch][1] = history[ch][2]
+                        history[ch][2] = history[ch][3]
+                        history[ch][3] = s
+
+                        // Need at least 4 samples before interpolating
+                        if sampleCount >= 3 {
+                            let y0 = history[ch][0], y1 = history[ch][1]
+                            let y2 = history[ch][2], y3 = history[ch][3]
+                            // Catmull-Rom cubic interpolation at t=0.25, 0.5, 0.75 between y1 and y2
+                            for k in 1...3 {
+                                let t = Float(k) * 0.25
+                                let t2 = t * t
+                                let t3 = t2 * t
+                                let interp = 0.5 * ((2.0 * y1)
+                                    + (-y0 + y2) * t
+                                    + (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3) * t2
+                                    + (-y0 + 3.0 * y1 - 3.0 * y2 + y3) * t3)
+                                let absInterp = Swift.abs(interp)
+                                if absInterp > peak { peak = absInterp }
+                            }
+                        }
                     }
                 }
+                sampleCount += chunkLen
                 remaining -= chunkLen
             }
 
@@ -616,15 +671,291 @@ final class AudioEditor {
         }
     }
 
+    // MARK: - LUFS Normalize (ITU-R BS.1770-4)
+
+    /// Normalize audio to a target loudness in LUFS using the ITU-R BS.1770-4 algorithm.
+    /// Uses K-weighted filtering, 400ms gated measurement, and absolute/relative gating.
+    func lufsNormalize(
+        sourceURL: URL,
+        targetLUFS: Float = -16.0
+    ) async -> AudioEditResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = self.performLufsNormalize(
+                    sourceURL: sourceURL,
+                    targetLUFS: targetLUFS
+                )
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func performLufsNormalize(
+        sourceURL: URL,
+        targetLUFS: Float
+    ) -> AudioEditResult {
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = sourceFile.length
+            let channelCount = Int(format.channelCount)
+            let totalFrameCount = Int(totalFrames)
+
+            guard totalFrameCount > 0 else {
+                return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: true, error: nil)
+            }
+
+            // ── K-filter coefficients (ITU-R BS.1770-4) ──
+            // Computed dynamically for any sample rate via bilinear transform.
+            // Stage 1: High-shelf (+3.9997 dB, models head acoustic effects)
+            // Stage 2: High-pass (RLB weighting, removes energy below ~38 Hz)
+            let (shelfCoeffs, hpCoeffs) = AudioEditor.kWeightingCoefficients(sampleRate: sampleRate)
+            let shelfB0 = shelfCoeffs.b0, shelfB1 = shelfCoeffs.b1, shelfB2 = shelfCoeffs.b2
+            let shelfA1 = shelfCoeffs.a1, shelfA2 = shelfCoeffs.a2
+            let hpB0 = hpCoeffs.b0, hpB1 = hpCoeffs.b1, hpB2 = hpCoeffs.b2
+            let hpA1 = hpCoeffs.a1, hpA2 = hpCoeffs.a2
+
+            // ── Pass 1: Measure LUFS ──
+            // Block size: 400ms with 75% overlap (step = 100ms)
+            let blockSamples = max(1, Int(0.4 * sampleRate))
+            let stepSamples = max(1, Int(0.1 * sampleRate))
+
+            // For very short files (< 400ms), use the entire file as a single block
+            let effectiveBlockSamples = min(blockSamples, totalFrameCount)
+
+            // Biquad filter state per channel (Direct Form II Transposed)
+            // Each channel needs two cascaded filters: shelf then highpass
+            // State: [z1, z2] per filter per channel
+            var shelfZ1 = [Double](repeating: 0, count: channelCount)
+            var shelfZ2 = [Double](repeating: 0, count: channelCount)
+            var hpZ1 = [Double](repeating: 0, count: channelCount)
+            var hpZ2 = [Double](repeating: 0, count: channelCount)
+
+            // We need to process the entire file through K-filters and compute per-block mean square
+            // Accumulate filtered squared samples per channel per block
+            var blockMeanSquares: [[Double]] = [] // [blockIndex][channel]
+            var totalSamplesProcessed = 0
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrameCount) else {
+                throw AudioEditorError.editFailed("Failed to allocate audio buffer")
+            }
+
+            sourceFile.framePosition = 0
+            var remaining = totalFrameCount
+
+            // We need overlapping blocks. To handle this with chunked I/O,
+            // we keep a rolling accumulator. Process all samples, and emit blocks
+            // at every stepSamples interval, each block covering the last blockSamples.
+            // We use a ring buffer of squared filtered samples per channel.
+            var ringBuffer = [[Double]](repeating: [Double](repeating: 0, count: effectiveBlockSamples), count: channelCount)
+            var ringIndex = 0
+            var ringFilled = 0 // How many samples have been written to ring so far
+            var samplesSinceLastBlock = 0
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                let chunkLen = Int(buffer.frameLength)
+
+                for frame in 0..<chunkLen {
+                    for ch in 0..<channelCount {
+                        let x = Double(floatData[ch][frame])
+
+                        // Stage 1: High-shelf filter (Direct Form II Transposed)
+                        let shelfOut = shelfB0 * x + shelfZ1[ch]
+                        shelfZ1[ch] = shelfB1 * x - shelfA1 * shelfOut + shelfZ2[ch]
+                        shelfZ2[ch] = shelfB2 * x - shelfA2 * shelfOut
+
+                        // Stage 2: High-pass filter (Direct Form II Transposed)
+                        let hpOut = hpB0 * shelfOut + hpZ1[ch]
+                        hpZ1[ch] = hpB1 * shelfOut - hpA1 * hpOut + hpZ2[ch]
+                        hpZ2[ch] = hpB2 * shelfOut - hpA2 * hpOut
+
+                        // Store squared filtered sample in ring buffer
+                        ringBuffer[ch][ringIndex] = hpOut * hpOut
+                    }
+
+                    ringIndex = (ringIndex + 1) % effectiveBlockSamples
+                    ringFilled = min(ringFilled + 1, effectiveBlockSamples)
+                    totalSamplesProcessed += 1
+                    samplesSinceLastBlock += 1
+
+                    // Emit a block at every stepSamples interval (or at end of file for short files)
+                    let shouldEmitBlock: Bool
+                    if totalFrameCount < blockSamples {
+                        // Very short file: emit one block at the very end
+                        shouldEmitBlock = (totalSamplesProcessed == totalFrameCount)
+                    } else {
+                        shouldEmitBlock = (samplesSinceLastBlock >= stepSamples && ringFilled >= effectiveBlockSamples)
+                    }
+
+                    if shouldEmitBlock {
+                        samplesSinceLastBlock = 0
+                        // Compute mean square for this block from ring buffer
+                        var channelMeans = [Double](repeating: 0, count: channelCount)
+                        let samplesInBlock = ringFilled
+                        for ch in 0..<channelCount {
+                            var sum: Double = 0
+                            for i in 0..<samplesInBlock {
+                                sum += ringBuffer[ch][i]
+                            }
+                            channelMeans[ch] = sum / Double(samplesInBlock)
+                        }
+                        blockMeanSquares.append(channelMeans)
+                    }
+                }
+
+                remaining -= chunkLen
+            }
+
+            // If no blocks were emitted (should not happen unless file is empty), return unchanged
+            guard !blockMeanSquares.isEmpty else {
+                return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
+            }
+
+            // Compute block loudness for each block
+            // L_j = -0.691 + 10 * log10(sum of weighted channel mean squares)
+            // For mono/stereo voice memos, channel weight G_i = 1.0
+            var blockLoudness = [Double](repeating: 0, count: blockMeanSquares.count)
+            for j in 0..<blockMeanSquares.count {
+                var weightedSum: Double = 0
+                for ch in 0..<channelCount {
+                    weightedSum += blockMeanSquares[j][ch] // weight = 1.0 for all front channels
+                }
+                if weightedSum > 0 {
+                    blockLoudness[j] = -0.691 + 10.0 * log10(weightedSum)
+                } else {
+                    blockLoudness[j] = -200.0 // effectively -infinity
+                }
+            }
+
+            // Absolute gate: discard blocks below -70 LKFS
+            let absoluteThreshold: Double = -70.0
+            var gatedBlocks: [Int] = []
+            for j in 0..<blockLoudness.count {
+                if blockLoudness[j] >= absoluteThreshold {
+                    gatedBlocks.append(j)
+                }
+            }
+
+            // Silent file: all blocks below -70 LKFS — return success with no modification
+            guard !gatedBlocks.isEmpty else {
+                return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
+            }
+
+            // Compute ungated LUFS from absolute-gated blocks
+            var ungatedSum: Double = 0
+            for j in gatedBlocks {
+                var weightedSum: Double = 0
+                for ch in 0..<channelCount {
+                    weightedSum += blockMeanSquares[j][ch]
+                }
+                ungatedSum += weightedSum
+            }
+            let ungatedLUFS = -0.691 + 10.0 * log10(ungatedSum / Double(gatedBlocks.count))
+
+            // Relative gate: discard blocks below (ungatedLUFS - 10)
+            let relativeThreshold = ungatedLUFS - 10.0
+            var finalBlocks: [Int] = []
+            for j in gatedBlocks {
+                if blockLoudness[j] >= relativeThreshold {
+                    finalBlocks.append(j)
+                }
+            }
+
+            // Should not be empty if ungated blocks exist, but guard anyway
+            guard !finalBlocks.isEmpty else {
+                return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
+            }
+
+            // Compute final gated LUFS
+            var finalSum: Double = 0
+            for j in finalBlocks {
+                var weightedSum: Double = 0
+                for ch in 0..<channelCount {
+                    weightedSum += blockMeanSquares[j][ch]
+                }
+                finalSum += weightedSum
+            }
+            let measuredLUFS = Float(-0.691 + 10.0 * log10(finalSum / Double(finalBlocks.count)))
+
+            // ── Pass 2: Apply gain ──
+            var gainDB = targetLUFS - measuredLUFS
+
+            // Cap extreme gain (normalizing near-silence would amplify noise floor)
+            if gainDB > 40.0 { gainDB = 0.0 }
+
+            // No gain needed
+            if abs(gainDB) < 0.01 {
+                return AudioEditResult(outputURL: sourceURL, newDuration: Double(totalFrames) / sampleRate, success: true, error: nil)
+            }
+
+            let gainLinear = powf(10.0, gainDB / 20.0)
+
+            let outputURL = generateOutputURL(from: sourceURL)
+            let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
+
+            sourceFile.framePosition = 0
+            remaining = totalFrameCount
+
+            while remaining > 0 {
+                let framesToRead = min(chunkFrameCount, AVAudioFrameCount(remaining))
+                buffer.frameLength = 0
+                try sourceFile.read(into: buffer, frameCount: framesToRead)
+
+                guard let floatData = buffer.floatChannelData else {
+                    throw AudioEditorError.editFailed("Cannot access float channel data")
+                }
+
+                let chunkLen = Int(buffer.frameLength)
+                for ch in 0..<channelCount {
+                    for frame in 0..<chunkLen {
+                        var val = floatData[ch][frame] * gainLinear
+                        // Soft clip using tanh knee at 0.9 (same as compressor)
+                        let absVal = fabsf(val)
+                        if absVal > 0.9 {
+                            let t = (absVal - 0.9) * 10.0 // 0 at knee, 1 at full scale
+                            let limited = 0.9 + 0.1 * tanhf(t)
+                            val = copysignf(limited, val)
+                        }
+                        floatData[ch][frame] = val
+                    }
+                }
+
+                try outputFile.write(from: buffer)
+                remaining -= chunkLen
+            }
+
+            let newDuration = Double(totalFrames) / sampleRate
+            return AudioEditResult(outputURL: outputURL, newDuration: newDuration, success: true, error: nil)
+        } catch {
+            return AudioEditResult(outputURL: sourceURL, newDuration: 0, success: false, error: error)
+        }
+    }
+
     // MARK: - Noise Gate
 
-    /// Apply a noise gate to silence audio below the threshold.
+    /// Apply a noise gate to attenuate audio below the threshold.
+    /// - Parameters:
+    ///   - thresholdDb: Gate opens when signal exceeds this level (-60 to -10 dB).
+    ///   - attackMs: Time for gate to fully open (1–50 ms).
+    ///   - releaseMs: Time for gate to fully close (10–500 ms).
+    ///   - holdMs: Minimum time gate stays open after signal drops below threshold (10–500 ms).
+    ///   - floorDb: Attenuation when gate is closed (-80 = near silence, -6 = subtle). 0 = no gating.
     func noiseGate(
         sourceURL: URL,
         thresholdDb: Float = -40,
         attackMs: Float = 5,
         releaseMs: Float = 50,
-        holdMs: Float = 50
+        holdMs: Float = 50,
+        floorDb: Float = -80
     ) async -> AudioEditResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -633,7 +964,8 @@ final class AudioEditor {
                     thresholdDb: thresholdDb,
                     attackMs: attackMs,
                     releaseMs: releaseMs,
-                    holdMs: holdMs
+                    holdMs: holdMs,
+                    floorDb: floorDb
                 )
                 continuation.resume(returning: result)
             }
@@ -645,7 +977,8 @@ final class AudioEditor {
         thresholdDb: Float,
         attackMs: Float,
         releaseMs: Float,
-        holdMs: Float
+        holdMs: Float,
+        floorDb: Float
     ) -> AudioEditResult {
         do {
             let sourceFile = try AVAudioFile(forReading: sourceURL)
@@ -656,6 +989,7 @@ final class AudioEditor {
             let totalFrameCount = Int(totalFrames)
 
             let thresholdLinear = powf(10.0, thresholdDb / 20.0)
+            let floorLinear = powf(10.0, min(0, floorDb) / 20.0) // floor gain when gate is closed
             let attackSamples = Int(attackMs * Float(sampleRate) / 1000.0)
             let releaseSamples = Int(releaseMs * Float(sampleRate) / 1000.0)
             let holdSamples = Int(holdMs * Float(sampleRate) / 1000.0)
@@ -670,7 +1004,7 @@ final class AudioEditor {
             // Gate state carried across chunk boundaries
             var gateOpen = false
             var holdCounter = 0
-            var envelope: Float = 0
+            var envelope: Float = floorLinear
 
             sourceFile.framePosition = 0
             var remaining = totalFrameCount
@@ -705,16 +1039,16 @@ final class AudioEditor {
                         gateOpen = false
                     }
 
-                    // Smooth envelope
-                    let target: Float = gateOpen ? 1.0 : 0.0
+                    // Smooth envelope (ramps between floorLinear and 1.0)
+                    let target: Float = gateOpen ? 1.0 : floorLinear
                     if target > envelope {
                         // Attack
-                        let coeff = attackSamples > 0 ? 1.0 / Float(attackSamples) : 1.0
+                        let coeff = attackSamples > 0 ? (1.0 - floorLinear) / Float(attackSamples) : (1.0 - floorLinear)
                         envelope = min(1.0, envelope + coeff)
-                    } else {
+                    } else if target < envelope {
                         // Release
-                        let coeff = releaseSamples > 0 ? 1.0 / Float(releaseSamples) : 1.0
-                        envelope = max(0.0, envelope - coeff)
+                        let coeff = releaseSamples > 0 ? (1.0 - floorLinear) / Float(releaseSamples) : (1.0 - floorLinear)
+                        envelope = max(floorLinear, envelope - coeff)
                     }
 
                     for ch in 0..<channelCount {
@@ -849,14 +1183,13 @@ final class AudioEditor {
                         let wetSample = drySample * compGain
                         floatData[ch][frame] = drySample * (1.0 - clampedMix) + wetSample * clampedMix
                         // Soft clip to prevent overs from makeup gain
-                        // Uses tanh-style curve: approaches ±1.0 asymptotically
+                        // Knee at 0.9 with tanh saturation — C1 continuous, approaches ±1.0 asymptotically
                         let val = floatData[ch][frame]
-                        if val > 1.0 {
-                            let excess = val - 1.0
-                            floatData[ch][frame] = 1.0 - 1.0 / (1.0 + excess * 2.0)
-                        } else if val < -1.0 {
-                            let excess = -val - 1.0
-                            floatData[ch][frame] = -(1.0 - 1.0 / (1.0 + excess * 2.0))
+                        let absVal = fabsf(val)
+                        if absVal > 0.9 {
+                            let t = (absVal - 0.9) * 10.0 // 0 at knee, 1 at full scale
+                            let limited = 0.9 + 0.1 * tanhf(t)
+                            floatData[ch][frame] = copysignf(limited, val)
                         }
                     }
                 }
@@ -919,6 +1252,7 @@ final class AudioEditor {
             let totalFrames = sourceFile.length
             let channelCount = Int(format.channelCount)
             let totalFrameCount = Int(totalFrames)
+            let isStereo = channelCount >= 2
 
             // Freeverb comb filter tuning (calibrated for 44.1kHz, Jezar at Dreampoint)
             let baseCombDelays = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
@@ -927,12 +1261,17 @@ final class AudioEditor {
             // Scale delay times for sample rate and room size
             let srScale = Float(sampleRate) / 44100.0
             let roomScale = max(0.3, min(3.0, roomSize))
-            let combDelays = baseCombDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
-            let allpassDelays = baseAllpassDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
+            let combDelaysL = baseCombDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
+            let allpassDelaysL = baseAllpassDelays.map { max(1, Int(Float($0) * srScale * roomScale)) }
+
+            // Stereo spread: right channel delay lines offset by 23 samples (Freeverb standard)
+            let stereoSpread = 23
+            let combDelaysR = combDelaysL.map { $0 + stereoSpread }
+            let allpassDelaysR = allpassDelaysL.map { $0 + stereoSpread }
 
             // Feedback coefficient from desired RT60 decay time
             // RT60 = time for reverb to decay by 60dB
-            guard let maxCombDelay = combDelays.max() else {
+            guard let maxCombDelay = combDelaysL.max() else {
                 throw AudioEditorError.editFailed("Internal error: empty comb delay array")
             }
             let maxCombSec = Float(maxCombDelay) / Float(sampleRate)
@@ -940,7 +1279,7 @@ final class AudioEditor {
             let feedback = min(0.99, max(0.3, powf(10.0, -3.0 * maxCombSec / rt60)))
 
             // Damping: one-pole lowpass in comb feedback path
-            let damp1 = min(1.0, max(0.0, damping)) * 0.4
+            let damp1 = min(1.0, max(0.0, damping))
             let damp2: Float = 1.0 - damp1
             let allpassFeedback: Float = 0.5
 
@@ -949,14 +1288,21 @@ final class AudioEditor {
             var preDelayBuf = [Float](repeating: 0, count: preDelaySamples)
             var preDelayIdx = 0
 
-            // 8 comb filter state
-            var combBufs = combDelays.map { [Float](repeating: 0, count: $0) }
-            var combIdx = [Int](repeating: 0, count: 8)
-            var combLPF = [Float](repeating: 0, count: 8)
+            // 8 comb filter state (L channel)
+            var combBufsL = combDelaysL.map { [Float](repeating: 0, count: $0) }
+            var combIdxL = [Int](repeating: 0, count: 8)
+            var combLPF_L = [Float](repeating: 0, count: 8)
 
-            // 4 allpass filter state
-            var apBufs = allpassDelays.map { [Float](repeating: 0, count: $0) }
-            var apIdx = [Int](repeating: 0, count: 4)
+            // 4 allpass filter state (L channel)
+            var apBufsL = allpassDelaysL.map { [Float](repeating: 0, count: $0) }
+            var apIdxL = [Int](repeating: 0, count: 4)
+
+            // R channel state (stereo decorrelation via offset delay lines)
+            var combBufsR = isStereo ? combDelaysR.map { [Float](repeating: 0, count: $0) } : []
+            var combIdxR = isStereo ? [Int](repeating: 0, count: 8) : []
+            var combLPF_R = isStereo ? [Float](repeating: 0, count: 8) : []
+            var apBufsR = isStereo ? allpassDelaysR.map { [Float](repeating: 0, count: $0) } : []
+            var apIdxR = isStereo ? [Int](repeating: 0, count: 4) : []
 
             // Mix
             let wet = min(1.0, max(0.0, wetDry))
@@ -973,6 +1319,10 @@ final class AudioEditor {
             let tailSeconds = min(maxTailSeconds, requestedTailSeconds)
             let tailFrames = Int(tailSeconds * sampleRate)
             let totalOutputFrames = totalFrameCount + tailFrames
+
+            // Tail fade-out: smooth fade over last 500ms to prevent abrupt cutoff
+            let tailFadeSamples = max(1, Int(0.5 * sampleRate))
+            let tailFadeStart = totalOutputFrames - tailFadeSamples
 
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
@@ -1018,33 +1368,72 @@ final class AudioEditor {
                     preDelayBuf[preDelayIdx] = mono
                     preDelayIdx = (preDelayIdx + 1) % preDelaySamples
 
-                    // 8 parallel comb filters with damped feedback
-                    var reverbSum: Float = 0
+                    // L channel: 8 parallel comb filters with damped feedback
+                    var reverbSumL: Float = 0
                     for i in 0..<8 {
-                        let combOut = combBufs[i][combIdx[i]]
-                        // One-pole lowpass in feedback
-                        combLPF[i] = combOut * damp2 + combLPF[i] * damp1
-                        combBufs[i][combIdx[i]] = preDelayed + combLPF[i] * feedback
-                        combIdx[i] = (combIdx[i] + 1) % combDelays[i]
-                        reverbSum += combOut
+                        let combOut = combBufsL[i][combIdxL[i]]
+                        combLPF_L[i] = combOut * damp2 + combLPF_L[i] * damp1
+                        combBufsL[i][combIdxL[i]] = preDelayed + combLPF_L[i] * feedback
+                        combIdxL[i] = (combIdxL[i] + 1) % combDelaysL[i]
+                        reverbSumL += combOut
                     }
 
-                    // 4 series allpass filters for diffusion
-                    var ap = reverbSum
+                    // L channel: 4 series allpass filters for diffusion
+                    var apL = reverbSumL
                     for i in 0..<4 {
-                        let buffered = apBufs[i][apIdx[i]]
-                        let apOut = -ap + buffered
-                        apBufs[i][apIdx[i]] = ap + buffered * allpassFeedback
-                        apIdx[i] = (apIdx[i] + 1) % allpassDelays[i]
-                        ap = apOut
+                        let buffered = apBufsL[i][apIdxL[i]]
+                        let apOut = -apL + buffered
+                        apBufsL[i][apIdxL[i]] = apL + buffered * allpassFeedback
+                        apIdxL[i] = (apIdxL[i] + 1) % allpassDelaysL[i]
+                        apL = apOut
                     }
 
-                    let reverbOut = ap * fixedGain
+                    let reverbOutL = apL * fixedGain
 
-                    // Mix wet/dry to all output channels
-                    for ch in 0..<channelCount {
-                        let dryVal: Float = frame < actualIn ? inData[ch][frame] : 0
-                        outData[ch][frame] = dryVal * dry + reverbOut * wet
+                    // Tail fade-out to prevent abrupt cutoff at tail cap
+                    let globalFrame = outWritten + frame
+                    var tailGain: Float = 1.0
+                    if globalFrame >= tailFadeStart {
+                        tailGain = max(0, Float(totalOutputFrames - globalFrame) / Float(tailFadeSamples))
+                    }
+
+                    if isStereo {
+                        // R channel: 8 parallel comb filters with offset delays for decorrelation
+                        var reverbSumR: Float = 0
+                        for i in 0..<8 {
+                            let combOut = combBufsR[i][combIdxR[i]]
+                            combLPF_R[i] = combOut * damp2 + combLPF_R[i] * damp1
+                            combBufsR[i][combIdxR[i]] = preDelayed + combLPF_R[i] * feedback
+                            combIdxR[i] = (combIdxR[i] + 1) % combDelaysR[i]
+                            reverbSumR += combOut
+                        }
+
+                        // R channel: 4 series allpass filters
+                        var apR = reverbSumR
+                        for i in 0..<4 {
+                            let buffered = apBufsR[i][apIdxR[i]]
+                            let apOut = -apR + buffered
+                            apBufsR[i][apIdxR[i]] = apR + buffered * allpassFeedback
+                            apIdxR[i] = (apIdxR[i] + 1) % allpassDelaysR[i]
+                            apR = apOut
+                        }
+
+                        let reverbOutR = apR * fixedGain
+
+                        let dryL: Float = frame < actualIn ? inData[0][frame] : 0
+                        let dryR: Float = frame < actualIn ? inData[1][frame] : 0
+                        outData[0][frame] = dryL * dry + reverbOutL * wet * tailGain
+                        outData[1][frame] = dryR * dry + reverbOutR * wet * tailGain
+
+                        // Any extra channels beyond stereo get L reverb
+                        for ch in 2..<channelCount {
+                            let dryVal: Float = frame < actualIn ? inData[ch][frame] : 0
+                            outData[ch][frame] = dryVal * dry + reverbOutL * wet * tailGain
+                        }
+                    } else {
+                        // Mono
+                        let dryVal: Float = frame < actualIn ? inData[0][frame] : 0
+                        outData[0][frame] = dryVal * dry + reverbOutL * wet * tailGain
                     }
                 }
 
@@ -1104,7 +1493,7 @@ final class AudioEditor {
             let totalFrameCount = Int(totalFrames)
 
             let clampedFB = min(0.9, max(0.0, feedback))
-            let clampedDamp = min(1.0, max(0.0, damping))
+            let clampedDamp = min(0.95, max(0.0, damping))  // Cap at 0.95: 1.0 kills signal entirely
 
             // Per-channel delay line
             let delaySamples = max(1, Int(delayTime * Float(sampleRate)))
@@ -1124,6 +1513,10 @@ final class AudioEditor {
             }
             let tailFrames = Int(tailSeconds * sampleRate)
             let totalOutputFrames = totalFrameCount + tailFrames
+
+            // Tail fade-out: smooth fade over last 500ms to prevent abrupt cutoff
+            let echoTailFadeSamples = max(1, Int(0.5 * sampleRate))
+            let echoTailFadeStart = totalOutputFrames - echoTailFadeSamples
 
             let outputURL = generateOutputURL(from: sourceURL)
             let outputFile = try AVAudioFile(forWriting: outputURL, settings: sourceFile.fileFormat.settings)
@@ -1156,6 +1549,13 @@ final class AudioEditor {
                 }
 
                 for frame in 0..<chunkSize {
+                    // Tail fade-out to prevent abrupt cutoff
+                    let globalFrame = outWritten + frame
+                    var tailGain: Float = 1.0
+                    if globalFrame >= echoTailFadeStart {
+                        tailGain = max(0, Float(totalOutputFrames - globalFrame) / Float(echoTailFadeSamples))
+                    }
+
                     for ch in 0..<channelCount {
                         let input: Float = frame < actualIn ? inData[ch][frame] : 0
 
@@ -1169,8 +1569,8 @@ final class AudioEditor {
                         delayBufs[ch][delayIdx[ch]] = input + lpfStores[ch] * clampedFB
                         delayIdx[ch] = (delayIdx[ch] + 1) % delaySamples
 
-                        // Mix wet/dry
-                        outData[ch][frame] = input * dry + delayed * wet
+                        // Mix wet/dry with tail fade
+                        outData[ch][frame] = input * dry + delayed * wet * tailGain
                     }
                 }
 
@@ -1453,6 +1853,108 @@ final class AudioEditor {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - ITU-R BS.1770-4 K-Weighting Filter Coefficients
+
+    /// Biquad filter coefficients (normalized so a0 = 1).
+    /// Transfer function: H(z) = (b0 + b1*z^-1 + b2*z^-2) / (1 + a1*z^-1 + a2*z^-2)
+    struct BiquadCoefficients {
+        let b0: Double
+        let b1: Double
+        let b2: Double
+        let a1: Double
+        let a2: Double
+    }
+
+    /// Compute K-weighting filter coefficients for any sample rate using the bilinear transform.
+    ///
+    /// The K-weighting filter specified by ITU-R BS.1770-4 consists of two cascaded stages:
+    ///   1. **Pre-filter (high shelf)**: +3.9997 dB boost above ~1681 Hz, modeling acoustic
+    ///      effects of the human head.
+    ///   2. **RLB weighting (highpass)**: 2nd-order highpass at ~38.13 Hz, removing DC and
+    ///      subsonic content.
+    ///
+    /// Both filters are designed as analog prototypes and digitized via the bilinear transform
+    /// with frequency pre-warping. The resulting coefficients match the reference values
+    /// published for 48 kHz and 44.1 kHz to at least 5 significant digits.
+    ///
+    /// - Parameter sampleRate: The audio sample rate in Hz (e.g. 8000, 16000, 44100, 48000, 96000).
+    /// - Returns: A tuple of (shelf coefficients, highpass coefficients).
+    static func kWeightingCoefficients(sampleRate: Double) -> (shelf: BiquadCoefficients, highpass: BiquadCoefficients) {
+        // ────────────────────────────────────────────────────────────────
+        // Stage 1: Pre-filter (high shelf)
+        //
+        // Analog prototype parameters (from ITU-R BS.1770-4):
+        //   - Shelf gain:  Vh = 10^(+3.9997/20) ≈ 1.58489319...  (the linear voltage gain)
+        //   - Quality:     Q  = 0.7071752369554193  (≈ 1/sqrt(2), Butterworth alignment)
+        //   - Center freq: fc = 1681.974450955533 Hz
+        //
+        // High-shelf biquad via bilinear transform with pre-warping:
+        //   K  = tan(pi * fc / fs)                    [pre-warped frequency]
+        //   Vh = 10^(dBgain / 20)                     [linear gain]
+        //   Vb = Vh^0.4996667741545416                 [bandwidth gain; exponent from spec]
+        //   a0 = 1 + K/Q + K^2
+        //   b0 = (Vh + Vb*K/Q + K^2) / a0
+        //   b1 = 2*(K^2 - Vh) / a0
+        //   b2 = (Vh - Vb*K/Q + K^2) / a0
+        //   a1 = 2*(K^2 - 1) / a0
+        //   a2 = (1 - K/Q + K^2) / a0
+        // ────────────────────────────────────────────────────────────────
+
+        let shelfFc  = 1681.974450955533
+        let shelfQ   = 0.7071752369554193
+        let shelfDb  = 3.999843853973347
+
+        let Vh = pow(10.0, shelfDb / 20.0)
+        let Vb = pow(Vh, 0.4996667741545416)
+        let K  = tan(Double.pi * shelfFc / sampleRate)
+        let K2 = K * K
+        let KoverQ = K / shelfQ
+
+        let shelfA0 = 1.0 + KoverQ + K2
+        let shelfB0 = (Vh + Vb * KoverQ + K2) / shelfA0
+        let shelfB1 = 2.0 * (K2 - Vh) / shelfA0
+        let shelfB2 = (Vh - Vb * KoverQ + K2) / shelfA0
+        let shelfA1 = 2.0 * (K2 - 1.0) / shelfA0
+        let shelfA2 = (1.0 - KoverQ + K2) / shelfA0
+
+        let shelf = BiquadCoefficients(b0: shelfB0, b1: shelfB1, b2: shelfB2, a1: shelfA1, a2: shelfA2)
+
+        // ────────────────────────────────────────────────────────────────
+        // Stage 2: RLB weighting highpass (2nd-order Butterworth highpass)
+        //
+        // Analog prototype parameters:
+        //   - Cutoff freq:  fc = 38.13547087602444 Hz
+        //   - Q = 0.5003270373238773  (≈ 1/2, critically damped)
+        //
+        // 2nd-order highpass via bilinear transform with pre-warping:
+        //   K  = tan(pi * fc / fs)
+        //   a0 = 1 + K/Q + K^2
+        //   b0 = 1 / a0
+        //   b1 = -2 / a0
+        //   b2 = 1 / a0
+        //   a1 = 2*(K^2 - 1) / a0
+        //   a2 = (1 - K/Q + K^2) / a0
+        // ────────────────────────────────────────────────────────────────
+
+        let hpFc = 38.13547087602444
+        let hpQ  = 0.5003270373238773
+
+        let Khp  = tan(Double.pi * hpFc / sampleRate)
+        let Khp2 = Khp * Khp
+        let KhpOverQ = Khp / hpQ
+
+        let hpA0 = 1.0 + KhpOverQ + Khp2
+        let hpB0 = 1.0 / hpA0
+        let hpB1 = -2.0 / hpA0
+        let hpB2 = 1.0 / hpA0
+        let hpA1 = 2.0 * (Khp2 - 1.0) / hpA0
+        let hpA2 = (1.0 - KhpOverQ + Khp2) / hpA0
+
+        let highpass = BiquadCoefficients(b0: hpB0, b1: hpB1, b2: hpB2, a1: hpA1, a2: hpA2)
+
+        return (shelf: shelf, highpass: highpass)
     }
 
     // MARK: - Helpers

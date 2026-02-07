@@ -20,7 +20,7 @@ struct WaveformView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.themePalette) private var palette
-    @State private var initialPinchZoom: CGFloat = 1.0
+    @State private var initialPinchZoom: CGFloat? = nil
 
     /// Convenience initializer for backward compatibility (envelope only)
     init(samples: [Float], progress: Double = 0, zoomScale: Binding<CGFloat>) {
@@ -67,14 +67,14 @@ struct WaveformView: View {
             .gesture(
                 MagnificationGesture()
                     .onChanged { value in
-                        if initialPinchZoom == 1.0 {
+                        if initialPinchZoom == nil {
                             initialPinchZoom = zoomScale
                         }
-                        let newScale = initialPinchZoom * value
+                        let newScale = (initialPinchZoom ?? zoomScale) * value
                         zoomScale = min(max(newScale, minZoom), maxZoom)
                     }
                     .onEnded { _ in
-                        initialPinchZoom = 1.0
+                        initialPinchZoom = nil
                     }
             )
         }
@@ -135,21 +135,24 @@ struct WaveformCanvas: View {
             centerLine.addLine(to: CGPoint(x: size.width, y: centerY))
             context.stroke(centerLine, with: .color(isDarkMode ? Color.white.opacity(0.15) : Color.black.opacity(0.12)), lineWidth: 0.5)
 
-            // === 2. Draw Waveform ===
-            // Use envelope samples for reliable display - mirrored around center line
-            // This creates the classic waveform look: louder = taller bars
+            // === 2. Draw Waveform (Apple Voice Memos style) ===
+            // Thin bars with rounded caps, high density, centered on midline
 
             let sampleCount = samples.count
             let xStep = size.width / CGFloat(sampleCount)
 
-            // Cap line width: minimum 1, maximum 3 (prevents spider-web on zoom)
-            let lineWidth = min(3, max(1, xStep * 0.7))
+            // Apple Voice Memos style: thin bars (1-1.5pt) with small gaps
+            // barWidth is the stroke width; gap is implicit from xStep - barWidth
+            let barWidth: CGFloat = min(1.5, max(0.75, xStep * 0.55))
+
+            // Minimum bar height ensures silent sections still show a subtle mark
+            let minBarHeight: CGFloat = 1.5
 
             for (index, sample) in samples.enumerated() {
                 let x = CGFloat(index) * xStep + xStep / 2
 
                 // Sample is 0-1 normalized amplitude (louder = higher value)
-                let amplitude = CGFloat(sample) * maxAmplitude
+                let amplitude = max(minBarHeight, CGFloat(sample) * maxAmplitude)
 
                 // Draw symmetric around center - louder sounds = taller bars
                 let yTop = centerY - amplitude
@@ -162,7 +165,7 @@ struct WaveformCanvas: View {
                 context.stroke(
                     linePath,
                     with: .color(waveformColor),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
                 )
             }
 
@@ -200,7 +203,7 @@ struct DetailsWaveformView: View {
     @State private var isPanning = false
     @State private var isSeeking = false  // Track whether user is scrubbing the playhead
     @State private var panStartTime: TimeInterval = 0
-    @State private var initialPinchZoom: CGFloat = 1.0
+    @State private var initialPinchZoom: CGFloat? = nil
 
     // Compact ruler height for Details view
     private let detailsRulerHeight: CGFloat = 28
@@ -255,17 +258,17 @@ struct DetailsWaveformView: View {
                 .gesture(
                     MagnificationGesture()
                         .onChanged { value in
-                            if initialPinchZoom == 1.0 {
+                            if initialPinchZoom == nil {
                                 initialPinchZoom = timeline.zoomScale
                             }
-                            let newScale = initialPinchZoom * value
+                            let newScale = (initialPinchZoom ?? timeline.zoomScale) * value
                             let clampedScale = min(max(newScale, 1.0), WaveformTimeline.maxZoom)
                             // Use zoom(to:centeredOn:) to keep visibleStartTime in sync
                             let centerTime = timeline.visibleStartTime + timeline.visibleDuration / 2
                             timeline.zoom(to: clampedScale, centeredOn: centerTime)
                         }
                         .onEnded { _ in
-                            initialPinchZoom = 1.0
+                            initialPinchZoom = nil
                         }
                 )
                 // Drag gesture: pan when zoomed, scrub playhead when not zoomed
@@ -372,7 +375,8 @@ struct DetailsWaveformView: View {
             if isPlaying && timeline.zoomScale > 1.0 && !isPanning {
                 // Apply audio latency compensation (same as Edit mode)
                 let audioLatencyCompensation: TimeInterval = 0.05
-                let compensatedProgress = max(0, newProgress - (audioLatencyCompensation / duration))
+                let compensatedTime = max(0, newProgress * duration - audioLatencyCompensation)
+                let compensatedProgress = compensatedTime / duration
                 let currentTime = compensatedProgress * duration
                 timeline.centerOnTime(currentTime)
             }
@@ -427,24 +431,34 @@ struct MiniWaveformView: View {
         Canvas { context, size in
             guard !samples.isEmpty else { return }
 
+            let centerY = size.height / 2
+            let maxAmplitude = size.height / 2 * 0.85
+
+            // Apple Voice Memos style: thin bars, rounded caps, centered on midline
             let barCount = samples.count
-            let barSpacing: CGFloat = 1
-            let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let availableWidth = size.width - totalSpacing
-            let barWidth = max(1, availableWidth / CGFloat(barCount))
+            let xStep = size.width / CGFloat(barCount)
+            let barWidth: CGFloat = min(1.25, max(0.75, xStep * 0.55))
+            let minBarHeight: CGFloat = 1.0
 
             let barColor: Color = colorScheme == .dark ? .white.opacity(0.5) : Color(.systemGray3)
 
             for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * (barWidth + barSpacing)
-                let barHeight = max(2, CGFloat(sample) * size.height * 0.85)
-                let y = (size.height - barHeight) / 2
+                let x = CGFloat(index) * xStep + xStep / 2
 
-                let rect = CGRect(x: x, y: y, width: barWidth, height: barHeight)
-                let path = RoundedRectangle(cornerRadius: 0.5)
-                    .path(in: rect)
+                let amplitude = max(minBarHeight, CGFloat(sample) * maxAmplitude)
 
-                context.fill(path, with: .color(barColor))
+                let yTop = centerY - amplitude
+                let yBottom = centerY + amplitude
+
+                var linePath = Path()
+                linePath.move(to: CGPoint(x: x, y: yTop))
+                linePath.addLine(to: CGPoint(x: x, y: yBottom))
+
+                context.stroke(
+                    linePath,
+                    with: .color(barColor),
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
+                )
             }
         }
     }
@@ -460,24 +474,34 @@ struct LiveWaveformView: View {
         Canvas { context, size in
             guard !samples.isEmpty else { return }
 
+            let centerY = size.height / 2
+            let maxAmplitude = size.height / 2 * 0.9
             let barCount = samples.count
-            let barSpacing: CGFloat = 2
-            let totalSpacing = barSpacing * CGFloat(barCount - 1)
-            let availableWidth = size.width - totalSpacing
-            let barWidth = max(2, availableWidth / CGFloat(barCount))
+            let xStep = size.width / CGFloat(barCount)
+
+            // Apple Voice Memos style: thin bars with rounded caps, centered on midline
+            let barWidth: CGFloat = min(1.5, max(1.0, xStep * 0.5))
+            let minBarHeight: CGFloat = 1.5
 
             for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * (barWidth + barSpacing)
-                let barHeight = max(4, CGFloat(sample) * size.height * 0.9)
-                let y = (size.height - barHeight) / 2
+                let x = CGFloat(index) * xStep + xStep / 2
 
-                let rect = CGRect(x: x, y: y, width: barWidth, height: barHeight)
-                let path = RoundedRectangle(cornerRadius: 1.5)
-                    .path(in: rect)
+                let amplitude = max(minBarHeight, CGFloat(sample) * maxAmplitude)
+
+                let yTop = centerY - amplitude
+                let yBottom = centerY + amplitude
+
+                var linePath = Path()
+                linePath.move(to: CGPoint(x: x, y: yTop))
+                linePath.addLine(to: CGPoint(x: x, y: yBottom))
 
                 // Gradient effect: more recent samples are brighter
                 let alpha = 0.3 + (Double(index) / Double(barCount)) * 0.7
-                context.fill(path, with: .color(accentColor.opacity(alpha)))
+                context.stroke(
+                    linePath,
+                    with: .color(accentColor.opacity(alpha)),
+                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
+                )
             }
         }
     }

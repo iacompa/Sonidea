@@ -24,7 +24,7 @@ struct StartRecordingIntent: AppIntent {
     }
 }
 
-/// Shortcuts provider to make the intent discoverable
+/// Shortcuts provider to make all intents discoverable in the Shortcuts app and via Siri
 struct SonideaShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -37,6 +37,39 @@ struct SonideaShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Start Recording",
             systemImageName: "mic.fill"
+        )
+
+        AppShortcut(
+            intent: GetLastRecordingIntent(),
+            phrases: [
+                "Get my last recording in \(.applicationName)",
+                "Show my latest recording in \(.applicationName)",
+                "Open my last voice memo in \(.applicationName)"
+            ],
+            shortTitle: "Last Recording",
+            systemImageName: "clock.arrow.circlepath"
+        )
+
+        AppShortcut(
+            intent: TranscribeRecordingIntent(),
+            phrases: [
+                "Transcribe my recording in \(.applicationName)",
+                "Transcribe this recording in \(.applicationName)",
+                "Get transcript in \(.applicationName)"
+            ],
+            shortTitle: "Transcribe",
+            systemImageName: "text.bubble"
+        )
+
+        AppShortcut(
+            intent: ExportRecordingIntent(),
+            phrases: [
+                "Export my recording from \(.applicationName)",
+                "Export recording as WAV from \(.applicationName)",
+                "Export last recording from \(.applicationName)"
+            ],
+            shortTitle: "Export Recording",
+            systemImageName: "square.and.arrow.up"
         )
     }
 }

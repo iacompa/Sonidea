@@ -20,7 +20,7 @@ struct TagManagerView: View {
     @State private var showMergeSheet = false
     @State private var showDeleteProtectedAlert = false
     @State private var proUpgradeContext: ProFeatureContext? = nil
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     private var filteredTags: [Tag] {
         if searchQuery.isEmpty {
@@ -143,7 +143,7 @@ struct TagManagerView: View {
                     onViewPlans: {
                         proUpgradeContext = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            showTipJar = true
+                            showSupport = true
                         }
                     },
                     onDismiss: {
@@ -152,8 +152,8 @@ struct TagManagerView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .sheet(isPresented: $showTipJar) {
-                TipJarView()
+            .sheet(isPresented: $showSupport) {
+                SupportView()
                     .environment(appState)
                     .environment(\.themePalette, palette)
             }

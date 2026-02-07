@@ -109,7 +109,7 @@ struct RecordingDetailView: View {
     @State private var pendingDuration: TimeInterval?  // Pending duration after edit
     @State private var hasAudioEdits = false  // Track if audio was modified
     @State private var proUpgradeContext: ProFeatureContext? = nil
-    @State private var showTipJar = false
+    @State private var showSupport = false
     @State private var editHistory = EditHistory()  // Undo/redo support
     @State private var showSkipSilenceResult = false  // Toast for skip silence result
     @State private var skipSilenceResultMessage = ""  // Message for skip silence toast
@@ -137,13 +137,20 @@ struct RecordingDetailView: View {
     // Tool settings state (persists across panel open/close while editing)
     @State private var appliedFadeIn: TimeInterval = 0
     @State private var appliedFadeOut: TimeInterval = 0
-    @State private var appliedFadeCurve: FadeCurve = .sCurve
+    @State private var appliedFadeInCurve: FadeCurve = .sCurve
+    @State private var appliedFadeOutCurve: FadeCurve = .sCurve
     @State private var hasFadeApplied = false
 
+    @State private var normalizeMode: NormalizeMode = .peak
     @State private var appliedPeakTarget: Float = -0.3
+    @State private var appliedLufsTarget: Float = -16.0
     @State private var hasPeakApplied = false
 
     @State private var appliedGateThreshold: Float = -40
+    @State private var appliedGateAttack: Float = 5
+    @State private var appliedGateRelease: Float = 50
+    @State private var appliedGateHold: Float = 50
+    @State private var appliedGateFloor: Float = -80
     @State private var hasGateApplied = false
 
     @State private var appliedCompressGain: Float = 0
@@ -284,7 +291,9 @@ struct RecordingDetailView: View {
                 locationModeRaw: snapshotRecording.locationModeRaw,
                 locationProofHash: snapshotRecording.locationProofHash,
                 locationProofStatusRaw: snapshotRecording.locationProofStatusRaw,
-                markers: editedMarkers
+                markers: editedMarkers,
+                actualSampleRate: snapshotRecording.actualSampleRate,
+                actualChannelCount: snapshotRecording.actualChannelCount
             )
         }
         return RecordingSnapshot(from: snapshotRecording)
@@ -636,7 +645,7 @@ struct RecordingDetailView: View {
                     onViewPlans: {
                         proUpgradeContext = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            showTipJar = true
+                            showSupport = true
                         }
                     },
                     onDismiss: {
@@ -645,8 +654,8 @@ struct RecordingDetailView: View {
                 )
                 .environment(\.themePalette, palette)
             }
-            .iPadSheet(isPresented: $showTipJar) {
-                TipJarView()
+            .iPadSheet(isPresented: $showSupport) {
+                SupportView()
                     .environment(appState)
                     .environment(\.themePalette, palette)
             }
@@ -968,7 +977,8 @@ struct RecordingDetailView: View {
                             FadeCurveOverlay(
                                 fadeInDuration: appliedFadeIn,
                                 fadeOutDuration: appliedFadeOut,
-                                curve: appliedFadeCurve,
+                                fadeInCurve: appliedFadeInCurve,
+                                fadeOutCurve: appliedFadeOutCurve,
                                 totalDuration: editorDuration
                             )
                             .frame(height: expandedWaveformHeight)
@@ -1127,29 +1137,36 @@ struct RecordingDetailView: View {
                             isProcessing: $isProcessingEdit,
                             fadeIn: $appliedFadeIn,
                             fadeOut: $appliedFadeOut,
-                            fadeCurve: $appliedFadeCurve,
+                            fadeInCurve: $appliedFadeInCurve,
+                            fadeOutCurve: $appliedFadeOutCurve,
                             fadeDuration: effectiveEditDuration,
                             hasFadeApplied: hasFadeApplied,
-                            onApplyFade: { fadeIn, fadeOut, curve in
+                            onApplyFade: { fadeIn, fadeOut, inCurve, outCurve in
                                 if hasFadeApplied { undoLastEdit() }
                                 hasFadeApplied = true
-                                applyFade(fadeIn: fadeIn, fadeOut: fadeOut, curve: curve)
+                                applyFade(fadeIn: fadeIn, fadeOut: fadeOut, fadeInCurve: inCurve, fadeOutCurve: outCurve)
                             },
                             onRemoveFade: { removeFade() },
+                            normalizeMode: $normalizeMode,
                             peakTarget: $appliedPeakTarget,
+                            lufsTarget: $appliedLufsTarget,
                             hasPeakApplied: hasPeakApplied,
-                            onApplyPeak: { target in
+                            onApplyPeak: { mode, target in
                                 if hasPeakApplied { undoLastEdit() }
                                 hasPeakApplied = true
-                                applyNormalize(targetDb: target)
+                                applyNormalize(mode: mode, targetDb: target)
                             },
                             onRemovePeak: { removePeak() },
                             gateThreshold: $appliedGateThreshold,
+                            gateAttack: $appliedGateAttack,
+                            gateRelease: $appliedGateRelease,
+                            gateHold: $appliedGateHold,
+                            gateFloor: $appliedGateFloor,
                             hasGateApplied: hasGateApplied,
-                            onApplyGate: { threshold in
+                            onApplyGate: { threshold, attack, release, hold, floor in
                                 if hasGateApplied { undoLastEdit() }
                                 hasGateApplied = true
-                                applyNoiseGate(threshold: threshold)
+                                applyNoiseGate(threshold: threshold, attack: attack, release: release, hold: hold, floor: floor)
                             },
                             onRemoveGate: { removeGate() },
                             compGain: $appliedCompressGain,
@@ -1192,7 +1209,9 @@ struct RecordingDetailView: View {
                             onApplyPreset: { params in
                                 applyPreset(params: params)
                             },
-                            onRemovePreset: { removePreset() }
+                            onRemovePreset: { removePreset() },
+                            hasOriginalBackup: currentRecording.originalAudioFileName != nil,
+                            onResetToOriginal: { resetToOriginal() }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -1388,9 +1407,16 @@ struct RecordingDetailView: View {
         hasPresetApplied = false
         appliedFadeIn = 0
         appliedFadeOut = 0
-        appliedFadeCurve = .sCurve
+        appliedFadeInCurve = .sCurve
+        appliedFadeOutCurve = .sCurve
+        normalizeMode = .peak
         appliedPeakTarget = -0.3
+        appliedLufsTarget = -16.0
         appliedGateThreshold = -40
+        appliedGateAttack = 5
+        appliedGateRelease = 50
+        appliedGateHold = 50
+        appliedGateFloor = -80
         appliedCompressGain = 0
         appliedCompressPeakReduction = 0
         appliedCompressMix = 1.0
@@ -1426,7 +1452,8 @@ struct RecordingDetailView: View {
 
     /// Create a snapshot of current state for undo
     private func createUndoSnapshot(description: String) -> EditSnapshot {
-        EditSnapshot(
+        backupOriginalIfNeeded()
+        return EditSnapshot(
             audioFileURL: pendingAudioEdit ?? currentRecording.fileURL,
             duration: pendingDuration ?? playback.duration,
             markers: editedMarkers,
@@ -1461,6 +1488,120 @@ struct RecordingDetailView: View {
                 isLoadingWaveform = false
                 playback.load(url: snapshot.audioFileURL)
             }
+        }
+    }
+
+    // MARK: - Original Audio Backup & Restore
+
+    /// On first audio edit, back up the original file to Application Support/originals/
+    private func backupOriginalIfNeeded() {
+        guard currentRecording.originalAudioFileName == nil else { return }
+
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let originalsDir = appSupport.appendingPathComponent("originals", isDirectory: true)
+        if !fm.fileExists(atPath: originalsDir.path) {
+            try? fm.createDirectory(at: originalsDir, withIntermediateDirectories: true)
+        }
+
+        let backupName = "\(currentRecording.id.uuidString)_\(currentRecording.fileURL.lastPathComponent)"
+        let backupURL = originalsDir.appendingPathComponent(backupName)
+
+        do {
+            if fm.fileExists(atPath: backupURL.path) {
+                try fm.removeItem(at: backupURL)
+            }
+            try fm.copyItem(at: currentRecording.fileURL, to: backupURL)
+
+            // Store backup info in the model
+            currentRecording.originalAudioFileName = backupName
+            currentRecording.originalDuration = currentRecording.duration
+            currentRecording.originalProofStatus = currentRecording.proofStatusRaw
+            currentRecording.originalProofSHA = currentRecording.proofSHA256
+        } catch {
+            #if DEBUG
+            print("⚠️ Failed to backup original audio: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Reset to original audio file, discarding all edits
+    private func resetToOriginal() {
+        guard let backupName = currentRecording.originalAudioFileName else { return }
+
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let backupURL = appSupport.appendingPathComponent("originals", isDirectory: true).appendingPathComponent(backupName)
+
+        guard fm.fileExists(atPath: backupURL.path) else { return }
+
+        do {
+            // Remove current (edited) file if different from original location
+            let currentURL = pendingAudioEdit ?? currentRecording.fileURL
+            if fm.fileExists(atPath: currentURL.path) && currentURL != currentRecording.fileURL {
+                try? fm.removeItem(at: currentURL)
+            }
+
+            // Copy backup back to original location
+            if fm.fileExists(atPath: currentRecording.fileURL.path) {
+                try fm.removeItem(at: currentRecording.fileURL)
+            }
+            try fm.copyItem(at: backupURL, to: currentRecording.fileURL)
+
+            // Restore original proof status
+            if let origProofStatus = currentRecording.originalProofStatus {
+                currentRecording.proofStatusRaw = origProofStatus
+            }
+            if let origProofSHA = currentRecording.originalProofSHA {
+                currentRecording.proofSHA256 = origProofSHA
+            }
+
+            // Set pendingAudioEdit to the restored file URL to trigger the save-with-new-duration path
+            // (duration is `let` on RecordingItem, so saveChanges() must construct a new item)
+            // Use the save-flow mechanism to update duration
+            // (duration is `let` on RecordingItem, so saveChanges() must construct a new item)
+            if let origDuration = currentRecording.originalDuration, origDuration != currentRecording.duration {
+                pendingAudioEdit = currentRecording.fileURL
+                pendingDuration = origDuration
+                hasAudioEdits = true
+            } else {
+                pendingAudioEdit = nil
+                pendingDuration = nil
+                hasAudioEdits = false
+                // Still need to save metadata changes (proof status restored)
+                currentRecording.modifiedAt = Date()
+                appState.updateRecording(currentRecording)
+            }
+
+            editHistory.clear(currentFileURL: currentRecording.fileURL)
+
+            // Reset all effect flags
+            hasFadeApplied = false
+            hasPeakApplied = false
+            hasGateApplied = false
+            hasCompressApplied = false
+            hasReverbApplied = false
+            hasEchoApplied = false
+            hasPresetApplied = false
+
+            // Reload waveform and playback from restored file
+            isLoadingWaveform = true
+            Task {
+                await WaveformSampler.shared.clearCache(for: currentRecording.fileURL)
+                await AudioWaveformExtractor.shared.clearCache(for: currentRecording.fileURL)
+                let samples = await WaveformSampler.shared.samples(for: currentRecording.fileURL, targetSampleCount: 150)
+                let minMaxSamples = await WaveformSampler.shared.minMaxSamples(for: currentRecording.fileURL, targetSampleCount: 150)
+                await MainActor.run {
+                    waveformSamples = samples
+                    waveformMinMaxSamples = minMaxSamples
+                    isLoadingWaveform = false
+                }
+            }
+            playback.load(url: currentRecording.fileURL)
+        } catch {
+            #if DEBUG
+            print("⚠️ Failed to reset to original: \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -1834,51 +1975,287 @@ struct RecordingDetailView: View {
         }
     }
 
+    // MARK: - Effect Removal (rebuild from original)
+
+    /// Removes a specific effect by restoring the original audio and re-applying all
+    /// remaining effects. This avoids the LIFO undo stack bug where `undoLastEdit()`
+    /// would pop the most recent undo entry — not necessarily the effect being removed.
+    /// For example, if a user applies Fade then Normalize then removes Fade, the old
+    /// approach would undo Normalize instead of Fade.
+    private func rebuildAudioWithoutEffect(clearing clearBlock: () -> Void) {
+        guard currentRecording.originalAudioFileName != nil else {
+            // No original backup — just clear the flags (best effort, audio cannot revert)
+            clearBlock()
+            return
+        }
+
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+              let backupName = currentRecording.originalAudioFileName else {
+            clearBlock()
+            return
+        }
+        let backupURL = appSupport.appendingPathComponent("originals", isDirectory: true).appendingPathComponent(backupName)
+        guard fm.fileExists(atPath: backupURL.path) else {
+            clearBlock()
+            return
+        }
+
+        // Clear the effect being removed BEFORE we capture which effects remain
+        clearBlock()
+
+        // Capture which effects still need to be re-applied and their current parameters
+        let needsFade = hasFadeApplied
+        let savedFadeIn = appliedFadeIn
+        let savedFadeOut = appliedFadeOut
+        let savedFadeInCurve = appliedFadeInCurve
+        let savedFadeOutCurve = appliedFadeOutCurve
+
+        let needsPeak = hasPeakApplied
+        let savedPeakMode = normalizeMode
+        let savedPeakTarget = appliedPeakTarget
+        let savedLufsTarget = appliedLufsTarget
+
+        let needsGate = hasGateApplied
+        let savedGateThreshold = appliedGateThreshold
+        let savedGateAttack = appliedGateAttack
+        let savedGateRelease = appliedGateRelease
+        let savedGateHold = appliedGateHold
+        let savedGateFloor = appliedGateFloor
+
+        let needsCompress = hasCompressApplied
+        let savedCompGain = appliedCompressGain
+        let savedCompReduction = appliedCompressPeakReduction
+        let savedCompMix = appliedCompressMix
+
+        let needsReverb = hasReverbApplied
+        let savedRevRoom = appliedReverbRoomSize
+        let savedRevPreDelay = appliedReverbPreDelay
+        let savedRevDecay = appliedReverbDecay
+        let savedRevDamping = appliedReverbDamping
+        let savedRevWetDry = appliedReverbWetDry
+
+        let needsEcho = hasEchoApplied
+        let savedEchoDelay = appliedEchoDelay
+        let savedEchoFeedback = appliedEchoFeedback
+        let savedEchoDamping = appliedEchoDamping
+        let savedEchoWetDry = appliedEchoWetDry
+
+        let hasAnyRemainingEffects = needsFade || needsPeak || needsGate || needsCompress || needsReverb || needsEcho
+
+        let wasPlaying = playback.isPlaying
+        let savedTime = playback.currentTime
+
+        isProcessingEdit = true
+
+        Task {
+            // Step 1: Create a fresh working copy from the original backup
+            let tempDir = fm.temporaryDirectory
+            let workingFileName = "\(UUID().uuidString)_edited_rebuild.\(backupURL.pathExtension)"
+            let initialWorkingURL = tempDir.appendingPathComponent(workingFileName)
+
+            do {
+                if fm.fileExists(atPath: initialWorkingURL.path) {
+                    try fm.removeItem(at: initialWorkingURL)
+                }
+                try fm.copyItem(at: backupURL, to: initialWorkingURL)
+            } catch {
+                await MainActor.run { isProcessingEdit = false }
+                #if DEBUG
+                print("Failed to copy original for rebuild: \(error.localizedDescription)")
+                #endif
+                return
+            }
+
+            var currentURL = initialWorkingURL
+
+            // Step 2: Re-apply remaining effects in a deterministic order.
+            // Order: Normalize -> Noise Gate -> Compression -> Fade -> Reverb -> Echo
+            // (Normalize first so levels are set before dynamics processing;
+            //  Fade near the end so it is not altered by other processing;
+            //  Time-based effects last since they may extend the duration)
+
+            if needsPeak {
+                let result: AudioEditResult
+                switch savedPeakMode {
+                case .peak:
+                    result = await AudioEditor.shared.normalize(sourceURL: currentURL, targetPeakDb: savedPeakTarget)
+                case .lufs:
+                    result = await AudioEditor.shared.lufsNormalize(sourceURL: currentURL, targetLUFS: savedLufsTarget)
+                }
+                if result.success { currentURL = result.outputURL }
+            }
+
+            if needsGate {
+                let result = await AudioEditor.shared.noiseGate(
+                    sourceURL: currentURL, thresholdDb: savedGateThreshold,
+                    attackMs: savedGateAttack, releaseMs: savedGateRelease,
+                    holdMs: savedGateHold, floorDb: savedGateFloor
+                )
+                if result.success { currentURL = result.outputURL }
+            }
+
+            if needsCompress {
+                let result = await AudioEditor.shared.compressor(
+                    sourceURL: currentURL, makeupGainDb: savedCompGain,
+                    peakReduction: savedCompReduction, mix: savedCompMix
+                )
+                if result.success { currentURL = result.outputURL }
+            }
+
+            if needsFade {
+                let result = await AudioEditor.shared.applyFade(
+                    sourceURL: currentURL, fadeInDuration: savedFadeIn,
+                    fadeOutDuration: savedFadeOut, fadeInCurve: savedFadeInCurve,
+                    fadeOutCurve: savedFadeOutCurve
+                )
+                if result.success { currentURL = result.outputURL }
+            }
+
+            if needsReverb {
+                let result = await AudioEditor.shared.reverb(
+                    sourceURL: currentURL, roomSize: savedRevRoom,
+                    preDelayMs: savedRevPreDelay, decay: savedRevDecay,
+                    damping: savedRevDamping, wetDry: savedRevWetDry
+                )
+                if result.success { currentURL = result.outputURL }
+            }
+
+            if needsEcho {
+                let result = await AudioEditor.shared.echo(
+                    sourceURL: currentURL, delayTime: savedEchoDelay,
+                    feedback: savedEchoFeedback, damping: savedEchoDamping,
+                    wetDry: savedEchoWetDry
+                )
+                if result.success { currentURL = result.outputURL }
+            }
+
+            await MainActor.run {
+                if hasAnyRemainingEffects {
+                    // We rebuilt with remaining effects — update state
+                    pendingAudioEdit = currentURL
+                    pendingDuration = nil
+                    // Use the last successful result's duration if available
+                    // (the final currentURL points to the last processed file)
+                    hasAudioEdits = true
+                    reloadWaveformForPendingEdit()
+                    selectionStart = 0
+                    selectionEnd = 0
+                    playback.load(url: currentURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
+                } else {
+                    // No effects remain — restore to original state
+                    do {
+                        let recURL = currentRecording.fileURL
+                        if fm.fileExists(atPath: recURL.path) {
+                            try fm.removeItem(at: recURL)
+                        }
+                        try fm.copyItem(at: currentURL, to: recURL)
+
+                        pendingAudioEdit = nil
+                        if let origDuration = currentRecording.originalDuration,
+                           origDuration != currentRecording.duration {
+                            pendingDuration = origDuration
+                            hasAudioEdits = true
+                        } else {
+                            pendingDuration = nil
+                            hasAudioEdits = false
+                        }
+                    } catch {
+                        // Fallback: use the temp file as pending edit
+                        pendingAudioEdit = currentURL
+                        pendingDuration = nil
+                        hasAudioEdits = true
+                    }
+
+                    // Reload waveform from the restored file
+                    let reloadURL = pendingAudioEdit ?? currentRecording.fileURL
+                    isLoadingWaveform = true
+                    Task {
+                        await WaveformSampler.shared.clearCache(for: currentRecording.fileURL)
+                        await AudioWaveformExtractor.shared.clearCache(for: currentRecording.fileURL)
+                        let samples = await WaveformSampler.shared.samples(for: reloadURL, targetSampleCount: 150)
+                        let minMaxSamples = await WaveformSampler.shared.minMaxSamples(for: reloadURL, targetSampleCount: 150)
+                        await MainActor.run {
+                            waveformSamples = samples
+                            waveformMinMaxSamples = minMaxSamples
+                            isLoadingWaveform = false
+                        }
+                    }
+                    playback.load(url: reloadURL)
+                    playback.seek(to: savedTime)
+                    if wasPlaying { playback.play() }
+                }
+
+                // Clear undo/redo history since we rebuilt from scratch —
+                // the old snapshots reference intermediate files that no longer
+                // represent a valid state in the new effect chain.
+                editHistory.clear(currentFileURL: pendingAudioEdit ?? currentRecording.fileURL)
+
+                isProcessingEdit = false
+            }
+        }
+    }
+
     private func removeFade() {
-        undoLastEdit()
-        hasFadeApplied = false
-        appliedFadeIn = 0
-        appliedFadeOut = 0
-        appliedFadeCurve = .sCurve
+        rebuildAudioWithoutEffect {
+            hasFadeApplied = false
+            appliedFadeIn = 0
+            appliedFadeOut = 0
+            appliedFadeInCurve = .sCurve
+            appliedFadeOutCurve = .sCurve
+        }
     }
 
     private func removePeak() {
-        undoLastEdit()
-        hasPeakApplied = false
-        appliedPeakTarget = -0.3
+        rebuildAudioWithoutEffect {
+            hasPeakApplied = false
+            normalizeMode = .peak
+            appliedPeakTarget = -0.3
+            appliedLufsTarget = -16.0
+        }
     }
 
     private func removeGate() {
-        undoLastEdit()
-        hasGateApplied = false
-        appliedGateThreshold = -40
+        rebuildAudioWithoutEffect {
+            hasGateApplied = false
+            appliedGateThreshold = -40
+            appliedGateAttack = 5
+            appliedGateRelease = 50
+            appliedGateHold = 50
+            appliedGateFloor = -80
+        }
     }
 
     private func removeCompression() {
-        undoLastEdit()
-        hasCompressApplied = false
-        appliedCompressGain = 0
-        appliedCompressPeakReduction = 0
-        appliedCompressMix = 1.0
+        rebuildAudioWithoutEffect {
+            hasCompressApplied = false
+            appliedCompressGain = 0
+            appliedCompressPeakReduction = 0
+            appliedCompressMix = 1.0
+        }
     }
 
     private func removeReverb() {
-        undoLastEdit()
-        hasReverbApplied = false
-        appliedReverbRoomSize = 1.0
-        appliedReverbPreDelay = 20
-        appliedReverbDecay = 2.0
-        appliedReverbDamping = 0.5
-        appliedReverbWetDry = 0.3
+        rebuildAudioWithoutEffect {
+            hasReverbApplied = false
+            appliedReverbRoomSize = 1.0
+            appliedReverbPreDelay = 20
+            appliedReverbDecay = 2.0
+            appliedReverbDamping = 0.5
+            appliedReverbWetDry = 0.3
+        }
     }
 
     private func removeEcho() {
-        undoLastEdit()
-        hasEchoApplied = false
-        appliedEchoDelay = 0.25
-        appliedEchoFeedback = 0.3
-        appliedEchoDamping = 0.3
-        appliedEchoWetDry = 0.3
+        rebuildAudioWithoutEffect {
+            hasEchoApplied = false
+            appliedEchoDelay = 0.25
+            appliedEchoFeedback = 0.3
+            appliedEchoDamping = 0.3
+            appliedEchoWetDry = 0.3
+        }
     }
 
     private func applyReverb(roomSize: Float, preDelay: Float, decay: Float, damping: Float, wetDry: Float) {
@@ -2019,15 +2396,16 @@ struct RecordingDetailView: View {
 
     private func removePreset() {
         if hasPresetApplied {
-            undoLastEdit()
-            hasPresetApplied = false
-            hasCompressApplied = false
-            hasReverbApplied = false
-            hasEchoApplied = false
+            rebuildAudioWithoutEffect {
+                hasPresetApplied = false
+                hasCompressApplied = false
+                hasReverbApplied = false
+                hasEchoApplied = false
+            }
         }
     }
 
-    private func applyFade(fadeIn: TimeInterval, fadeOut: TimeInterval, curve: FadeCurve) {
+    private func applyFade(fadeIn: TimeInterval, fadeOut: TimeInterval, fadeInCurve: FadeCurve, fadeOutCurve: FadeCurve) {
         silenceMode = .idle
         let undoSnapshot = createUndoSnapshot(description: "Fade")
         editHistory.pushUndo(undoSnapshot)
@@ -2041,7 +2419,8 @@ struct RecordingDetailView: View {
                 sourceURL: sourceURL,
                 fadeInDuration: fadeIn,
                 fadeOutDuration: fadeOut,
-                curve: curve
+                fadeInCurve: fadeInCurve,
+                fadeOutCurve: fadeOutCurve
             )
             await MainActor.run {
                 if result.success {
@@ -2059,9 +2438,10 @@ struct RecordingDetailView: View {
         }
     }
 
-    private func applyNormalize(targetDb: Float) {
+    private func applyNormalize(mode: NormalizeMode = .peak, targetDb: Float) {
         silenceMode = .idle
-        let undoSnapshot = createUndoSnapshot(description: "Normalize")
+        let description = mode == .peak ? "Normalize (Peak)" : "Normalize (LUFS)"
+        let undoSnapshot = createUndoSnapshot(description: description)
         editHistory.pushUndo(undoSnapshot)
 
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
@@ -2069,10 +2449,19 @@ struct RecordingDetailView: View {
         let savedTime = playback.currentTime
 
         Task {
-            let result = await AudioEditor.shared.normalize(
-                sourceURL: sourceURL,
-                targetPeakDb: targetDb
-            )
+            let result: AudioEditResult
+            switch mode {
+            case .peak:
+                result = await AudioEditor.shared.normalize(
+                    sourceURL: sourceURL,
+                    targetPeakDb: targetDb
+                )
+            case .lufs:
+                result = await AudioEditor.shared.lufsNormalize(
+                    sourceURL: sourceURL,
+                    targetLUFS: targetDb
+                )
+            }
             await MainActor.run {
                 if result.success {
                     pendingAudioEdit = result.outputURL
@@ -2089,7 +2478,7 @@ struct RecordingDetailView: View {
         }
     }
 
-    private func applyNoiseGate(threshold: Float) {
+    private func applyNoiseGate(threshold: Float, attack: Float = 5, release: Float = 50, hold: Float = 50, floor: Float = -80) {
         silenceMode = .idle
         let undoSnapshot = createUndoSnapshot(description: "Noise Gate")
         editHistory.pushUndo(undoSnapshot)
@@ -2101,7 +2490,11 @@ struct RecordingDetailView: View {
         Task {
             let result = await AudioEditor.shared.noiseGate(
                 sourceURL: sourceURL,
-                thresholdDb: threshold
+                thresholdDb: threshold,
+                attackMs: attack,
+                releaseMs: release,
+                holdMs: hold,
+                floorDb: floor
             )
             await MainActor.run {
                 if result.success {
@@ -2981,7 +3374,8 @@ struct RecordingDetailView: View {
 
                     Button("Clear") {
                         currentRecording.transcript = ""
-                        appState.updateTranscript("", for: currentRecording.id)
+                        currentRecording.transcriptionSegments = nil
+                        appState.updateTranscript("", segments: nil, for: currentRecording.id)
                     }
                     .font(.caption)
                     .foregroundColor(.red)
@@ -3021,12 +3415,43 @@ struct RecordingDetailView: View {
                             .foregroundColor(palette.accent)
                         Spacer()
                     }
+                } else if let segments = currentRecording.transcriptionSegments, !segments.isEmpty {
+                    // Timestamped transcript with tappable words
+                    TranscriptView(
+                        segments: segments,
+                        currentTime: playback.currentTime,
+                        onTapSegment: { timestamp in
+                            playback.seek(to: timestamp)
+                            if !playback.isPlaying {
+                                playback.play()
+                            }
+                        }
+                    )
+                    .padding(.horizontal, CardStyle.horizontalPadding)
+                    .padding(.vertical, CardStyle.verticalPadding)
                 } else {
-                    CardRow(showDivider: false) {
-                        Text(currentRecording.transcript)
-                            .font(.subheadline)
-                            .foregroundColor(palette.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    // Fallback: plain text for older recordings without segments
+                    VStack(alignment: .leading, spacing: 8) {
+                        CardRow(showDivider: false) {
+                            Text(currentRecording.transcript)
+                                .font(.subheadline)
+                                .foregroundColor(palette.textPrimary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        // Hint to re-transcribe for word-level timestamps
+                        Button {
+                            transcribeRecording()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.trianglehead.clockwise")
+                                    .font(.caption2)
+                                Text("Re-transcribe for tappable word timestamps")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(palette.textSecondary)
+                        }
+                        .padding(.horizontal, CardStyle.horizontalPadding)
+                        .padding(.bottom, 8)
                     }
                 }
             }
@@ -3057,31 +3482,60 @@ struct RecordingDetailView: View {
     // MARK: - Footer Section (File size + Verification)
 
     private var footerSection: some View {
-        HStack(alignment: .center, spacing: 8) {
-            // File size (LEFT)
-            Text(currentRecording.fileSizeFormatted)
-                .font(.footnote)
-                .foregroundColor(palette.textTertiary)
+        VStack(spacing: 4) {
+            HStack(alignment: .center, spacing: 8) {
+                // File size (LEFT)
+                Text(currentRecording.fileSizeFormatted)
+                    .font(.footnote)
+                    .foregroundColor(palette.textTertiary)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            // Verification status (RIGHT)
-            Button {
-                verificationSheetItem = IdentifiableUUID(id: currentRecording.id)
-            } label: {
-                HStack(spacing: 5) {
-                    Text(verificationStatusText)
-                        .font(.footnote)
-                        .foregroundColor(verificationStatusColor)
+                // Verification status (RIGHT)
+                Button {
+                    verificationSheetItem = IdentifiableUUID(id: currentRecording.id)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(verificationStatusText)
+                            .font(.footnote)
+                            .foregroundColor(verificationStatusColor)
 
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 14))
-                        .foregroundColor(palette.textTertiary)
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 14))
+                            .foregroundColor(palette.textTertiary)
+                    }
                 }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            // Quality downgrade indicator
+            qualityDowngradeIndicator
         }
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Quality Downgrade Indicator
+
+    /// Shows a subtle warning when the actual recording quality was lower than expected
+    /// (e.g., Bluetooth HFP reducing 48kHz to 8kHz, or Voice Processing reducing to 16kHz)
+    @ViewBuilder
+    private var qualityDowngradeIndicator: some View {
+        if let actualRate = currentRecording.actualSampleRate, actualRate < 44100 * 0.9 {
+            // Actual rate is significantly below the minimum preset target (44.1kHz)
+            // This indicates Bluetooth HFP or Voice Processing limited the quality
+            let rateKHz = actualRate / 1000.0
+            let rateDisplay = rateKHz == rateKHz.rounded() ? String(format: "%.0f", rateKHz) : String(format: "%.1f", rateKHz)
+            let channelNote = currentRecording.actualChannelCount == 1 ? " mono" : ""
+
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                Text("Recorded at \(rateDisplay)kHz\(channelNote) — limited by Bluetooth or Voice Processing")
+                    .font(.system(size: 11))
+            }
+            .foregroundColor(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: - Verification Status (Date-only, independent from location)
@@ -3322,6 +3776,7 @@ struct RecordingDetailView: View {
                 albumID: updated.albumID,
                 locationLabel: updated.locationLabel,
                 transcript: updated.transcript,
+                transcriptionSegments: updated.transcriptionSegments,
                 latitude: updated.latitude,
                 longitude: updated.longitude,
                 trashedAt: updated.trashedAt,
@@ -3329,6 +3784,7 @@ struct RecordingDetailView: View {
                 iconColorHex: updated.iconColorHex,
                 iconName: updated.iconName,
                 iconSourceRaw: updated.iconSourceRaw,  // Preserve icon source
+                iconPredictions: updated.iconPredictions,  // Preserve icon predictions
                 secondaryIcons: updated.secondaryIcons,  // Preserve secondary icons
                 eqSettings: updated.eqSettings,
                 projectId: updated.projectId,
@@ -3341,7 +3797,13 @@ struct RecordingDetailView: View {
                 locationModeRaw: updated.locationModeRaw,
                 locationProofHash: updated.locationProofHash,
                 locationProofStatusRaw: updated.locationProofStatusRaw,
-                markers: editedMarkers
+                markers: editedMarkers,
+                actualSampleRate: updated.actualSampleRate,
+                actualChannelCount: updated.actualChannelCount,
+                originalAudioFileName: updated.originalAudioFileName,
+                originalDuration: updated.originalDuration,
+                originalProofStatus: updated.originalProofStatus,
+                originalProofSHA: updated.originalProofSHA
             )
         }
 
@@ -3476,12 +3938,13 @@ struct RecordingDetailView: View {
         transcriptionError = nil
         Task {
             do {
-                let transcript = try await TranscriptionManager.shared.transcribe(
+                let result = try await TranscriptionManager.shared.transcribe(
                     audioURL: currentRecording.fileURL,
                     language: appState.appSettings.transcriptionLanguage
                 )
-                currentRecording.transcript = transcript
-                appState.updateTranscript(transcript, for: currentRecording.id)
+                currentRecording.transcript = result.text
+                currentRecording.transcriptionSegments = result.segments
+                appState.updateTranscript(result.text, segments: result.segments, for: currentRecording.id)
                 isTranscribing = false
                 appState.onTranscriptionSuccess()
             } catch {

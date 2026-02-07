@@ -35,7 +35,7 @@ struct RecordingsListView: View {
 
     // Pro feature gating
     @State private var proUpgradeContext: ProFeatureContext? = nil
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     // Cached grouped recordings to avoid expensive Calendar operations on every render
     @State private var cachedGroupedRecordings: [(date: Date, displayTitle: String, recordings: [RecordingItem])] = []
@@ -154,7 +154,7 @@ struct RecordingsListView: View {
                 context: context,
                 onViewPlans: {
                     proUpgradeContext = nil
-                    showTipJar = true
+                    showSupport = true
                 },
                 onDismiss: {
                     proUpgradeContext = nil
@@ -162,8 +162,8 @@ struct RecordingsListView: View {
             )
             .environment(\.themePalette, palette)
         }
-        .iPadSheet(isPresented: $showTipJar) {
-            TipJarView()
+        .iPadSheet(isPresented: $showSupport) {
+            SupportView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
         }
@@ -481,8 +481,10 @@ struct RecordingsListView: View {
         Task {
             do {
                 let url = try await AudioExporter.shared.export(recording: recording, format: format)
-                exportedURL = url
-                showShareSheet = true
+                await MainActor.run {
+                    exportedURL = url
+                    showShareSheet = true
+                }
             } catch {
                 #if DEBUG
                 print("Export failed: \(error)")

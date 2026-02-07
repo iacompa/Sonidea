@@ -73,6 +73,19 @@ final class MixdownEngine {
 
             let layerFiles = try layerFileURLs.map { try AVAudioFile(forReading: $0) }
 
+            // Build sample rate converters for layers whose rate differs from the base
+            let layerConverters: [AVAudioConverter?] = layerFiles.map { file in
+                let layerRate = file.processingFormat.sampleRate
+                guard layerRate != sampleRate else { return nil }
+                guard let targetFormat = AVAudioFormat(
+                    commonFormat: .pcmFormatFloat32,
+                    sampleRate: sampleRate,
+                    channels: file.processingFormat.channelCount,
+                    interleaved: false
+                ) else { return nil }
+                return AVAudioConverter(from: file.processingFormat, to: targetFormat)
+            }
+
             // Loop flags from mix settings
             let baseIsLooped = mixSettings.baseChannel.isLooped
             let layerLoopFlags: [Bool] = (0..<layerFiles.count).map { i in
@@ -88,7 +101,9 @@ final class MixdownEngine {
             for (i, file) in layerFiles.enumerated() {
                 if !layerLoopFlags[i] {
                     let offset = i < layerOffsets.count ? layerOffsets[i] : 0
-                    let endFrame = AVAudioFramePosition(offset * sampleRate) + file.length
+                    let layerRate = file.processingFormat.sampleRate
+                    let layerLengthInBaseFrames = AVAudioFramePosition(Double(file.length) * sampleRate / layerRate)
+                    let endFrame = AVAudioFramePosition(offset * sampleRate) + layerLengthInBaseFrames
                     maxNonLoopedFrames = max(maxNonLoopedFrames, endFrame)
                 }
             }
@@ -97,7 +112,9 @@ final class MixdownEngine {
             if maxNonLoopedFrames == 0 {
                 maxNonLoopedFrames = baseFile.length
                 for file in layerFiles {
-                    maxNonLoopedFrames = max(maxNonLoopedFrames, file.length)
+                    let layerRate = file.processingFormat.sampleRate
+                    let layerLengthInBaseFrames = AVAudioFramePosition(Double(file.length) * sampleRate / layerRate)
+                    maxNonLoopedFrames = max(maxNonLoopedFrames, layerLengthInBaseFrames)
                 }
             }
 
@@ -151,6 +168,11 @@ final class MixdownEngine {
                 let fmt = file.processingFormat
                 return AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: chunkSize)
             }
+            // Pre-allocate converted buffers for layers that need sample rate conversion
+            let layerConvertedBuffers: [AVAudioPCMBuffer?] = layerConverters.map { converter in
+                guard let converter = converter else { return nil }
+                return AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: chunkSize)
+            }
 
             var position: AVAudioFramePosition = 0
 
@@ -197,10 +219,18 @@ final class MixdownEngine {
                             try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
 
                             if let baseData = baseBuffer.floatChannelData {
+                                let baseChans = Int(baseBuffer.format.channelCount)
                                 var lGain = baseLeftGain
                                 var rGain = baseRightGain
-                                vDSP_vsma(baseData[0], 1, &lGain, outLeft, 1, outLeft, 1, vDSP_Length(readable))
-                                vDSP_vsma(baseData[0], 1, &rGain, outRight, 1, outRight, 1, vDSP_Length(readable))
+                                if baseChans >= 2 {
+                                    // Stereo: left channel -> left output, right channel -> right output
+                                    vDSP_vsma(baseData[0], 1, &lGain, outLeft, 1, outLeft, 1, vDSP_Length(readable))
+                                    vDSP_vsma(baseData[1], 1, &rGain, outRight, 1, outRight, 1, vDSP_Length(readable))
+                                } else {
+                                    // Mono: same channel to both outputs with pan gains
+                                    vDSP_vsma(baseData[0], 1, &lGain, outLeft, 1, outLeft, 1, vDSP_Length(readable))
+                                    vDSP_vsma(baseData[0], 1, &rGain, outRight, 1, outRight, 1, vDSP_Length(readable))
+                                }
                             }
                         }
                     } else {
@@ -220,10 +250,18 @@ final class MixdownEngine {
                             try baseFile.read(into: baseBuffer, frameCount: AVAudioFrameCount(readable))
 
                             if let baseData = baseBuffer.floatChannelData {
+                                let baseChans = Int(baseBuffer.format.channelCount)
                                 var lGain = baseLeftGain
                                 var rGain = baseRightGain
-                                vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
-                                vDSP_vsma(baseData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                                if baseChans >= 2 {
+                                    // Stereo: left channel -> left output, right channel -> right output
+                                    vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
+                                    vDSP_vsma(baseData[1], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                                } else {
+                                    // Mono: same channel to both outputs with pan gains
+                                    vDSP_vsma(baseData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
+                                    vDSP_vsma(baseData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                                }
                             }
                             outOffset += readable
                             remaining -= readable
@@ -231,12 +269,15 @@ final class MixdownEngine {
                     }
                 }
 
-                // Mix each layer (with loop support)
+                // Mix each layer (with loop support and sample rate conversion)
                 for (layerIdx, layerFile) in layerFiles.enumerated() {
                     let offset = layerIdx < layerOffsets.count ? layerOffsets[layerIdx] : 0
                     let offsetFrames = AVAudioFramePosition(offset * sampleRate)
                     let isLooped = layerLoopFlags[layerIdx]
                     let layerLength = layerFile.length
+                    let layerRate = layerFile.processingFormat.sampleRate
+                    let rateRatio = layerRate / sampleRate // layer-rate frames per base-rate frame
+                    let needsConversion = layerConverters[layerIdx] != nil
 
                     guard let layerBuf = layerBuffers[layerIdx] else { continue }
 
@@ -247,7 +288,7 @@ final class MixdownEngine {
                     var remaining = Int(framesToProcess)
                     while remaining > 0 {
                         let globalPos = position + AVAudioFramePosition(outOffset)
-                        let layerPos = globalPos - offsetFrames
+                        let layerPos = globalPos - offsetFrames  // position in base-rate frames
                         guard layerPos >= 0 else {
                             // Haven't reached this layer's start yet — skip ahead
                             let framesToSkip = min(remaining, Int(-layerPos))
@@ -256,25 +297,71 @@ final class MixdownEngine {
                             continue
                         }
 
-                        let effectivePos = isLooped ? (layerPos % layerLength) : layerPos
+                        // Convert position to layer-rate frames for file seeking
+                        let layerPosNative = AVAudioFramePosition(Double(layerPos) * rateRatio)
+                        let effectivePos = isLooped ? (layerPosNative % layerLength) : layerPosNative
                         if !isLooped && effectivePos >= layerLength { break }
 
                         let framesUntilEnd = Int(layerLength - effectivePos)
-                        let readable = min(remaining, framesUntilEnd)
+                        // How many layer-rate frames to read for 'remaining' base-rate output frames
+                        let layerFramesNeeded = Int(ceil(Double(remaining) * rateRatio))
+                        let readable = min(layerFramesNeeded, framesUntilEnd)
                         guard readable > 0 else { break }
 
                         layerFile.framePosition = effectivePos
                         layerBuf.frameLength = AVAudioFrameCount(readable)
                         try layerFile.read(into: layerBuf, frameCount: AVAudioFrameCount(readable))
 
-                        if let layerData = layerBuf.floatChannelData {
+                        // Determine the buffer to mix from (converted or raw)
+                        let mixBuffer: AVAudioPCMBuffer
+                        if needsConversion, let converter = layerConverters[layerIdx],
+                           let convertedBuf = layerConvertedBuffers[layerIdx] {
+                            // Convert from layer sample rate to base sample rate
+                            convertedBuf.frameLength = 0
+                            var error: NSError?
+                            var allConsumed = false
+                            converter.reset()
+                            let status = converter.convert(to: convertedBuf, error: &error) { _, outStatus in
+                                if allConsumed {
+                                    outStatus.pointee = .noDataNow
+                                    return nil
+                                }
+                                allConsumed = true
+                                outStatus.pointee = .haveData
+                                return layerBuf
+                            }
+                            guard status != .error else {
+                                // Skip this chunk on conversion error
+                                let outputFrames = max(1, Int(Double(readable) / rateRatio))
+                                outOffset += outputFrames
+                                remaining -= outputFrames
+                                continue
+                            }
+                            mixBuffer = convertedBuf
+                        } else {
+                            mixBuffer = layerBuf
+                        }
+
+                        let mixFrames = Int(mixBuffer.frameLength)
+                        let framesToMix = min(mixFrames, remaining)
+                        guard framesToMix > 0 else { break }
+
+                        if let layerData = mixBuffer.floatChannelData {
+                            let layerChans = Int(mixBuffer.format.channelCount)
                             var lGain = leftGain
                             var rGain = rightGain
-                            vDSP_vsma(layerData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(readable))
-                            vDSP_vsma(layerData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(readable))
+                            if layerChans >= 2 {
+                                // Stereo: left channel -> left output, right channel -> right output
+                                vDSP_vsma(layerData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(framesToMix))
+                                vDSP_vsma(layerData[1], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(framesToMix))
+                            } else {
+                                // Mono: same channel to both outputs with pan gains
+                                vDSP_vsma(layerData[0], 1, &lGain, outLeft + outOffset, 1, outLeft + outOffset, 1, vDSP_Length(framesToMix))
+                                vDSP_vsma(layerData[0], 1, &rGain, outRight + outOffset, 1, outRight + outOffset, 1, vDSP_Length(framesToMix))
+                            }
                         }
-                        outOffset += readable
-                        remaining -= readable
+                        outOffset += framesToMix
+                        remaining -= framesToMix
                     }
                 }
 

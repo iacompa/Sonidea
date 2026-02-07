@@ -382,8 +382,14 @@ struct AppSettings: Codable {
     // Auto-sync watch recordings to iPhone
     var watchSyncEnabled: Bool = false
 
+    // Noise reduction (Voice Processing) during recording
+    var noiseReductionEnabled: Bool = false
+
     // First-launch welcome tutorial tracking
     var hasSeenWelcome: Bool = false
+
+    // Siri Shortcuts education tip tracking
+    var hasSeenSiriTip: Bool = false
 
     static let `default` = AppSettings()
 
@@ -413,7 +419,9 @@ struct AppSettings: Codable {
         metronomeBPM = try container.decodeIfPresent(Double.self, forKey: .metronomeBPM) ?? 120
         metronomeVolume = try container.decodeIfPresent(Float.self, forKey: .metronomeVolume) ?? 0.8
         watchSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .watchSyncEnabled) ?? false
+        noiseReductionEnabled = try container.decodeIfPresent(Bool.self, forKey: .noiseReductionEnabled) ?? false
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
+        hasSeenSiriTip = try container.decodeIfPresent(Bool.self, forKey: .hasSeenSiriTip) ?? false
     }
 
     init() {}

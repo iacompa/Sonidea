@@ -224,6 +224,7 @@ final class PlaybackEngine {
         timePitchNode = nil
         eqNode = nil
         audioFile = nil
+        currentFileURL = nil
         isPlaying = false
         currentTime = 0
         duration = 0

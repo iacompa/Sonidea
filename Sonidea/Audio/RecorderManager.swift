@@ -12,6 +12,29 @@ import Foundation
 import Observation
 import UIKit
 
+// MARK: - Thread-Safe Counter
+
+/// Thread-safe counter for use from both the main actor and the audio render/write threads.
+private final class AtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Int = 0
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+    func increment() {
+        lock.lock()
+        _value += 1
+        lock.unlock()
+    }
+    func reset() {
+        lock.lock()
+        _value = 0
+        lock.unlock()
+    }
+}
+
 // MARK: - Recording State
 
 enum RecordingState: Equatable {
@@ -68,8 +91,8 @@ final class RecorderManager: NSObject {
     private var limiterNode: AVAudioUnitEffect?
     private var audioFile: AVAudioFile?
     private var isUsingEngine = false  // Track which recording method is in use
-    private var writeErrorCount = 0  // Track buffer write failures during engine recording
-    private var bufferWriteCount = 0  // Count of buffers successfully written (for post-start validation)
+    private let writeErrorCount = AtomicCounter()  // Track buffer write failures during engine recording
+    private let bufferWriteCount = AtomicCounter()  // Count of buffers successfully written (for post-start validation)
     private var lastWriteErrorMessage: String?  // Last write error (for diagnostics)
 
     // Legacy AVAudioRecorder (fallback when no gain/limiter needed)
@@ -83,6 +106,9 @@ final class RecorderManager: NSObject {
 
     /// Resolved sample rate for engine recording (set when engine output format is created)
     private var resolvedEngineSampleRate: Double?
+
+    /// Resolved channel count for engine recording (set from tap format after engine prepare)
+    private var resolvedEngineChannelCount: Int?
 
     /// Serial queue for writing audio buffers to file — keeps I/O off the real-time render thread
     private let fileWriteQueue = DispatchQueue(label: "com.iacompa.sonidea.recorder.filewrite", qos: .userInitiated)
@@ -415,20 +441,11 @@ final class RecorderManager: NSObject {
         let fileURL = generateFileURL(for: qualityPreset)
         currentFileURL = fileURL
 
-        // Decide which recording method to use:
         // Always use AVAudioEngine so the limiter and gain nodes are available.
         // The limiter can be enabled mid-recording (e.g. via the draggable ceiling
         // marker on the level meter), so the engine must always be in the signal chain.
-        // Previously this only used the engine when gain/limiter were non-default,
-        // which meant enabling the limiter during AVAudioRecorder recording had no effect.
-        let needsEngine = true
-        isUsingEngine = needsEngine
-
-        if needsEngine {
-            startEngineRecording(fileURL: fileURL)
-        } else {
-            startSimpleRecording(fileURL: fileURL)
-        }
+        isUsingEngine = true
+        startEngineRecording(fileURL: fileURL)
     }
 
     /// Start recording using AVAudioRecorder (no gain/limiter processing)
@@ -500,6 +517,20 @@ final class RecorderManager: NSObject {
             // Create audio engine
             let engine = AVAudioEngine()
 
+            // Enable Voice Processing (noise reduction) BEFORE reading the input format.
+            // VP can change the input node's hardware format (e.g. sample rate may drop
+            // to 16kHz on some hardware), so it must be enabled first.
+            if appSettings.noiseReductionEnabled {
+                do {
+                    try engine.inputNode.setVoiceProcessingEnabled(true)
+                    print("[RecorderManager] Voice Processing enabled (noise reduction ON)")
+                } catch {
+                    print("[RecorderManager] WARNING: Failed to enable Voice Processing: \(error.localizedDescription). Continuing without noise reduction.")
+                }
+            } else {
+                print("[RecorderManager] Voice Processing disabled (noise reduction OFF)")
+            }
+
             // Obtain the true hardware input format.
             // Using inputNode.inputFormat(forBus:0) instead of outputFormat(forBus:0)
             // ensures we get the format the connected mic actually delivers —
@@ -521,6 +552,7 @@ final class RecorderManager: NSObject {
             print("🎙️ [RecorderManager] Engine input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch, \(inputFormat.commonFormat.rawValue)")
             print("🎙️ [RecorderManager] Hardware input format: \(inputNode.inputFormat(forBus: 0))")
             print("🎙️ [RecorderManager] InputNode output format: \(inputNode.outputFormat(forBus: 0))")
+            print("🎙️ [RecorderManager] Voice Processing active: \(inputNode.isVoiceProcessingEnabled)")
             #endif
 
             // Create gain mixer node
@@ -596,13 +628,14 @@ final class RecorderManager: NSObject {
             let tapFormat = limiter.outputFormat(forBus: 0)
             let effectiveTapFormat = (tapFormat.sampleRate > 0 && tapFormat.channelCount > 0) ? tapFormat : inputFormat
             resolvedEngineSampleRate = effectiveTapFormat.sampleRate
+            resolvedEngineChannelCount = Int(effectiveTapFormat.channelCount)
             #if DEBUG
             print("🎙️ [RecorderManager] Tap format (post-prepare): \(effectiveTapFormat.sampleRate)Hz, \(effectiveTapFormat.channelCount)ch")
             #endif
 
             // Reset write/buffer counters
-            writeErrorCount = 0
-            bufferWriteCount = 0
+            writeErrorCount.reset()
+            bufferWriteCount.reset()
             lastWriteErrorMessage = nil
 
             // Create output audio file matching resolved tap format
@@ -623,9 +656,9 @@ final class RecorderManager: NSObject {
                 guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
                     // Buffer allocation failed — count as write error to prevent silent data loss
                     guard let s = self else { return }
-                    s.writeErrorCount += 1
+                    s.writeErrorCount.increment()
                     #if DEBUG
-                    print("❌ [RecorderManager] Buffer copy failed (\(s.writeErrorCount)) — audio frame dropped")
+                    print("❌ [RecorderManager] Buffer copy failed (\(s.writeErrorCount.value)) — audio frame dropped")
                     #endif
                     return
                 }
@@ -662,27 +695,28 @@ final class RecorderManager: NSObject {
                         try file.write(from: copy)
                         // Track successful writes + reset consecutive error count
                         if let s = self {
-                            s.bufferWriteCount += 1
-                            if s.writeErrorCount > 0 {
-                                s.writeErrorCount = 0
+                            s.bufferWriteCount.increment()
+                            if s.writeErrorCount.value > 0 {
+                                s.writeErrorCount.reset()
                             }
                         }
                     } catch {
                         guard let s = self else { return }
-                        s.writeErrorCount += 1
+                        s.writeErrorCount.increment()
                         s.lastWriteErrorMessage = error.localizedDescription
+                        let currentErrorCount = s.writeErrorCount.value
                         #if DEBUG
-                        print("❌ [RecorderManager] Error writing audio buffer (\(s.writeErrorCount)): \(error)")
+                        print("❌ [RecorderManager] Error writing audio buffer (\(currentErrorCount)): \(error)")
                         #endif
                         // Surface error to user after 3 consecutive write failures
                         // (indicates a persistent issue, not a transient glitch)
-                        if s.writeErrorCount == 3 {
+                        if currentErrorCount == 3 {
                             Task { @MainActor in
                                 s.recordingError = "Recording may not save correctly — audio write errors detected. Check storage space."
                             }
                         }
                         // Auto-stop after 20 consecutive failures to prevent extended silent data loss
-                        if s.writeErrorCount >= 20 {
+                        if currentErrorCount >= 20 {
                             Task { @MainActor in
                                 s.recordingError = "Recording stopped — unable to write audio to disk. Check storage space."
                                 _ = s.stopRecording()
@@ -731,7 +765,11 @@ final class RecorderManager: NSObject {
 
             // Start metronome if enabled
             if metronome.isEnabled {
-                metronome.start()
+                if metronome.countInBars > 0 {
+                    metronome.startCountIn { }  // count-in then continues playing
+                } else {
+                    metronome.start()
+                }
                 // Always-on metronome diagnostics
                 let outputRoute = AVAudioSession.sharedInstance().currentRoute.outputs
                 let outputDesc = outputRoute.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", ")
@@ -774,13 +812,13 @@ final class RecorderManager: NSObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self = self, self.isUsingEngine, self.recordingState == .recording else { return }
 
-                if self.bufferWriteCount == 0 {
+                if self.bufferWriteCount.value == 0 {
                     print("[RecorderManager] WARNING: No audio buffers received after 0.5s")
                     AudioDiagnostics.logNoAudioCaptured(
                         context: "RecorderManager.postStartValidation",
                         fileURL: self.currentFileURL ?? URL(fileURLWithPath: "/unknown"),
                         bufferCount: 0,
-                        writeErrorCount: self.writeErrorCount,
+                        writeErrorCount: self.writeErrorCount.value,
                         lastWriteError: self.lastWriteErrorMessage
                     )
                     self.recordingError = "No audio input detected. Check your microphone connection or try disconnecting Bluetooth and recording again."
@@ -817,6 +855,9 @@ final class RecorderManager: NSObject {
     /// This prevents write failures from format mismatches.
     private func engineFileSettings(for preset: RecordingQualityPreset, tapFormat: AVAudioFormat) -> [String: Any] {
         let effectiveSampleRate = resolvedEngineSampleRate ?? AudioSessionManager.shared.actualSampleRate
+        // Cap sample rate to what the preset advertises (don't exceed preset's target rate).
+        // Uses min() so low hardware rates (e.g. 8kHz Bluetooth) are preserved, never upsampled.
+        let cappedSampleRate = min(effectiveSampleRate, preset.sampleRate)
         let requestedChannels = appSettings.recordingMode.channelCount
         // Use the ACTUAL tap format channel count (not stale self.audioEngine which may be nil)
         let inputChannels = Int(tapFormat.channelCount)
@@ -832,7 +873,7 @@ final class RecorderManager: NSObject {
             let bitrate = min(128000, maxBitratePerChannel) * channels
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: effectiveSampleRate,
+                AVSampleRateKey: cappedSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitRateKey: bitrate,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
@@ -841,7 +882,7 @@ final class RecorderManager: NSObject {
             let bitrate = min(256000, maxBitratePerChannel) * channels
             return [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: effectiveSampleRate,
+                AVSampleRateKey: cappedSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitRateKey: bitrate,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
@@ -849,7 +890,7 @@ final class RecorderManager: NSObject {
         case .lossless:
             return [
                 AVFormatIDKey: Int(kAudioFormatAppleLossless),
-                AVSampleRateKey: effectiveSampleRate,
+                AVSampleRateKey: cappedSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVEncoderBitDepthHintKey: 16,
                 AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
@@ -857,7 +898,7 @@ final class RecorderManager: NSObject {
         case .wav:
             return [
                 AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: effectiveSampleRate,
+                AVSampleRateKey: cappedSampleRate,
                 AVNumberOfChannelsKey: channels,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
@@ -982,14 +1023,14 @@ final class RecorderManager: NSObject {
 
         if !fileVerified {
             #if DEBUG
-            print("❌ [RecorderManager] File verification failed (write errors: \(writeErrorCount), buffers written: \(bufferWriteCount))")
+            print("❌ [RecorderManager] File verification failed (write errors: \(writeErrorCount.value), buffers written: \(bufferWriteCount.value))")
             #endif
             AudioDebug.logFileInfo(url: fileURL, context: "RecorderManager.stopRecording - verification failed")
             AudioDiagnostics.logNoAudioCaptured(
                 context: "RecorderManager.stopRecording",
                 fileURL: fileURL,
-                bufferCount: bufferWriteCount,
-                writeErrorCount: writeErrorCount,
+                bufferCount: bufferWriteCount.value,
+                writeErrorCount: writeErrorCount.value,
                 lastWriteError: lastWriteErrorMessage
             )
             // Clean up invalid file and return nil
@@ -1000,7 +1041,7 @@ final class RecorderManager: NSObject {
             RecordingLiveActivityManager.shared.endActivity()
 
             // Provide actionable error message based on what we know
-            if bufferWriteCount == 0 {
+            if bufferWriteCount.value == 0 {
                 recordingError = "Recording failed — no audio was captured. Your microphone may not have been available. Try disconnecting Bluetooth or checking your microphone connection."
             } else {
                 recordingError = "Recording failed — no audio was captured. Please try again."
@@ -1008,9 +1049,9 @@ final class RecorderManager: NSObject {
             return nil
         }
 
-        if writeErrorCount > 0 {
+        if writeErrorCount.value > 0 {
             #if DEBUG
-            print("⚠️ [RecorderManager] \(writeErrorCount) buffer write errors occurred during recording")
+            print("⚠️ [RecorderManager] \(writeErrorCount.value) buffer write errors occurred during recording")
             #endif
         }
 
@@ -1041,6 +1082,10 @@ final class RecorderManager: NSObject {
         let longitude = currentLocation?.coordinate.longitude
         let locationLabel = currentLocationLabel
 
+        // Capture actual recording quality before reset clears them
+        let capturedSampleRate = resolvedEngineSampleRate
+        let capturedChannelCount = resolvedEngineChannelCount
+
         // End Live Activity
         RecordingLiveActivityManager.shared.endActivity()
 
@@ -1065,7 +1110,9 @@ final class RecorderManager: NSObject {
             longitude: longitude,
             locationLabel: locationLabel,
             wasRecordedWithMetronome: metronome.isEnabled,
-            metronomeBPM: metronome.isEnabled ? metronome.bpm : nil
+            metronomeBPM: metronome.isEnabled ? metronome.bpm : nil,
+            actualSampleRate: capturedSampleRate,
+            actualChannelCount: capturedChannelCount
         )
     }
 
@@ -1080,6 +1127,16 @@ final class RecorderManager: NSObject {
 
         // Stop the engine
         audioEngine?.stop()
+
+        // Disable Voice Processing after stopping (clean up for next session)
+        if let engine = audioEngine, engine.inputNode.isVoiceProcessingEnabled {
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(false)
+                print("[RecorderManager] Voice Processing disabled on stop")
+            } catch {
+                print("[RecorderManager] WARNING: Failed to disable Voice Processing on stop: \(error.localizedDescription)")
+            }
+        }
 
         // Drain the write queue to ensure all pending buffers are written to disk
         fileWriteQueue.sync {}
@@ -1225,6 +1282,17 @@ final class RecorderManager: NSObject {
                 settings: appSettings
             )
 
+            // Re-enable Voice Processing if noise reduction is active
+            // Must happen BEFORE reading the input format (VP can change it)
+            if appSettings.noiseReductionEnabled {
+                do {
+                    try engine.inputNode.setVoiceProcessingEnabled(true)
+                    print("[RecorderManager] Voice Processing re-enabled after route change")
+                } catch {
+                    print("[RecorderManager] WARNING: Failed to re-enable Voice Processing after route change: \(error.localizedDescription)")
+                }
+            }
+
             // Use the hardware input format — same approach as startEngineRecording
             guard let inputFormat = Self.hardwareInputFormat(for: engine) else {
                 #if DEBUG
@@ -1342,7 +1410,7 @@ final class RecorderManager: NSObject {
                 }
             }
 
-            // Reconnect monitoring effects if active
+            // Reconnect monitoring effects if active, or silent mixer path if not
             if monitorEffects.isEnabled {
                 let nodes = monitorEffects.createNodes()
                 // Check if nodes are already attached; if not, attach them
@@ -1353,10 +1421,23 @@ final class RecorderManager: NSObject {
                 engine.connect(nodes.mixer, to: nodes.eq, format: effectiveTapFormat)
                 engine.connect(nodes.eq, to: nodes.compressor, format: effectiveTapFormat)
                 engine.connect(nodes.compressor, to: engine.mainMixerNode, format: effectiveTapFormat)
+            } else {
+                // Silent mixer: volume 0 completes the pull chain so the tap
+                // receives buffers without sending mic audio to the output.
+                let silentMixer = AVAudioMixerNode()
+                engine.attach(silentMixer)
+                silentMixer.outputVolume = 0
+                engine.connect(limiter, to: silentMixer, format: effectiveTapFormat)
+                engine.connect(silentMixer, to: engine.mainMixerNode, format: effectiveTapFormat)
             }
 
             // Restart the engine
             try engine.start()
+
+            // Restart metronome if it was active
+            if metronome.isEnabled && metronome.isPlaying {
+                metronome.start()
+            }
 
             // Resume timing
             segmentStartTime = Date()
@@ -1456,12 +1537,13 @@ final class RecorderManager: NSObject {
         audioFile = nil
         isUsingEngine = false
         resolvedEngineSampleRate = nil
+        resolvedEngineChannelCount = nil
 
         currentFileURL = nil
         liveMeterSamples = []
         wasRecordingBeforeInterruption = false
         consecutiveSilentBuffers = 0
-        bufferWriteCount = 0
+        bufferWriteCount.reset()
         lastWriteErrorMessage = nil
         smoothedPeakLevel = 0
         currentLocation = nil

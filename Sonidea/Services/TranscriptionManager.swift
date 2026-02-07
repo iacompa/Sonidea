@@ -8,6 +8,34 @@
 import Foundation
 import Speech
 
+// MARK: - Transcription Segment
+
+/// A single word/phrase segment from speech recognition with timing information.
+/// Used for timestamped transcript display with tappable word highlighting.
+struct TranscriptionSegment: Identifiable, Codable, Equatable {
+    let id: UUID
+    let text: String
+    let startTime: TimeInterval
+    let duration: TimeInterval
+    let confidence: Float
+
+    init(id: UUID = UUID(), text: String, startTime: TimeInterval, duration: TimeInterval, confidence: Float) {
+        self.id = id
+        self.text = text
+        self.startTime = startTime
+        self.duration = duration
+        self.confidence = confidence
+    }
+}
+
+// MARK: - Transcription Result
+
+/// Result of a transcription operation containing both the full text and individual segments.
+struct TranscriptionResult {
+    let text: String
+    let segments: [TranscriptionSegment]
+}
+
 enum TranscriptionError: Error, LocalizedError {
     case notAuthorized
     case notAvailable
@@ -80,7 +108,7 @@ final class TranscriptionManager {
         }
     }
 
-    func transcribe(audioURL: URL, language: TranscriptionLanguage = .system) async throws -> String {
+    func transcribe(audioURL: URL, language: TranscriptionLanguage = .system) async throws -> TranscriptionResult {
         // Check authorization
         let status = authorizationStatus
         if status == .notDetermined {
@@ -114,7 +142,7 @@ final class TranscriptionManager {
         request.shouldReportPartialResults = false
 
         // Perform recognition with a 120-second timeout to prevent hanging
-        return try await withThrowingTaskGroup(of: String.self) { group in
+        return try await withThrowingTaskGroup(of: TranscriptionResult.self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { continuation in
                     // Thread-safe flag to prevent double-resume of the continuation.
@@ -123,7 +151,7 @@ final class TranscriptionManager {
                     let resumeLock = NSLock()
                     var hasResumed = false
 
-                    func safeResume(with result: Result<String, Error>) {
+                    func safeResume(with result: Result<TranscriptionResult, Error>) {
                         resumeLock.lock()
                         defer { resumeLock.unlock() }
                         guard !hasResumed else { return }
@@ -143,8 +171,22 @@ final class TranscriptionManager {
                         }
 
                         if result.isFinal {
-                            let transcript = result.bestTranscription.formattedString
-                            safeResume(with: .success(transcript))
+                            let transcription = result.bestTranscription
+                            let text = transcription.formattedString
+
+                            // Extract timestamped segments, filtering out empty ones
+                            let segments: [TranscriptionSegment] = transcription.segments.compactMap { seg in
+                                let trimmed = seg.substring.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !trimmed.isEmpty, seg.duration > 0 else { return nil }
+                                return TranscriptionSegment(
+                                    text: seg.substring,
+                                    startTime: seg.timestamp,
+                                    duration: seg.duration,
+                                    confidence: seg.confidence
+                                )
+                            }
+
+                            safeResume(with: .success(TranscriptionResult(text: text, segments: segments)))
                         }
                     }
 
@@ -177,7 +219,7 @@ final class TranscriptionManager {
     }
 
     // Convenience method using current locale (backward compatibility)
-    func transcribe(audioURL: URL) async throws -> String {
+    func transcribe(audioURL: URL) async throws -> TranscriptionResult {
         try await transcribe(audioURL: audioURL, language: .system)
     }
 }

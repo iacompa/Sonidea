@@ -98,6 +98,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
     var locationLabel: String
     var transcript: String
 
+    // Timestamped transcription segments for tappable word display
+    var transcriptionSegments: [TranscriptionSegment]?
+
     // GPS coordinates
     var latitude: Double?
     var longitude: Double?
@@ -185,6 +188,28 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     /// Whether the metronome/click track was active when this recording was made
     var wasRecordedWithMetronome: Bool
+
+    // MARK: - Actual Recording Quality (for downgrade detection)
+
+    /// Actual sample rate the recording was captured at (may differ from preset due to Bluetooth/VP)
+    var actualSampleRate: Double?
+
+    /// Actual channel count the recording was captured at (may differ from preset due to Bluetooth/VP)
+    var actualChannelCount: Int?
+
+    // MARK: - Original Audio Backup (Reset to Original)
+
+    /// Filename of the original audio backup in Application Support/originals/ (not full path, for portability)
+    var originalAudioFileName: String?
+
+    /// Original recording duration before any edits
+    var originalDuration: TimeInterval?
+
+    /// Original proof status before editing (stored as raw value string)
+    var originalProofStatus: String?
+
+    /// Original proof SHA-256 hash before editing
+    var originalProofSHA: String?
 
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
@@ -432,6 +457,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         albumID: UUID? = nil,
         locationLabel: String = "",
         transcript: String = "",
+        transcriptionSegments: [TranscriptionSegment]? = nil,
         latitude: Double? = nil,
         longitude: Double? = nil,
         trashedAt: Date? = nil,
@@ -460,7 +486,15 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         overdubOffsetSeconds: Double = 0,
         overdubSourceBaseId: UUID? = nil,
         wasRecordedWithMetronome: Bool = false,
-        modifiedAt: Date? = nil
+        modifiedAt: Date? = nil,
+        // Actual recording quality fields
+        actualSampleRate: Double? = nil,
+        actualChannelCount: Int? = nil,
+        // Original audio backup fields
+        originalAudioFileName: String? = nil,
+        originalDuration: TimeInterval? = nil,
+        originalProofStatus: String? = nil,
+        originalProofSHA: String? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -473,6 +507,7 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.albumID = albumID
         self.locationLabel = locationLabel
         self.transcript = transcript
+        self.transcriptionSegments = transcriptionSegments
         self.latitude = latitude
         self.longitude = longitude
         self.trashedAt = trashedAt
@@ -501,13 +536,21 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.overdubOffsetSeconds = overdubOffsetSeconds
         self.overdubSourceBaseId = overdubSourceBaseId
         self.wasRecordedWithMetronome = wasRecordedWithMetronome
+        // Actual recording quality fields
+        self.actualSampleRate = actualSampleRate
+        self.actualChannelCount = actualChannelCount
+        // Original audio backup fields
+        self.originalAudioFileName = originalAudioFileName
+        self.originalDuration = originalDuration
+        self.originalProofStatus = originalProofStatus
+        self.originalProofSHA = originalProofSHA
     }
 
     // MARK: - Codable with Migration Support
 
     enum CodingKeys: String, CodingKey {
         case id, fileURL, createdAt, duration, modifiedAt, title, notes, tagIDs, albumID
-        case locationLabel, transcript, latitude, longitude, trashedAt
+        case locationLabel, transcript, transcriptionSegments, latitude, longitude, trashedAt
         case lastPlaybackPosition, iconColorHex, iconName, iconSourceRaw, iconPredictions, secondaryIcons, eqSettings
         case projectId, parentRecordingId, versionIndex
         case proofStatusRaw, proofSHA256, proofCloudCreatedAt, proofCloudRecordName
@@ -516,6 +559,10 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         // Overdub fields
         case overdubGroupId, overdubRoleRaw, overdubIndex, overdubOffsetSeconds, overdubSourceBaseId
         case wasRecordedWithMetronome
+        // Actual recording quality fields
+        case actualSampleRate, actualChannelCount
+        // Original audio backup fields
+        case originalAudioFileName, originalDuration, originalProofStatus, originalProofSHA
     }
 
     init(from decoder: Decoder) throws {
@@ -533,6 +580,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         albumID = try container.decodeIfPresent(UUID.self, forKey: .albumID)
         locationLabel = try container.decode(String.self, forKey: .locationLabel)
         transcript = try container.decode(String.self, forKey: .transcript)
+        // Migration: transcriptionSegments not present in older recordings
+        transcriptionSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .transcriptionSegments)
         latitude = try container.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try container.decodeIfPresent(Double.self, forKey: .longitude)
         trashedAt = try container.decodeIfPresent(Date.self, forKey: .trashedAt)
@@ -573,6 +622,16 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
         // Migration: metronome tracking with false default for existing recordings
         wasRecordedWithMetronome = try container.decodeIfPresent(Bool.self, forKey: .wasRecordedWithMetronome) ?? false
+
+        // Migration: actual recording quality fields with nil defaults for existing recordings
+        actualSampleRate = try container.decodeIfPresent(Double.self, forKey: .actualSampleRate)
+        actualChannelCount = try container.decodeIfPresent(Int.self, forKey: .actualChannelCount)
+
+        // Migration: original audio backup fields with nil defaults for existing recordings
+        originalAudioFileName = try container.decodeIfPresent(String.self, forKey: .originalAudioFileName)
+        originalDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .originalDuration)
+        originalProofStatus = try container.decodeIfPresent(String.self, forKey: .originalProofStatus)
+        originalProofSHA = try container.decodeIfPresent(String.self, forKey: .originalProofSHA)
     }
 }
 
@@ -586,6 +645,8 @@ struct RawRecordingData {
     let locationLabel: String
     let wasRecordedWithMetronome: Bool
     let metronomeBPM: Double?
+    let actualSampleRate: Double?
+    let actualChannelCount: Int?
 }
 
 // MARK: - Recording Spot (for Map clustering)

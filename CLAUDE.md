@@ -102,7 +102,7 @@ Mono (default, best for built-in mic), Stereo (best with external stereo mic). C
 ```
 App/           SonideaApp, AppState, Theme, AppearanceMode, SettingsModels
 Models/        RecordingItem, Album, Tag, Project, Marker, TimelineItem, OverdubGroup, EditHistory, ProofModels, RecordingActivityAttributes, MixSettings
-Views/         ContentView, RecordingsListView, RecordingGridView, RecordingDetailView, CalendarView, JournalView, MapView, ProjectDetailView, OverdubSessionView, TagManagerView, TipJarView, QuickHelpSheet, ShareSheet, SharedAlbumViews, iPadAdaptiveLayout, ExportFormatPicker, MetronomeSettingsView, RecordingEffectsPanel, MixerView
+Views/         ContentView, RecordingsListView, RecordingGridView, RecordingDetailView, CalendarView, JournalView, MapView, ProjectDetailView, OverdubSessionView, TagManagerView, SupportView, QuickHelpSheet, ShareSheet, SharedAlbumViews, iPadAdaptiveLayout, ExportFormatPicker, MetronomeSettingsView, RecordingEffectsPanel, MixerView
 Views/Waveform/ WaveformView, WaveformSampler, EditableWaveformView, ZoomableWaveformEditor, ProWaveformEditor, AudioWaveformExtractor, EQGraphView, AudioEditToolsPanel
 Audio/         RecorderManager, PlaybackEngine, PlaybackManager, AudioSessionManager, AudioEditor, AudioExporter, OverdubEngine, SkipSilenceManager, AudioDebug, SilenceDebugStrip, MetronomeEngine, RecordingMonitorEffects, MixdownEngine
 Services/      SupportManager, LocationManager, TranscriptionManager, ProofManager, AudioIconClassifier, TrialNudgeManager, ProFeatureGate, PhoneConnectivityManager
@@ -368,7 +368,7 @@ Assets.xcassets/ AppIcon (same Sonidea logo as iOS)
 ### UX Fixes
 - **TagManagerView.onMove**: Disabled during active search — filtered indices were being applied to full tag array, corrupting tag order
 - **ContentView export functions**: Export errors now show user-visible message via `exportProgress` with 3-second auto-clear
-- **RecordingDetailView/TipJarView**: Export errors now logged in DEBUG mode
+- **RecordingDetailView/SupportView**: Export errors now logged in DEBUG mode
 - **WatchRecordingItem**: DateFormatter instances cached as static properties instead of recreating per access
 
 ## Production-Readiness Scan (million-user launch prep)
@@ -636,3 +636,105 @@ Replaced slider-based EQ band controls with Logic Pro-style rotary knobs in `EQG
 | `AudioEditToolsPanel.swift` | Compression, echo, reverb controls converted to knobs |
 | `EQGraphView.swift` | Band tabs removed, knob sensitivity fix, haptic feedback |
 | `ProFeatureGate.swift` | `.autoIcons` added to `temporarilyFree` |
+
+## Audio Effect DSP Fixes (latest session)
+
+### Reverb Stereo Decorrelation + Damping Fix + Tail Fade
+- **Stereo decorrelation**: R channel delay lines offset by +23 samples (Freeverb `stereospread` standard)
+- **Damping fix**: Removed erroneous `* 0.4` scaling so UI 0-100% maps to actual 0-100%
+- **Tail fade-out**: 500ms linear fade at end of reverb tail to prevent abrupt cutoff
+- Independent L/R filter state arrays (`combBufsL/R`, `combIdxL/R`, `combLPF_L/R`, `apBufsL/R`, `apIdxL/R`)
+
+### Echo Damping Clamp + Tail Fade
+- **Damping clamp**: Max capped at 0.95 (was 1.0 which kills signal via one-pole LPF)
+- **Tail fade-out**: 500ms linear fade at end of echo tail
+- UI knob range updated to 0...0.95
+
+## Premium Feature Additions (latest session)
+
+### 1. LUFS Loudness Normalization (ITU-R BS.1770-4)
+- `NormalizeMode` enum: `.peak` (existing) and `.lufs` (new)
+- K-weighted filter: shelf + highpass biquads with pre-computed coefficients for 44.1kHz and 48kHz
+- 400ms gated block measurement with absolute gate (-70 LKFS) and relative gate (-10 dB below ungated)
+- Gain application with tanh soft clipping at 0.9 knee
+- UI: Peak/LUFS segmented picker, target LUFS slider (-24 to -9 LKFS, default -16)
+- Files: `AudioEditor.swift` (DSP), `AudioEditToolsPanel.swift` (UI), `RecordingDetailView.swift` (state/wiring)
+
+### 2. Timestamped Transcription with Tappable Words
+- `TranscriptionSegment` struct: id, text, startTime, duration, confidence (Codable, Identifiable)
+- `TranscriptionResult` struct: text + segments array
+- `TranscriptionManager.transcribe()` now extracts per-word timestamps from `SFTranscriptionSegment`
+- `TranscriptView.swift` (NEW): Flowing word layout using `FlowLayout`, currently-playing word highlighted
+- Tapping any word seeks playback to that timestamp and starts playing
+- `RecordingItem.transcriptionSegments` persisted with `decodeIfPresent` migration
+- Files: `TranscriptionManager.swift`, `TranscriptView.swift` (NEW), `RecordingItem.swift`, `RecordingDetailView.swift`, `AppState.swift`, `RecordingRepository.swift`
+
+### 3. M4A Chapter Markers in Export
+- `embedChapters(in:markers:duration:)` method in AudioExporter
+- AVAssetReader + AVAssetWriter with passthrough audio (no re-encoding) + chapter text track
+- Uses QuickTime Metadata keyspace ("mdta") with "com.apple.quicktime.chapter" key
+- `CMMetadataFormatDescriptionCreateWithKeys` for format description
+- Chapters visible in Apple Podcasts, iTunes, QuickTime Player
+- Non-fatal: if embedding fails, file is returned without chapters
+- Files: `AudioExporter.swift`
+
+### 4. Voice Processing Noise Reduction
+- `AVAudioEngine.inputNode.setVoiceProcessingEnabled(true)` during recording
+- Enabled BEFORE reading input format (VP can change the hardware sample rate)
+- Disabled after stopping engine
+- Re-enabled after route changes
+- `noiseReductionEnabled: Bool` setting in `AppSettings` with `decodeIfPresent` migration
+- UI toggle in Settings with description text
+- Files: `RecorderManager.swift`, `SettingsModels.swift`, `SettingsView.swift`
+
+### 5. Reset to Original + Backup
+- On first audio edit, original file backed up to `Application Support/originals/`
+- `backupOriginalIfNeeded()` called from `createUndoSnapshot()` (before every edit)
+- `resetToOriginal()` restores backup file, proof status, and original duration
+- Proof status/SHA preserved in `RecordingItem.originalProofStatus`/`originalProofSHA`
+- "Reset to Original" button (red, destructive) in EffectParameterPanel with confirmation alert
+- `hasOriginalBackup` and `onResetToOriginal` wired from RecordingDetailView to EffectParameterPanel
+- Files: `RecordingItem.swift` (4 new fields), `RecordingDetailView.swift`, `AudioEditToolsPanel.swift`
+
+### 6. Richer Siri/Shortcuts Intents
+- **GetLastRecordingIntent**: Opens app to most recent recording, returns title + duration
+- **TranscribeRecordingIntent**: Finds recording by name (case-insensitive), transcribes via `TranscriptionManager.shared`, returns transcript text
+- **ExportRecordingIntent**: Exports recording in chosen format (WAV/M4A/ALAC), returns `IntentFile`
+- **SonideaIntentError**: Shared error enum with user-friendly localized messages
+- **AppShortcutsProvider** updated with 4 shortcuts: Start Recording, Last Recording, Transcribe, Export
+- **Pending navigation**: `pendingNavigationRecordingID` in AppState, consumed by RecordingsListView
+- **Pending transcription**: Transcription results saved via UserDefaults and consumed on app active
+- **Siri education tooltip**: Purple banner shown once ("Try Siri Shortcuts"), auto-dismisses after 4s
+- `hasSeenSiriTip` tracking in `AppSettings`
+- Files: `GetLastRecordingIntent.swift` (NEW), `TranscribeRecordingIntent.swift` (NEW), `ExportRecordingIntent.swift` (NEW), `SonideaIntentError.swift` (NEW), `StartRecordingIntent.swift`, `AppState.swift`, `ContentView.swift`, `RecordingsListView.swift`, `SettingsModels.swift`
+
+### Bug Fixes Found During Review
+- **transcriptionSegments loss on save**: `saveChanges()` RecordingItem construction now preserves `transcriptionSegments`
+- **iconPredictions loss on save**: `saveChanges()` RecordingItem construction now preserves `iconPredictions`
+
+### New Files (5)
+| File | Purpose |
+|------|---------|
+| `Sonidea/Views/TranscriptView.swift` | Tappable word-level transcript view |
+| `Sonidea/Intents/GetLastRecordingIntent.swift` | Siri intent: show last recording |
+| `Sonidea/Intents/TranscribeRecordingIntent.swift` | Siri intent: transcribe by name |
+| `Sonidea/Intents/ExportRecordingIntent.swift` | Siri intent: export in format |
+| `Sonidea/Intents/SonideaIntentError.swift` | Shared intent error enum |
+
+### Modified Files (12)
+| File | Changes |
+|------|---------|
+| `AudioEditor.swift` | +NormalizeMode enum, +lufsNormalize DSP, reverb stereo decorrelation, echo damping clamp |
+| `AudioEditToolsPanel.swift` | +LUFS UI, +Reset to Original button/alert, echo damping range |
+| `AudioExporter.swift` | +chapter embedding, +CoreMedia import |
+| `RecordingDetailView.swift` | +LUFS state, +TranscriptView, +backup/restore, +transcriptionSegments/iconPredictions preservation |
+| `RecordingItem.swift` | +transcriptionSegments, +originalAudioFileName/Duration/ProofStatus/ProofSHA |
+| `TranscriptionManager.swift` | +TranscriptionSegment, +TranscriptionResult, +per-word timestamps |
+| `RecorderManager.swift` | +voice processing enable/disable |
+| `SettingsModels.swift` | +noiseReductionEnabled, +hasSeenSiriTip |
+| `SettingsView.swift` | +noise reduction toggle |
+| `AppState.swift` | +pendingNavigationRecordingID, +pending action keys, +consume methods, +updateTranscript segments |
+| `ContentView.swift` | +Siri tip banner, +pending navigation/transcription consumption |
+| `RecordingsListView.swift` | +pendingNavigationRecordingID observer |
+| `RecordingRepository.swift` | +segments parameter in updateTranscript |
+| `StartRecordingIntent.swift` | +AppShortcutsProvider with 4 shortcuts |

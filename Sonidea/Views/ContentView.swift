@@ -21,7 +21,7 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showWelcomeTutorial = false
-    @State private var showTipJar = false
+    @State private var showSupport = false
     @State private var showRecoveryAlert = false
     @State private var showSaveErrorAlert = false
     @State private var saveErrorMessage = ""
@@ -39,6 +39,9 @@ struct ContentView: View {
     // Move hint animation state
     @State private var showMoveHint = false
     @State private var hintNudgeOffset: CGFloat = 0
+
+    // Siri education tip
+    @State private var showSiriTip = false
 
     // Layout constants
     private let topBarHeight: CGFloat = 72
@@ -112,8 +115,8 @@ struct ContentView: View {
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
         }
-        .iPadSheet(isPresented: $showTipJar) {
-            TipJarView()
+        .iPadSheet(isPresented: $showSupport) {
+            SupportView()
                 .environment(appState)
                 .environment(\.themePalette, palette)
                 .preferredColorScheme(appState.selectedTheme.forcedColorScheme)
@@ -166,12 +169,32 @@ struct ContentView: View {
             checkAndShowMoveHint()
             // Check for trial nudge
             checkTrialNudge()
+            // Show Siri education tip (once, after welcome is done)
+            if appState.appSettings.hasSeenWelcome && !appState.appSettings.hasSeenSiriTip {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation(.easeInOut(duration: 0.3)) { showSiriTip = true }
+                    var settings = appState.appSettings
+                    settings.hasSeenSiriTip = true
+                    appState.appSettings = settings
+                    // Auto-dismiss after 4 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                        withAnimation(.easeInOut(duration: 0.3)) { showSiriTip = false }
+                    }
+                }
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 // Check for pending stop request from Live Activity (when app was backgrounded)
                 if appState.recorder.consumePendingStopRequest() && appState.recorder.recordingState.isActive {
                     saveRecording()
+                }
+                // Consume pending transcription result from Siri intent
+                appState.consumePendingTranscriptionResult()
+                // Consume pending recording navigation from Siri intent
+                if let recordingID = appState.consumePendingRecordingNavigation() {
+                    appState.pendingNavigationRecordingID = recordingID
+                    currentRoute = .recordings
                 }
                 // Check for trial nudge on foreground
                 checkTrialNudge()
@@ -190,7 +213,9 @@ struct ContentView: View {
                         longitude: nil,
                         locationLabel: "",
                         wasRecordedWithMetronome: false,
-                        metronomeBPM: nil
+                        metronomeBPM: nil,
+                        actualSampleRate: nil,
+                        actualChannelCount: nil
                     )
                     appState.addRecording(from: rawData)
                     appState.recorder.dismissRecoverableRecording()
@@ -246,6 +271,45 @@ struct ContentView: View {
             // Move hint overlay (shown once per install, subtle nudge animation)
             if showMoveHint && !appState.recorder.isActive {
                 moveHintOverlay(buttonPosition: buttonPosition, containerSize: containerSize, safeArea: safeArea)
+            }
+
+            // Siri education tip banner (shown once, auto-dismisses)
+            if showSiriTip {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Image(systemName: "mic.badge.plus")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Try Siri Shortcuts")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white)
+                            Text("\"Hey Siri, transcribe my recording\" or check the Shortcuts app")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+                        }
+                        Spacer()
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { showSiriTip = false }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color.purple.opacity(0.85))
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, buttonDiameter + 30)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .allowsHitTesting(true)
+                .zIndex(999)
             }
 
             // The floating record button
@@ -430,7 +494,7 @@ struct ContentView: View {
             showSettings = true
             // Shared album creation is in settings
         case .openPaywall:
-            showTipJar = true
+            showSupport = true
         case .dismiss:
             break
         }
@@ -662,7 +726,7 @@ struct ContentView: View {
                     navBarIcon("magnifyingglass", color: iconColor)
                 }
 
-                Button { showTipJar = true } label: {
+                Button { showSupport = true } label: {
                     navBarIcon(
                         appState.supportManager.canUseProFeatures ? "checkmark.seal.fill" : "star.circle.fill",
                         color: appState.supportManager.canUseProFeatures ? iconColor : palette.accent

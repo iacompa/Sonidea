@@ -22,7 +22,7 @@ struct CreateSharedAlbumSheet: View {
     @State private var errorMessage: String?
     @State private var iCloudAvailable = true
     @State private var proUpgradeContext: ProFeatureContext?
-    @State private var showTipJar = false
+    @State private var showSupport = false
 
     var body: some View {
         NavigationStack {
@@ -39,7 +39,7 @@ struct CreateSharedAlbumSheet: View {
                 onViewPlans: {
                     proUpgradeContext = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        showTipJar = true
+                        showSupport = true
                     }
                 },
                 onDismiss: {
@@ -49,8 +49,8 @@ struct CreateSharedAlbumSheet: View {
             )
             .environment(\.themePalette, palette)
         }
-        .sheet(isPresented: $showTipJar) {
-            TipJarView()
+        .sheet(isPresented: $showSupport) {
+            SupportView()
         }
     }
 

@@ -30,6 +30,7 @@ final class AppState {
         didSet {
             recordingsContentVersion += 1
             invalidateRecordingsCache()
+            clearSizeCache()
         }
     }
     /// Increments on any recordings mutation; views can observe this to detect content changes
@@ -129,6 +130,10 @@ final class AppState {
     /// Latest UI metrics from ContentView (used by Settings for reset)
     var uiMetrics: UIMetrics = UIMetrics()
 
+    /// Pending recording navigation from Siri/Shortcuts intents.
+    /// When set, RecordingsListView will open this recording and clear the value.
+    var pendingNavigationRecordingID: UUID? = nil
+
     init() {
         // CRITICAL: Migrate UserDefaults data to file-based storage on first launch
         DataSafetyFileOps.migrateFromUserDefaultsIfNeeded()
@@ -193,7 +198,7 @@ final class AppState {
             // Then, validate that each remaining shared album's share still exists
             // and resolve the current user's role
             var staleAlbums: [Album] = []
-            for (index, album) in self.albums.enumerated() where album.isShared {
+            for album in self.albums where album.isShared {
                 let exists = await self.sharedAlbumManager.validateShareExists(for: album)
                 if !exists || self.sharedAlbumManager.shareStale {
                     Self.logger.info("Removing stale shared album: \(album.name)")
@@ -203,7 +208,9 @@ final class AppState {
                     // Resolve the current user's role from the CKShare
                     let resolved = await self.sharedAlbumManager.resolveCurrentUserRole(for: album)
                     if resolved.currentUserRole != nil {
-                        self.albums[index] = resolved
+                        if let currentIndex = self.albums.firstIndex(where: { $0.id == album.id }) {
+                            self.albums[currentIndex] = resolved
+                        }
                     }
                 }
             }
@@ -459,7 +466,9 @@ final class AppState {
             locationLabel: rawData.locationLabel,
             latitude: rawData.latitude,
             longitude: rawData.longitude,
-            wasRecordedWithMetronome: rawData.wasRecordedWithMetronome
+            wasRecordedWithMetronome: rawData.wasRecordedWithMetronome,
+            actualSampleRate: rawData.actualSampleRate,
+            actualChannelCount: rawData.actualChannelCount
         )
 
         recordings.insert(recording, at: 0)
@@ -498,11 +507,11 @@ final class AppState {
 
     private func autoTranscribe(recording: RecordingItem) async {
         do {
-            let transcript = try await TranscriptionManager.shared.transcribe(
+            let result = try await TranscriptionManager.shared.transcribe(
                 audioURL: recording.fileURL,
                 language: appSettings.transcriptionLanguage
             )
-            updateTranscript(transcript, for: recording.id)
+            updateTranscript(result.text, segments: result.segments, for: recording.id)
         } catch {
             Self.logger.error("Auto-transcribe failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -590,8 +599,8 @@ final class AppState {
         }
     }
 
-    func updateTranscript(_ text: String, for recordingID: UUID) {
-        guard RecordingRepository.updateTranscript(text, for: recordingID, recordings: &recordings) else { return }
+    func updateTranscript(_ text: String, segments: [TranscriptionSegment]? = nil, for recordingID: UUID) {
+        guard RecordingRepository.updateTranscript(text, segments: segments, for: recordingID, recordings: &recordings) else { return }
         saveRecordings()
         if let rec = recording(for: recordingID) {
             triggerSyncForRecording(rec)
@@ -2127,6 +2136,8 @@ final class AppState {
 
 enum PendingActionKeys {
     static let pendingStartRecording = "pendingStartRecording"
+    static let pendingRecordingNavigation = "pendingRecordingNavigation"
+    static let pendingTranscriptionResult = "pendingTranscriptionResult"
 }
 
 extension AppState {
@@ -2147,6 +2158,50 @@ extension AppState {
     /// Set the pending start recording flag (called from AppIntent/Quick Action)
     static func setPendingStartRecording() {
         UserDefaults.standard.set(true, forKey: PendingActionKeys.pendingStartRecording)
+    }
+
+    // MARK: - Pending Recording Navigation (for Siri/Shortcuts intents)
+
+    /// Check and consume pending recording navigation (e.g. from GetLastRecordingIntent).
+    /// Returns the recording ID to navigate to, or nil if no pending navigation.
+    func consumePendingRecordingNavigation() -> UUID? {
+        guard let idString = UserDefaults.standard.string(forKey: PendingActionKeys.pendingRecordingNavigation),
+              let id = UUID(uuidString: idString) else {
+            return nil
+        }
+
+        // Clear the flag first to prevent double triggers
+        UserDefaults.standard.removeObject(forKey: PendingActionKeys.pendingRecordingNavigation)
+        return id
+    }
+
+    /// Check and consume pending transcription result (from TranscribeRecordingIntent).
+    /// Saves the transcript to the recording if found.
+    func consumePendingTranscriptionResult() {
+        guard let data = UserDefaults.standard.data(forKey: PendingActionKeys.pendingTranscriptionResult) else {
+            return
+        }
+
+        // Clear the flag first to prevent double triggers
+        UserDefaults.standard.removeObject(forKey: PendingActionKeys.pendingTranscriptionResult)
+
+        do {
+            let decoded = try JSONDecoder().decode([String: String].self, from: data)
+            guard let idString = decoded["recordingID"],
+                  let recordingID = UUID(uuidString: idString),
+                  let transcript = decoded["transcript"] else { return }
+
+            // Update the recording's transcript if it doesn't already have one
+            if let index = recordings.firstIndex(where: { $0.id == recordingID }) {
+                if recordings[index].transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    recordings[index].transcript = transcript
+                    recordings[index].modifiedAt = Date()
+                    saveRecordings()
+                }
+            }
+        } catch {
+            Self.logger.error("Failed to decode pending transcription result: \(error.localizedDescription)")
+        }
     }
 }
 
