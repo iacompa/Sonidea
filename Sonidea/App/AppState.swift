@@ -446,9 +446,8 @@ final class AppState {
 
         Self.logger.info("File verified, adding recording: \(rawData.fileURL.lastPathComponent, privacy: .public)")
 
-        let title = "Recording \(nextRecordingNumber)"
-        nextRecordingNumber += 1
-        saveNextRecordingNumber()
+        // Generate title based on settings
+        let (title, titleSource) = generateRecordingTitle(locationLabel: rawData.locationLabel)
 
         // Add metronome BPM note if recorded with metronome
         var notes = ""
@@ -468,7 +467,8 @@ final class AppState {
             longitude: rawData.longitude,
             wasRecordedWithMetronome: rawData.wasRecordedWithMetronome,
             actualSampleRate: rawData.actualSampleRate,
-            actualChannelCount: rawData.actualChannelCount
+            actualChannelCount: rawData.actualChannelCount,
+            titleSourceRaw: titleSource.rawValue
         )
 
         recordings.insert(recording, at: 0)
@@ -503,6 +503,30 @@ final class AppState {
         }
 
         return .success(recording)
+    }
+
+    // MARK: - Auto-Naming
+
+    /// Generate a recording title based on user settings.
+    /// Priority: 1. Location (if enabled), 2. Generic ("Recording N")
+    /// Context-based titles are generated later after transcription completes.
+    private func generateRecordingTitle(locationLabel: String) -> (String, TitleSource) {
+        // Priority 1: Location naming (if enabled and available)
+        if appSettings.locationNamingEnabled && !locationLabel.isEmpty {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "h:mm a"
+            let time = timeFormatter.string(from: Date())
+            // Still increment number for uniqueness tracking
+            nextRecordingNumber += 1
+            saveNextRecordingNumber()
+            return ("\(locationLabel) - \(time)", .location)
+        }
+
+        // Default: Generic numbering
+        let title = "Recording \(nextRecordingNumber)"
+        nextRecordingNumber += 1
+        saveNextRecordingNumber()
+        return (title, .generic)
     }
 
     private func autoTranscribe(recording: RecordingItem) async {
@@ -601,6 +625,38 @@ final class AppState {
 
     func updateTranscript(_ text: String, segments: [TranscriptionSegment]? = nil, for recordingID: UUID) {
         guard RecordingRepository.updateTranscript(text, segments: segments, for: recordingID, recordings: &recordings) else { return }
+
+        // Generate context-based title if enabled and title is still generic
+        if let index = recordings.firstIndex(where: { $0.id == recordingID }) {
+            let recording = recordings[index]
+            if appSettings.contextNamingEnabled && recording.titleSource == .generic {
+                // Use async version for Apple Intelligence support
+                let textCopy = text
+                let recordingId = recordingID
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    if let autoTitle = await TitleGeneratorService.generateTitle(from: textCopy) {
+                        if let idx = self.recordings.firstIndex(where: { $0.id == recordingId }) {
+                            self.recordings[idx].autoTitle = autoTitle
+                            self.saveRecordings()
+                        }
+                    }
+                }
+            }
+
+            // Index transcript for search
+            if let segments = segments {
+                Task.detached(priority: .utility) {
+                    try? await TranscriptSearchService.shared.indexTranscript(
+                        recordingId: recording.id,
+                        segments: segments,
+                        title: recording.title,
+                        createdAt: recording.createdAt
+                    )
+                }
+            }
+        }
+
         saveRecordings()
         if let rec = recording(for: recordingID) {
             triggerSyncForRecording(rec)
@@ -660,6 +716,12 @@ final class AppState {
     }
 
     func permanentlyDelete(_ recording: RecordingItem) {
+        // Remove from transcript search index
+        let recordingId = recording.id
+        Task.detached(priority: .utility) {
+            try? await TranscriptSearchService.shared.removeTranscript(recordingId: recordingId)
+        }
+
         let result = RecordingRepository.permanentlyDelete(
             recording, recordings: &recordings, overdubGroups: &overdubGroups
         )

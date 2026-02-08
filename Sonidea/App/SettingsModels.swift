@@ -391,6 +391,15 @@ struct AppSettings: Codable {
     // Siri Shortcuts education tip tracking
     var hasSeenSiriTip: Bool = false
 
+    // MARK: - Auto-Naming Preferences
+
+    /// Use location in title (e.g., "Starbucks - 2:14 PM")
+    var locationNamingEnabled: Bool = false
+
+    /// Use transcript-based title (e.g., "Lecture: Mitochondria")
+    /// Note: Turn both off for generic numbering ("Recording 1", "Recording 2", etc.)
+    var contextNamingEnabled: Bool = true
+
     static let `default` = AppSettings()
 
     // MARK: - Migration-safe decoder
@@ -422,6 +431,9 @@ struct AppSettings: Codable {
         noiseReductionEnabled = try container.decodeIfPresent(Bool.self, forKey: .noiseReductionEnabled) ?? false
         hasSeenWelcome = try container.decodeIfPresent(Bool.self, forKey: .hasSeenWelcome) ?? false
         hasSeenSiriTip = try container.decodeIfPresent(Bool.self, forKey: .hasSeenSiriTip) ?? false
+        // Migration: auto-naming fields with defaults
+        locationNamingEnabled = try container.decodeIfPresent(Bool.self, forKey: .locationNamingEnabled) ?? false
+        contextNamingEnabled = try container.decodeIfPresent(Bool.self, forKey: .contextNamingEnabled) ?? true
     }
 
     init() {}

@@ -55,6 +55,12 @@ struct SonideaApp: App {
                         await appState.enforceSharedAlbumAccess()
                         appState.scheduleSharedAlbumTrialWarningsIfNeeded()
                     }
+
+                    // Set up transcript search database and rebuild index on launch
+                    Task.detached(priority: .background) {
+                        try? await TranscriptSearchService.shared.setup()
+                        try? await TranscriptSearchService.shared.rebuildIndex(from: appState.recordings)
+                    }
                 }
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     if newPhase == .active {

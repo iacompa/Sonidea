@@ -247,6 +247,16 @@ struct SettingsSheetView: View {
         appState.recorder.isActive
     }
 
+    /// Whether Apple Intelligence is available on this device (iOS 26+ with Apple Silicon)
+    private var isAppleIntelligenceAvailable: Bool {
+        if #available(iOS 26.0, *) {
+            // iOS 26+ means the device has Apple Intelligence capability
+            // FoundationModels framework is available
+            return true
+        }
+        return false
+    }
+
     // Sync status color based on state
     private var syncStatusColor: Color {
         switch appState.syncManager.status {
@@ -590,6 +600,47 @@ struct SettingsSheetView: View {
                 } footer: {
                     Text("Automatically detect audio type (voice, guitar, drums, keys) and set the recording icon.")
                         .foregroundColor(palette.textSecondary)
+                }
+
+                // MARK: - Auto-Naming Section
+                Section {
+                    Toggle("Location-based naming", isOn: $appState.appSettings.locationNamingEnabled)
+                        .tint(palette.toggleOnTint)
+                        .listRowBackground(palette.cardBackground)
+
+                    Toggle(isOn: $appState.appSettings.contextNamingEnabled) {
+                        HStack(spacing: 8) {
+                            Text("Smart Naming")
+                            if isAppleIntelligenceAvailable {
+                                Image(systemName: "apple.intelligence")
+                                    .font(.footnote)
+                                    .foregroundColor(.purple)
+                            }
+                        }
+                    }
+                    .tint(palette.toggleOnTint)
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    Text("Auto-Naming")
+                        .foregroundColor(palette.textSecondary)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Location naming uses your current place (e.g., \"Starbucks - 2:14 PM\").")
+
+                        if isAppleIntelligenceAvailable {
+                            HStack(spacing: 4) {
+                                Image(systemName: "apple.intelligence")
+                                    .font(.caption)
+                                Text("Smart Naming uses Apple Intelligence to generate short, descriptive titles from your transcripts (e.g., \"Guitar Practice\", \"Chemistry Lecture\"). All processing happens on-device.")
+                            }
+                            .foregroundColor(.purple)
+                        } else {
+                            Text("Smart Naming analyzes your transcripts to suggest short titles (e.g., \"Guitar Practice\"). On devices with Apple Intelligence, this feature uses on-device AI for better results.")
+                        }
+
+                        Text("Turn both off for generic numbering (\"Recording 1\", etc.).")
+                    }
+                    .foregroundColor(palette.textSecondary)
                 }
 
                 // MARK: Theme Section

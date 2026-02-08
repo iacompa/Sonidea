@@ -13,9 +13,16 @@ struct TranscriptView: View {
     let segments: [TranscriptionSegment]
     let currentTime: TimeInterval
     let onTapSegment: (TimeInterval) -> Void
+    var highlightQuery: String? = nil
 
     @Environment(\.themePalette) private var palette
     @Environment(\.layoutDirection) private var layoutDirection
+
+    /// Check if a word matches the search query (case-insensitive)
+    private func matchesQuery(_ text: String) -> Bool {
+        guard let query = highlightQuery, !query.isEmpty else { return false }
+        return text.localizedCaseInsensitiveContains(query)
+    }
 
     var body: some View {
         if segments.isEmpty {
@@ -43,20 +50,43 @@ struct TranscriptView: View {
     private func wordChip(for segment: TranscriptionSegment) -> some View {
         let isCurrent = currentTime >= segment.startTime
             && currentTime < segment.startTime + segment.duration
+        let isSearchMatch = matchesQuery(segment.text)
 
         Text(segment.text)
             .font(.subheadline)
             .lineLimit(1)
-            .foregroundColor(isCurrent ? .white : palette.textPrimary)
+            .foregroundColor(chipForeground(isCurrent: isCurrent, isSearchMatch: isSearchMatch))
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isCurrent ? palette.accent : Color.clear)
+                    .fill(chipBackground(isCurrent: isCurrent, isSearchMatch: isSearchMatch))
             )
             .contentShape(Rectangle())
             .onTapGesture {
                 onTapSegment(segment.startTime)
             }
+    }
+
+    /// Foreground color for word chip based on state
+    private func chipForeground(isCurrent: Bool, isSearchMatch: Bool) -> Color {
+        if isCurrent {
+            return .white
+        } else if isSearchMatch {
+            return palette.accent
+        } else {
+            return palette.textPrimary
+        }
+    }
+
+    /// Background color for word chip based on state
+    private func chipBackground(isCurrent: Bool, isSearchMatch: Bool) -> Color {
+        if isCurrent {
+            return palette.accent
+        } else if isSearchMatch {
+            return palette.accent.opacity(0.15)
+        } else {
+            return Color.clear
+        }
     }
 }

@@ -26,6 +26,16 @@ enum IconSource: String, Codable {
     case user   // Manually selected by user
 }
 
+// MARK: - Title Source
+
+/// Source of the recording's title
+enum TitleSource: String, Codable {
+    case user       // User manually edited
+    case location   // Generated from locationLabel
+    case context    // Generated from transcript
+    case generic    // Default "Recording N"
+}
+
 /// A single icon classification prediction from SoundAnalysis
 struct IconPrediction: Codable, Equatable {
     let iconSymbol: String   // SF Symbol name
@@ -210,6 +220,25 @@ struct RecordingItem: Identifiable, Codable, Equatable {
 
     /// Original proof SHA-256 hash before editing
     var originalProofSHA: String?
+
+    // MARK: - Auto-Naming
+
+    /// Auto-generated title suggestion (from transcript analysis)
+    var autoTitle: String?
+
+    /// Title source tracking (user, location, context, generic)
+    var titleSourceRaw: String?
+
+    /// Title source enum (computed from raw string)
+    var titleSource: TitleSource {
+        get {
+            guard let raw = titleSourceRaw else { return .generic }
+            return TitleSource(rawValue: raw) ?? .generic
+        }
+        set {
+            titleSourceRaw = newValue.rawValue
+        }
+    }
 
     // Default icon color (dark neutral gray)
     static let defaultIconColorHex = "#3A3A3C"
@@ -494,7 +523,10 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         originalAudioFileName: String? = nil,
         originalDuration: TimeInterval? = nil,
         originalProofStatus: String? = nil,
-        originalProofSHA: String? = nil
+        originalProofSHA: String? = nil,
+        // Auto-naming fields
+        autoTitle: String? = nil,
+        titleSourceRaw: String? = nil
     ) {
         self.id = id
         self.fileURL = fileURL
@@ -544,6 +576,9 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         self.originalDuration = originalDuration
         self.originalProofStatus = originalProofStatus
         self.originalProofSHA = originalProofSHA
+        // Auto-naming fields
+        self.autoTitle = autoTitle
+        self.titleSourceRaw = titleSourceRaw
     }
 
     // MARK: - Codable with Migration Support
@@ -563,6 +598,8 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         case actualSampleRate, actualChannelCount
         // Original audio backup fields
         case originalAudioFileName, originalDuration, originalProofStatus, originalProofSHA
+        // Auto-naming fields
+        case autoTitle, titleSourceRaw
     }
 
     init(from decoder: Decoder) throws {
@@ -632,6 +669,10 @@ struct RecordingItem: Identifiable, Codable, Equatable {
         originalDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .originalDuration)
         originalProofStatus = try container.decodeIfPresent(String.self, forKey: .originalProofStatus)
         originalProofSHA = try container.decodeIfPresent(String.self, forKey: .originalProofSHA)
+
+        // Migration: auto-naming fields with nil defaults for existing recordings
+        autoTitle = try container.decodeIfPresent(String.self, forKey: .autoTitle)
+        titleSourceRaw = try container.decodeIfPresent(String.self, forKey: .titleSourceRaw)
     }
 }
 

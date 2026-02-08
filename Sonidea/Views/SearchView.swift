@@ -37,6 +37,10 @@ struct SearchSheetView: View {
     @State private var computedStorageUsed: String = "…"
     @State private var selectedAlbum: Album?
     @State private var selectedProject: Project?
+    @State private var transcriptResults: [TranscriptSearchResult] = []
+    @State private var transcriptSearchTask: Task<Void, Never>?
+    @State private var seekToTime: TimeInterval?
+    @State private var highlightQuery: String?
 
     private var recordingResults: [RecordingItem] {
         appState.searchRecordings(query: debouncedQuery, filterTagIDs: selectedTagIDs)
@@ -53,6 +57,7 @@ struct SearchSheetView: View {
     private var searchPlaceholder: String {
         switch searchScope {
         case .recordings: return "Search recordings..."
+        case .transcripts: return "Search inside transcripts..."
         case .projects: return "Search projects..."
         case .albums: return "Search albums..."
         }
@@ -136,7 +141,12 @@ struct SearchSheetView: View {
                 }
             }
             .iPadSheet(item: $selectedRecording) { recording in
-                RecordingDetailView(recording: recording)
+                RecordingDetailView(recording: recording, seekToTime: seekToTime, highlightQuery: highlightQuery)
+                    .onDisappear {
+                        // Clear seek/highlight state after viewing
+                        seekToTime = nil
+                        highlightQuery = nil
+                    }
             }
             .sheet(item: $selectedAlbum) { album in
                 if album.isShared {
@@ -162,6 +172,19 @@ struct SearchSheetView: View {
             .onChange(of: selectedTagIDs) { _, _ in
                 // Tag filter changes should apply immediately (no debounce)
                 debouncedQuery = searchQuery
+            }
+            .onChange(of: debouncedQuery) { _, newQuery in
+                // Trigger transcript search when query changes and in transcript scope
+                if searchScope == .transcripts {
+                    performTranscriptSearch(query: newQuery)
+                }
+            }
+            .onChange(of: searchScope) { oldScope, newScope in
+                if newScope == .transcripts {
+                    performTranscriptSearch(query: debouncedQuery)
+                } else if oldScope == .transcripts {
+                    transcriptResults = []
+                }
             }
         }
         .task {
@@ -243,6 +266,8 @@ struct SearchSheetView: View {
             switch searchScope {
             case .recordings:
                 recordingsResultsView
+            case .transcripts:
+                transcriptResultsView
             case .projects:
                 projectsResultsView
             case .albums:
@@ -303,6 +328,86 @@ struct SearchSheetView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+        }
+    }
+
+    // MARK: - Transcript Results
+
+    @ViewBuilder
+    private var transcriptResultsView: some View {
+        if transcriptResults.isEmpty {
+            Spacer()
+            if debouncedQuery.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "text.word.spacing")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Search inside transcripts")
+                        .font(.headline)
+                    Text("Find words spoken in your recordings")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "text.magnifyingglass")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No matches found")
+                        .font(.headline)
+                    Text("Try different keywords")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+        } else {
+            List {
+                ForEach(transcriptResults) { result in
+                    TranscriptSearchResultRow(result: result)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            handleTranscriptResultTap(result)
+                        }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    // MARK: - Transcript Search Helpers
+
+    private func performTranscriptSearch(query: String) {
+        transcriptSearchTask?.cancel()
+        transcriptSearchTask = Task {
+            guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+                transcriptResults = []
+                return
+            }
+
+            do {
+                let results = try await TranscriptSearchService.shared.search(query: query)
+                if !Task.isCancelled {
+                    transcriptResults = results
+                }
+            } catch {
+                #if DEBUG
+                print("Transcript search error: \(error)")
+                #endif
+                transcriptResults = []
+            }
+        }
+    }
+
+    private func handleTranscriptResultTap(_ result: TranscriptSearchResult) {
+        // Find the recording and open it with seek time
+        if let recording = appState.recording(for: result.recordingId) {
+            seekToTime = result.startTime
+            highlightQuery = debouncedQuery
+            selectedRecording = recording
         }
     }
 

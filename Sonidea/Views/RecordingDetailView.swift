@@ -224,7 +224,11 @@ struct RecordingDetailView: View {
     // Navigation context flag - when true, tapping project just dismisses back to parent
     private let isOpenedFromProject: Bool
 
-    init(recording: RecordingItem, isOpenedFromProject: Bool = false) {
+    // Seek and highlight state for transcript search navigation
+    private let initialSeekToTime: TimeInterval?
+    private let initialHighlightQuery: String?
+
+    init(recording: RecordingItem, isOpenedFromProject: Bool = false, seekToTime: TimeInterval? = nil, highlightQuery: String? = nil) {
         _editedTitle = State(initialValue: recording.title)
         _editedNotes = State(initialValue: recording.notes)
         _editedLocationLabel = State(initialValue: recording.locationLabel)
@@ -239,6 +243,9 @@ struct RecordingDetailView: View {
         self.isOpenedFromProject = isOpenedFromProject
         // Store original snapshot for Done/Save comparison
         self.originalSnapshot = RecordingSnapshot(from: recording)
+        // Seek and highlight for transcript search
+        self.initialSeekToTime = seekToTime
+        self.initialHighlightQuery = highlightQuery
     }
 
     // MARK: - Computed Properties for Done/Save Logic
@@ -453,6 +460,14 @@ struct RecordingDetailView: View {
                 loadReverseGeocodedName()
                 // NOTE: Proof creation is now USER-DRIVEN via the Verification sheet
                 // This prevents CloudKit crashes from blocking recording playback
+
+                // Handle seek from transcript search
+                if let seekTime = initialSeekToTime {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        playback.seek(to: seekTime)
+                        playback.play()
+                    }
+                }
             }
             .onDisappear {
                 // Always persist title changes regardless of how user leaves the view
@@ -743,6 +758,42 @@ struct RecordingDetailView: View {
         .background(Color.black.opacity(0.85))
         .cornerRadius(25)
         .padding(.bottom, 100)  // Higher position so it doesn't overlap playback controls
+    }
+
+    // MARK: - Suggested Title Banner
+
+    private func suggestedTitleBanner(autoTitle: String) -> some View {
+        HStack {
+            Image(systemName: "sparkles")
+                .foregroundColor(.purple)
+                .font(.caption)
+
+            Text("Suggested: ")
+                .font(.subheadline)
+                .foregroundColor(palette.textSecondary)
+            +
+            Text(autoTitle)
+                .font(.subheadline)
+                .foregroundColor(palette.textPrimary)
+
+            Spacer()
+
+            Button {
+                editedTitle = autoTitle
+                // Mark as user-applied (prevents future overwrites)
+                var updated = currentRecording
+                updated.titleSource = .user
+                updated.autoTitle = nil
+                currentRecording = updated
+            } label: {
+                Text("Apply")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(palette.accent)
+            }
+        }
+        .padding(.horizontal, CardStyle.horizontalPadding)
+        .padding(.vertical, 8)
+        .background(palette.accent.opacity(0.1))
     }
 
     // MARK: - Playback Section
@@ -2844,6 +2895,13 @@ struct RecordingDetailView: View {
                     .padding(.horizontal, CardStyle.horizontalPadding)
                     .padding(.vertical, CardStyle.verticalPadding)
 
+                    // Suggested title banner (if auto-title is available and different from current)
+                    if let autoTitle = currentRecording.autoTitle,
+                       autoTitle != editedTitle,
+                       currentRecording.titleSource != .user {
+                        suggestedTitleBanner(autoTitle: autoTitle)
+                    }
+
                     Rectangle()
                         .fill(palette.textSecondary.opacity(CardStyle.dividerOpacity))
                         .frame(height: 0.5)
@@ -3425,7 +3483,8 @@ struct RecordingDetailView: View {
                             if !playback.isPlaying {
                                 playback.play()
                             }
-                        }
+                        },
+                        highlightQuery: initialHighlightQuery
                     )
                     .padding(.horizontal, CardStyle.horizontalPadding)
                     .padding(.vertical, CardStyle.verticalPadding)
@@ -3735,6 +3794,13 @@ struct RecordingDetailView: View {
         updated.title = editedTitle.isEmpty ? currentRecording.title : editedTitle
         updated.notes = editedNotes
         updated.locationLabel = editedLocationLabel
+
+        // Protect user title edits: mark as user source and clear auto title suggestion
+        let resolvedTitle = editedTitle.isEmpty ? currentRecording.title : editedTitle
+        if resolvedTitle != originalSnapshot.title {
+            updated.titleSource = .user
+            updated.autoTitle = nil
+        }
         // IMPORTANT: Only update iconColorHex if user explicitly changed it via ColorPicker
         // This prevents lossy Color -> hex round-trip conversion from changing the color
         // when user edits other fields (title, notes, tags, album, EQ, etc.)
@@ -3803,7 +3869,9 @@ struct RecordingDetailView: View {
                 originalAudioFileName: updated.originalAudioFileName,
                 originalDuration: updated.originalDuration,
                 originalProofStatus: updated.originalProofStatus,
-                originalProofSHA: updated.originalProofSHA
+                originalProofSHA: updated.originalProofSHA,
+                autoTitle: updated.autoTitle,
+                titleSourceRaw: updated.titleSourceRaw
             )
         }
 

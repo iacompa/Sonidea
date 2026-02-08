@@ -630,6 +630,11 @@ extension AppState {
         albums = data.albums
         projects = data.projects
         overdubGroups = data.overdubGroups
+
+        // Rebuild transcript search index in background after sync
+        Task.detached(priority: .background) {
+            try? await TranscriptSearchService.shared.rebuildIndex(from: data.recordings)
+        }
     }
 
     // MARK: - Sync Trigger Hooks

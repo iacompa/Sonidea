@@ -14,12 +14,14 @@ enum AppRoute: String, CaseIterable {
 // MARK: - Search Scope Enum
 enum SearchScope: String, CaseIterable {
     case recordings
+    case transcripts
     case projects
     case albums
 
     var displayName: String {
         switch self {
         case .recordings: return "Recordings"
+        case .transcripts: return "Transcripts"
         case .projects: return "Projects"
         case .albums: return "Albums"
         }
