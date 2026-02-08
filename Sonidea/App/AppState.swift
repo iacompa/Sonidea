@@ -510,19 +510,25 @@ final class AppState {
     /// Generate a recording title based on user settings.
     /// Priority: 1. Location (if enabled), 2. Generic ("Recording N")
     /// Context-based titles are generated later after transcription completes.
+    /// Duplicate titles are automatically numbered (e.g., "Starbucks - 2:14 PM 2").
     private func generateRecordingTitle(locationLabel: String) -> (String, TitleSource) {
+        let existingTitles = Set(recordings.map { $0.title })
+
         // Priority 1: Location naming (if enabled and available)
         if appSettings.locationNamingEnabled && !locationLabel.isEmpty {
             let timeFormatter = DateFormatter()
             timeFormatter.dateFormat = "h:mm a"
             let time = timeFormatter.string(from: Date())
-            // Still increment number for uniqueness tracking
+            let baseTitle = "\(locationLabel) - \(time)"
+            // Make unique by adding number if duplicate
+            let uniqueTitle = TitleGeneratorService.makeUnique(baseTitle, existingTitles: existingTitles)
+            // Still increment number for tracking
             nextRecordingNumber += 1
             saveNextRecordingNumber()
-            return ("\(locationLabel) - \(time)", .location)
+            return (uniqueTitle, .location)
         }
 
-        // Default: Generic numbering
+        // Default: Generic numbering (already unique by design)
         let title = "Recording \(nextRecordingNumber)"
         nextRecordingNumber += 1
         saveNextRecordingNumber()
@@ -604,6 +610,13 @@ final class AppState {
                 updateRecording(updated)
             }
             removeFromPendingClassifications(recording.id)
+
+            // Generate audio-based title if:
+            // 1. Context naming is enabled
+            // 2. Title is still generic
+            // 3. No transcript available (instrumental recordings)
+            // 4. We have valid predictions
+            await generateAudioBasedTitleIfNeeded(for: updated)
         } else if updated.iconName == nil && updated.iconPredictions == nil {
             // Classification produced no results — keep in retry queue
             addToPendingClassifications(recording.id)
@@ -613,6 +626,55 @@ final class AppState {
         }
 
         await UIApplication.shared.endBackgroundTask(taskID)
+    }
+
+    /// Generate title from audio classification for recordings without transcripts (e.g., instrumental music)
+    private func generateAudioBasedTitleIfNeeded(for recording: RecordingItem) async {
+        // Only if context naming is enabled and title is still generic
+        guard appSettings.contextNamingEnabled,
+              recording.titleSource == .generic,
+              recording.autoTitle == nil else {
+            return
+        }
+
+        // Only if auto-transcribe is OFF (otherwise wait for transcript to be combined)
+        // OR if transcript is empty/too short
+        let transcriptWordCount = recording.transcript.split(separator: " ").count
+        let hasUsableTranscript = transcriptWordCount >= 30
+        guard !appSettings.autoTranscribe || !hasUsableTranscript else {
+            return
+        }
+
+        // Build audio context from predictions
+        guard let predictions = recording.iconPredictions,
+              let topPrediction = predictions.first,
+              let label = topPrediction.classifierLabel else {
+            return
+        }
+
+        let audioContext = AudioNamingContext(
+            primaryLabel: label,
+            confidence: topPrediction.confidence,
+            allLabels: predictions.compactMap { $0.classifierLabel }
+        )
+
+        // Generate audio-only title
+        if var autoTitle = await TitleGeneratorService.generateTitle(
+            from: nil,  // No transcript
+            audioContext: audioContext
+        ) {
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                // Make the suggested title unique by adding number if duplicate
+                let existingTitles = Set(self.recordings.map { $0.title })
+                autoTitle = TitleGeneratorService.makeUnique(autoTitle, existingTitles: existingTitles)
+
+                if let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) {
+                    self.recordings[idx].autoTitle = autoTitle
+                    self.saveRecordings()
+                }
+            }
+        }
     }
 
     func updateRecording(_ updated: RecordingItem) {
@@ -630,12 +692,35 @@ final class AppState {
         if let index = recordings.firstIndex(where: { $0.id == recordingID }) {
             let recording = recordings[index]
             if appSettings.contextNamingEnabled && recording.titleSource == .generic {
-                // Use async version for Apple Intelligence support
+                // Build audio context from icon predictions (if available)
+                let audioContext: AudioNamingContext? = {
+                    guard let predictions = recording.iconPredictions,
+                          let topPrediction = predictions.first,
+                          let label = topPrediction.classifierLabel else {
+                        return nil
+                    }
+                    let allLabels = predictions.compactMap { $0.classifierLabel }
+                    return AudioNamingContext(
+                        primaryLabel: label,
+                        confidence: topPrediction.confidence,
+                        allLabels: allLabels
+                    )
+                }()
+
+                // Use combined title generation (transcript + audio classification)
                 let textCopy = text
                 let recordingId = recordingID
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    if let autoTitle = await TitleGeneratorService.generateTitle(from: textCopy) {
+                    // Use combined method that merges transcript context with audio classification
+                    if var autoTitle = await TitleGeneratorService.generateTitle(
+                        from: textCopy.isEmpty ? nil : textCopy,
+                        audioContext: audioContext
+                    ) {
+                        // Make the suggested title unique by adding number if duplicate
+                        let existingTitles = Set(self.recordings.map { $0.title })
+                        autoTitle = TitleGeneratorService.makeUnique(autoTitle, existingTitles: existingTitles)
+
                         if let idx = self.recordings.firstIndex(where: { $0.id == recordingId }) {
                             self.recordings[idx].autoTitle = autoTitle
                             self.saveRecordings()

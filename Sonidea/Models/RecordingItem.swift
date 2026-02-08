@@ -38,11 +38,30 @@ enum TitleSource: String, Codable {
 
 /// A single icon classification prediction from SoundAnalysis
 struct IconPrediction: Codable, Equatable {
-    let iconSymbol: String   // SF Symbol name
-    let confidence: Float    // 0.0 to 1.0
+    let iconSymbol: String       // SF Symbol name
+    let confidence: Float        // 0.0 to 1.0
+    let classifierLabel: String? // Original SoundAnalysis label (e.g., "acoustic_guitar")
 
     /// Minimum threshold for suggestions (60%)
     static let suggestionThreshold: Float = 0.60
+
+    init(iconSymbol: String, confidence: Float, classifierLabel: String? = nil) {
+        self.iconSymbol = iconSymbol
+        self.confidence = confidence
+        self.classifierLabel = classifierLabel
+    }
+
+    // Migration-safe decoder
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        iconSymbol = try container.decode(String.self, forKey: .iconSymbol)
+        confidence = try container.decode(Float.self, forKey: .confidence)
+        classifierLabel = try container.decodeIfPresent(String.self, forKey: .classifierLabel)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case iconSymbol, confidence, classifierLabel
+    }
 }
 
 // MARK: - Preset Icons for Recordings

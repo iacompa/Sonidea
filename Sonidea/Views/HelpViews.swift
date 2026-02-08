@@ -40,8 +40,18 @@ struct SonideaOverviewView: View {
                         "Create albums to group related recordings",
                         "Add color-coded tags for quick filtering",
                         "Use projects to track multiple takes and mark your best version",
-                        "Search by title, notes, transcript, tags, album, or location",
+                        "Smart naming suggests titles using AI or your location",
                         "Browse recordings by calendar, timeline, or map view"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Search",
+                    bullets: [
+                        "Search inside transcripts to find exactly what you said",
+                        "Typo-tolerant matching \u{2014} \"mitocondria\" finds \"mitochondria\"",
+                        "Tap any result to jump directly to that moment",
+                        "Recent recordings appear higher in results",
+                        "Search by title, notes, tags, albums, or transcript content"
                     ]
                 ),
                 InfoGuideSection(
@@ -119,7 +129,8 @@ struct WelcomeTutorialSheet: View {
                     VStack(spacing: 16) {
                         WelcomeFeatureRow(icon: "mic.fill", color: .red, title: "Record", description: "Multiple quality presets, gain control, and limiter")
                         WelcomeFeatureRow(icon: "scissors", color: .blue, title: "Edit", description: "Trim, cut, fade, normalize, noise gate, and more")
-                        WelcomeFeatureRow(icon: "folder.fill", color: .orange, title: "Organize", description: "Albums, tags, projects, and smart search")
+                        WelcomeFeatureRow(icon: "magnifyingglass", color: .teal, title: "Search", description: "Find words inside transcripts with typo tolerance")
+                        WelcomeFeatureRow(icon: "folder.fill", color: .orange, title: "Organize", description: "Albums, tags, projects, and smart naming")
                         WelcomeFeatureRow(icon: "person.2.fill", color: .green, title: "Collaborate", description: "Shared albums, overdub, and multi-track mixing")
                         WelcomeFeatureRow(icon: "paintpalette.fill", color: .purple, title: "Personalize", description: "7 studio-inspired themes and auto-icon detection")
                     }

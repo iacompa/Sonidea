@@ -348,7 +348,7 @@ struct RecordingInputSettings: Codable, Equatable {
 struct AppSettings: Codable {
     var recordingQuality: RecordingQualityPreset = .high
     var transcriptionLanguage: TranscriptionLanguage = .system
-    var autoTranscribe: Bool = false
+    var autoTranscribe: Bool = true
     var skipInterval: SkipInterval = .fifteen
     var playbackSpeed: Float = 1.0
     var silenceSkipSettings: SilenceSkipSettings = .default
@@ -411,7 +411,7 @@ struct AppSettings: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recordingQuality = try container.decodeIfPresent(RecordingQualityPreset.self, forKey: .recordingQuality) ?? .high
         transcriptionLanguage = try container.decodeIfPresent(TranscriptionLanguage.self, forKey: .transcriptionLanguage) ?? .system
-        autoTranscribe = try container.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
+        autoTranscribe = try container.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? true
         skipInterval = try container.decodeIfPresent(SkipInterval.self, forKey: .skipInterval) ?? .fifteen
         playbackSpeed = try container.decodeIfPresent(Float.self, forKey: .playbackSpeed) ?? 1.0
         silenceSkipSettings = try container.decodeIfPresent(SilenceSkipSettings.self, forKey: .silenceSkipSettings) ?? .default

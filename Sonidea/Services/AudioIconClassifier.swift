@@ -11,22 +11,31 @@ import SoundAnalysis
 
 // MARK: - Classification Result
 
-/// Result of audio classification for icon selection
+/// Result of audio classification for icon selection and smart naming
 struct AudioClassificationResult {
-    let iconSymbol: String   // Raw SF Symbol name (e.g. "dog.fill", "music.note")
+    let iconSymbol: String       // Raw SF Symbol name (e.g. "dog.fill", "music.note")
     let confidence: Float
+    let classifierLabel: String? // Original SoundAnalysis label (e.g., "acoustic_guitar")
     /// Top predictions that meet the suggestion threshold (max 3, sorted by confidence desc)
     let topPredictions: [IconPrediction]
 
-    init(iconSymbol: String, confidence: Float, topPredictions: [IconPrediction] = []) {
+    init(iconSymbol: String, confidence: Float, topPredictions: [IconPrediction] = [], classifierLabel: String? = nil) {
         self.iconSymbol = iconSymbol
         self.confidence = confidence
         self.topPredictions = topPredictions
+        self.classifierLabel = classifierLabel
     }
 
     /// Whether the confidence meets the threshold for auto-assignment
     func meetsThreshold(_ threshold: Float = 0.70) -> Bool {
         confidence >= threshold
+    }
+
+    /// Convert to AudioNamingContext for title generation
+    func toNamingContext() -> AudioNamingContext? {
+        guard let label = classifierLabel, confidence >= 0.50 else { return nil }
+        let allLabels = topPredictions.compactMap { $0.classifierLabel }
+        return AudioNamingContext(primaryLabel: label, confidence: confidence, allLabels: allLabels)
     }
 }
 
@@ -109,6 +118,9 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
     /// Track all icon matches with their max confidence (keyed by SF Symbol)
     private var iconConfidences: [String: Float] = [:]
 
+    /// Track the classifier label that produced each icon's best confidence
+    private var iconLabels: [String: String] = [:]
+
     /// Track if we've logged available classifications (debug, once)
     private static var hasLoggedClassifications = false
 
@@ -155,7 +167,11 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
             // Look up icon in catalog by classifier label
             if let matchedIcon = IconCatalog.labelToIconMap[label] {
                 let symbol = matchedIcon.sfSymbol
-                iconConfidences[symbol] = max(iconConfidences[symbol] ?? 0, confidence)
+                let currentConfidence = iconConfidences[symbol] ?? 0
+                if confidence > currentConfidence {
+                    iconConfidences[symbol] = confidence
+                    iconLabels[symbol] = label  // Track which label produced this confidence
+                }
             }
         }
 
@@ -189,6 +205,7 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
 
         // Snapshot mutable state under the lock, then release before calling onComplete
         let snapshotConfidences = iconConfidences
+        let snapshotLabels = iconLabels
         lock.unlock()
 
         // Filter predictions >= threshold and sort by confidence descending
@@ -197,7 +214,7 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
             .filter { $0.value >= threshold }
             .sorted { $0.value > $1.value }
             .prefix(3)  // Max 3 suggestions
-            .map { IconPrediction(iconSymbol: $0.key, confidence: $0.value) }
+            .map { IconPrediction(iconSymbol: $0.key, confidence: $0.value, classifierLabel: snapshotLabels[$0.key]) }
 
         // Find best overall match (may be below threshold)
         let bestMatch = snapshotConfidences.max { $0.value < $1.value }
@@ -206,10 +223,11 @@ private final class ClassificationResultsObserver: NSObject, SNResultsObserving 
             let result = AudioClassificationResult(
                 iconSymbol: best.key,
                 confidence: best.value,
-                topPredictions: Array(qualifiedPredictions)
+                topPredictions: Array(qualifiedPredictions),
+                classifierLabel: snapshotLabels[best.key]
             )
             #if DEBUG
-            print("[SoundAnalysisClassifier] Best: \(best.key) @ \(Int(best.value * 100))%, suggestions: \(qualifiedPredictions.count)")
+            print("[SoundAnalysisClassifier] Best: \(best.key) @ \(Int(best.value * 100))%, label: \(snapshotLabels[best.key] ?? "none"), suggestions: \(qualifiedPredictions.count)")
             #endif
             onComplete?(result)
         } else {

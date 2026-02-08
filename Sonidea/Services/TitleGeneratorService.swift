@@ -2,23 +2,72 @@
 //  TitleGeneratorService.swift
 //  Sonidea
 //
-//  On-device contextual title generation using Apple Intelligence (iOS 18+) with
-//  NaturalLanguage fallback for older devices. Generates 2-4 word titles.
+//  On-device contextual title generation using Apple Intelligence (iOS 26+) with
+//  NaturalLanguage fallback for older devices. Combines transcript analysis with
+//  audio classification for intelligent 2-4 word titles.
 //
 
 import Foundation
 import NaturalLanguage
 
-// Try to import FoundationModels for Apple Intelligence (iOS 18+)
+// Try to import FoundationModels for Apple Intelligence (iOS 26+)
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
+
+// MARK: - Audio Context for Naming
+
+/// Audio classification context used for combined naming
+struct AudioNamingContext {
+    let primaryLabel: String      // Top classifier label (e.g., "acoustic_guitar")
+    let confidence: Float         // Classification confidence
+    let allLabels: [String]       // All detected labels for context
+
+    init(primaryLabel: String, confidence: Float, allLabels: [String] = []) {
+        self.primaryLabel = primaryLabel
+        self.confidence = confidence
+        self.allLabels = allLabels.isEmpty ? [primaryLabel] : allLabels
+    }
+}
 
 // MARK: - Title Generator Service
 
 enum TitleGeneratorService {
 
     // MARK: - Public API
+
+    /// Generate contextual title combining transcript AND audio classification.
+    /// This is the primary method that produces the smartest titles.
+    /// - Parameters:
+    ///   - transcript: The transcribed text (can be empty for instrumental recordings)
+    ///   - audioContext: Audio classification result (optional)
+    /// - Returns: 2-4 word title, or nil if no meaningful title can be generated
+    static func generateTitle(
+        from transcript: String?,
+        audioContext: AudioNamingContext?
+    ) async -> String? {
+        let transcriptWords = transcript?.split(separator: " ").count ?? 0
+        let hasUsableTranscript = transcriptWords >= 30
+        let hasAudioContext = audioContext != nil && audioContext!.confidence >= 0.50
+
+        // Case 1: Both transcript and audio - combine intelligently
+        if hasUsableTranscript, let transcript = transcript, let audio = audioContext {
+            return await generateCombinedTitle(transcript: transcript, audio: audio)
+        }
+
+        // Case 2: Only transcript - use transcript analysis
+        if hasUsableTranscript, let transcript = transcript {
+            return await generateTitle(from: transcript)
+        }
+
+        // Case 3: Only audio classification - use audio-based naming
+        if hasAudioContext, let audio = audioContext {
+            return generateAudioBasedTitle(audio: audio)
+        }
+
+        // Case 4: Neither - return nil
+        return nil
+    }
 
     /// Generate contextual title from transcript using Apple Intelligence if available,
     /// with NaturalLanguage fallback. Returns 2-4 word titles.
@@ -27,7 +76,7 @@ enum TitleGeneratorService {
         let words = transcript.split(separator: " ")
         guard words.count >= 30 else { return nil }
 
-        // Try Apple Intelligence first (iOS 18+)
+        // Try Apple Intelligence first (iOS 26+)
         if let aiTitle = await generateWithAppleIntelligence(transcript) {
             return enforceLength(aiTitle)
         }
@@ -48,6 +97,514 @@ enum TitleGeneratorService {
         if let nlTitle = generateWithNaturalLanguage(transcript) {
             return enforceLength(nlTitle)
         }
+
+        return nil
+    }
+
+    // MARK: - Combined Transcript + Audio Title Generation
+
+    /// Generate title using BOTH transcript context AND audio classification
+    private static func generateCombinedTitle(transcript: String, audio: AudioNamingContext) async -> String? {
+        // Get the audio subject (e.g., "Guitar", "Piano", "Dog")
+        guard let audioSubject = audioLabelToSubject[audio.primaryLabel] ?? findSubjectForLabel(audio.primaryLabel) else {
+            // No audio mapping - fall back to transcript-only
+            return await generateTitle(from: transcript)
+        }
+
+        // Detect activity/context from transcript
+        let transcriptContext = detectActivityContext(transcript)
+
+        // Check if audio subject matches transcript content
+        let loweredTranscript = transcript.lowercased()
+        let audioMentioned = audioSubjectMentionedInTranscript(audioSubject, transcript: loweredTranscript)
+
+        // Build combined title
+        if let activity = transcriptContext {
+            // Transcript has activity context - combine with audio subject
+            // e.g., "Guitar Practice", "Piano Lesson", "Drum Session"
+            return enforceLength("\(audioSubject) \(activity)")
+        } else if audioMentioned {
+            // Audio subject mentioned in transcript but no activity detected
+            // Try to get more context from transcript keywords
+            if let keyword = extractTopKeyword(from: transcript, excluding: audioSubject) {
+                return enforceLength("\(audioSubject) \(keyword)")
+            }
+            return enforceLength("\(audioSubject) Recording")
+        } else {
+            // Audio and transcript seem unrelated - trust audio for subject, transcript for context
+            let language = detectLanguage(transcript)
+            let keywords = extractKeywords(transcript, language: language)
+            if let keyword = keywords.first {
+                return enforceLength("\(audioSubject) \(keyword)")
+            }
+            return enforceLength("\(audioSubject) Recording")
+        }
+    }
+
+    /// Generate title from audio classification only (no transcript)
+    private static func generateAudioBasedTitle(audio: AudioNamingContext) -> String? {
+        guard let subject = audioLabelToSubject[audio.primaryLabel] ?? findSubjectForLabel(audio.primaryLabel) else {
+            return nil
+        }
+
+        // Check for specific audio contexts based on labels
+        let labels = Set(audio.allLabels)
+
+        // Music-specific contexts
+        if labels.contains("singing") || labels.contains("choir_singing") {
+            if labels.contains(where: { $0.contains("guitar") }) {
+                return "Vocal Guitar"
+            }
+            return "Vocal Recording"
+        }
+
+        // Add generic suffix based on category
+        let suffix = audioLabelToDefaultSuffix[audio.primaryLabel] ?? "Recording"
+        return enforceLength("\(subject) \(suffix)")
+    }
+
+    /// Check if audio subject (e.g., "Guitar") is mentioned in transcript
+    private static func audioSubjectMentionedInTranscript(_ subject: String, transcript: String) -> Bool {
+        let lowered = transcript.lowercased()
+        let subjectLower = subject.lowercased()
+
+        // Direct mention
+        if lowered.contains(subjectLower) {
+            return true
+        }
+
+        // Check synonyms
+        if let synonyms = subjectSynonyms[subjectLower] {
+            return synonyms.contains { lowered.contains($0) }
+        }
+
+        return false
+    }
+
+    /// Detect activity context from transcript (Practice, Lesson, Session, etc.)
+    private static func detectActivityContext(_ transcript: String) -> String? {
+        let lowered = transcript.lowercased()
+
+        let activitySignals: [(activity: String, signals: [String])] = [
+            ("Practice", ["practice", "practicing", "practise", "practising", "warm up", "warming up", "run through", "work on"]),
+            ("Lesson", ["lesson", "teaching", "learning", "tutorial", "instruction", "how to", "showing you"]),
+            ("Session", ["session", "jam", "jamming", "recording session", "studio"]),
+            ("Rehearsal", ["rehearsal", "rehearse", "rehearsing", "run-through", "sound check"]),
+            ("Performance", ["performance", "perform", "performing", "concert", "gig", "show", "recital"]),
+            ("Warmup", ["warmup", "warm-up", "warming up", "exercise", "exercises", "drill", "drills"]),
+            ("Cover", ["cover", "covering", "cover version", "rendition"]),
+            ("Original", ["original", "new song", "wrote", "writing", "composing", "composition"]),
+            ("Test", ["test", "testing", "trying out", "checking", "mic check", "sound test"]),
+            ("Demo", ["demo", "demonstration", "sample", "example"]),
+            ("Ideas", ["idea", "ideas", "brainstorm", "experiment", "experimenting", "trying"]),
+        ]
+
+        for (activity, signals) in activitySignals {
+            if signals.contains(where: { lowered.contains($0) }) {
+                return activity
+            }
+        }
+
+        return nil
+    }
+
+    /// Extract top keyword excluding a specific word
+    private static func extractTopKeyword(from transcript: String, excluding: String) -> String? {
+        let language = detectLanguage(transcript)
+        let keywords = extractKeywords(transcript, language: language)
+        let excludedLower = excluding.lowercased()
+
+        return keywords.first { $0.lowercased() != excludedLower }
+    }
+
+    // MARK: - Comprehensive Audio Label Mappings
+
+    /// Map SoundAnalysis labels to human-readable subjects for naming
+    /// Covers all 300+ Apple classifier labels
+    private static let audioLabelToSubject: [String: String] = [
+        // MARK: String Instruments
+        "acoustic_guitar": "Guitar",
+        "electric_guitar": "Guitar",
+        "bass_guitar": "Bass",
+        "guitar": "Guitar",
+        "guitar_strum": "Guitar",
+        "guitar_tapping": "Guitar",
+        "steel_guitar_slide_guitar": "Slide Guitar",
+        "violin_fiddle": "Violin",
+        "cello": "Cello",
+        "double_bass": "Bass",
+        "bowed_string_instrument": "Strings",
+        "plucked_string_instrument": "Strings",
+        "harp": "Harp",
+        "mandolin": "Mandolin",
+        "banjo": "Banjo",
+        "sitar": "Sitar",
+        "zither": "Zither",
+        "ukulele": "Ukulele",
+
+        // MARK: Keyboard Instruments
+        "piano": "Piano",
+        "electric_piano": "Piano",
+        "keyboard_musical": "Keyboard",
+        "synthesizer": "Synth",
+        "organ": "Organ",
+        "electronic_organ": "Organ",
+        "hammond_organ": "Organ",
+        "harpsichord": "Harpsichord",
+        "accordion": "Accordion",
+        "concertina": "Concertina",
+
+        // MARK: Percussion
+        "drum": "Drums",
+        "drum_kit": "Drums",
+        "bass_drum": "Drums",
+        "snare_drum": "Snare",
+        "timpani": "Timpani",
+        "tabla": "Tabla",
+        "cymbal": "Cymbals",
+        "hi_hat": "Hi-Hat",
+        "tambourine": "Tambourine",
+        "mallet_percussion": "Mallets",
+        "gong": "Gong",
+        "marimba_xylophone": "Marimba",
+        "vibraphone": "Vibes",
+        "glockenspiel": "Glockenspiel",
+        "steelpan": "Steel Pan",
+        "rattle_instrument": "Shaker",
+        "cowbell": "Cowbell",
+
+        // MARK: Wind Instruments
+        "flute": "Flute",
+        "oboe": "Oboe",
+        "clarinet": "Clarinet",
+        "bassoon": "Bassoon",
+        "saxophone": "Sax",
+        "trumpet": "Trumpet",
+        "trombone": "Trombone",
+        "french_horn": "French Horn",
+        "brass_instrument": "Brass",
+        "wind_instrument": "Winds",
+        "bagpipes": "Bagpipes",
+        "didgeridoo": "Didgeridoo",
+        "harmonica": "Harmonica",
+        "shofar": "Shofar",
+
+        // MARK: Voice & Vocals
+        "singing": "Vocal",
+        "choir_singing": "Choir",
+        "rapping": "Rap",
+        "yodeling": "Yodel",
+        "humming": "Humming",
+        "whistling": "Whistling",
+        "speech": "Voice",
+        "talking": "Voice",
+        "whispering": "Whisper",
+        "narration": "Narration",
+        "shout": "Shout",
+        "yell": "Yell",
+        "screaming": "Scream",
+        "battle_cry": "Battle Cry",
+        "laughter": "Laughter",
+        "giggling": "Giggling",
+        "chuckle_chortle": "Chuckle",
+        "snicker": "Snicker",
+        "belly_laugh": "Laughter",
+        "crying_sobbing": "Crying",
+        "baby_crying": "Baby",
+
+        // MARK: Body Sounds
+        "cough": "Cough",
+        "sneeze": "Sneeze",
+        "breathing": "Breathing",
+        "snoring": "Snoring",
+        "gasp": "Gasp",
+        "sigh": "Sigh",
+        "burp": "Burp",
+        "hiccup": "Hiccup",
+        "gargling": "Gargling",
+        "nose_blowing": "Nose Blow",
+        "chewing": "Chewing",
+        "slurp": "Slurp",
+        "biting": "Biting",
+
+        // MARK: Human Actions
+        "applause": "Applause",
+        "clapping": "Clapping",
+        "cheering": "Cheering",
+        "crowd": "Crowd",
+        "babble": "Babble",
+        "children_shouting": "Children",
+        "children_playing": "Children",
+        "finger_snapping": "Snap",
+
+        // MARK: Animals - Dogs
+        "dog_bark": "Dog",
+        "dog_growl": "Dog",
+        "dog_whimper": "Dog",
+        "dog_bow_wow": "Dog",
+        "dog_howl": "Dog",
+
+        // MARK: Animals - Cats
+        "cat_meow": "Cat",
+        "cat_purr": "Cat",
+
+        // MARK: Animals - Birds
+        "bird_chirp_tweet": "Bird",
+        "bird_squawk": "Bird",
+        "bird_vocalization": "Bird",
+        "bird_flapping": "Bird",
+        "bird": "Bird",
+        "crow_caw": "Crow",
+        "pigeon_dove_coo": "Dove",
+        "owl_hoot": "Owl",
+        "rooster_crow": "Rooster",
+        "chicken_cluck": "Chicken",
+        "chicken": "Chicken",
+        "turkey_gobble": "Turkey",
+        "duck_quack": "Duck",
+        "goose_honk": "Goose",
+
+        // MARK: Animals - Other
+        "cow_moo": "Cow",
+        "pig_oink": "Pig",
+        "horse_neigh": "Horse",
+        "horse_clip_clop": "Horse",
+        "frog_croak": "Frog",
+        "frog": "Frog",
+        "snake_hiss": "Snake",
+        "snake_rattle": "Rattlesnake",
+        "whale_vocalization": "Whale",
+        "lion_roar": "Lion",
+        "coyote_howl": "Coyote",
+        "elk_bugle": "Elk",
+
+        // MARK: Insects
+        "bee_buzz": "Bee",
+        "insect": "Insect",
+        "fly_buzz": "Fly",
+        "mosquito_buzz": "Mosquito",
+        "cricket_chirp": "Cricket",
+
+        // MARK: Nature Sounds
+        "rain": "Rain",
+        "raindrop": "Rain",
+        "thunder": "Thunder",
+        "thunderstorm": "Storm",
+        "wind": "Wind",
+        "wind_noise_microphone": "Wind",
+        "wind_rustling_leaves": "Wind",
+        "fire": "Fire",
+        "fire_crackle": "Fire",
+        "sea_waves": "Ocean",
+        "ocean": "Ocean",
+        "stream_burbling": "Stream",
+        "waterfall": "Waterfall",
+        "underwater_bubbling": "Underwater",
+
+        // MARK: Water Sounds
+        "water": "Water",
+        "water_tap_faucet": "Faucet",
+        "water_pump": "Water Pump",
+        "liquid_dripping": "Dripping",
+        "liquid_filling_container": "Filling",
+        "liquid_pouring": "Pouring",
+        "liquid_splashing": "Splash",
+        "liquid_sloshing": "Sloshing",
+        "liquid_trickle_dribble": "Trickling",
+        "toilet_flush": "Toilet",
+
+        // MARK: Vehicles
+        "car_horn": "Car Horn",
+        "car_passing_by": "Car",
+        "engine_starting": "Engine",
+        "engine_idling": "Engine",
+        "engine_accelerating_revving": "Engine",
+        "engine_knocking": "Engine",
+        "vehicle_skidding": "Skid",
+        "race_car": "Race Car",
+        "bus": "Bus",
+        "truck": "Truck",
+        "motorcycle": "Motorcycle",
+        "bicycle": "Bicycle",
+        "train": "Train",
+        "train_horn": "Train",
+        "train_whistle": "Train",
+        "train_wheels_squealing": "Train",
+        "rail_transport": "Train",
+        "subway_metro": "Subway",
+        "airplane": "Airplane",
+        "aircraft": "Aircraft",
+        "helicopter": "Helicopter",
+        "boat_water_vehicle": "Boat",
+        "motorboat_speedboat": "Speedboat",
+        "rowboat_canoe_kayak": "Kayak",
+
+        // MARK: Emergency & Alarms
+        "siren": "Siren",
+        "police_siren": "Police",
+        "fire_engine_siren": "Fire Truck",
+        "ambulance_siren": "Ambulance",
+        "emergency_vehicle": "Emergency",
+        "alarm_clock": "Alarm",
+        "clock": "Clock",
+        "tick_tock": "Clock",
+        "tick": "Ticking",
+        "civil_defense_siren": "Siren",
+        "smoke_detector": "Smoke Alarm",
+        "fire_alarm": "Fire Alarm",
+
+        // MARK: Bells & Chimes
+        "bell": "Bell",
+        "church_bell": "Church Bell",
+        "bicycle_bell": "Bike Bell",
+        "door_bell": "Doorbell",
+        "wind_chime": "Wind Chime",
+        "singing_bowl": "Singing Bowl",
+        "telephone_bell_ringing": "Phone",
+        "telephone": "Phone",
+        "ringtone": "Ringtone",
+
+        // MARK: Impacts & Crashes
+        "crash": "Crash",
+        "boom": "Boom",
+        "thump_thud": "Thump",
+        "slap_smack": "Slap",
+        "glass_breaking": "Glass Break",
+        "fireworks": "Fireworks",
+        "firecracker": "Firecracker",
+        "gunshot_gunfire": "Gunshot",
+        "explosion": "Explosion",
+        "artillery_fire": "Artillery",
+
+        // MARK: Tools & Machines
+        "power_tool": "Power Tool",
+        "drill": "Drill",
+        "hammer": "Hammer",
+        "saw": "Saw",
+        "scissors": "Scissors",
+        "cutting": "Cutting",
+        "lawn_mower": "Lawn Mower",
+        "chainsaw": "Chainsaw",
+        "vacuum_cleaner": "Vacuum",
+        "blender": "Blender",
+        "hair_dryer": "Hair Dryer",
+        "electric_shaver": "Shaver",
+        "toothbrush": "Toothbrush",
+        "mechanical_fan": "Fan",
+        "ratchet_and_pawl": "Ratchet",
+        "engine": "Engine",
+        "microwave_oven": "Microwave",
+        "washing_machine": "Washer",
+        "dishwasher": "Dishwasher",
+        "air_conditioner": "AC",
+        "sewing_machine": "Sewing",
+
+        // MARK: Doors & Keys
+        "door": "Door",
+        "door_slam": "Door Slam",
+        "door_sliding": "Sliding Door",
+        "door_open_close": "Door",
+        "knock": "Knock",
+        "keys_jangling": "Keys",
+
+        // MARK: Typing & Clicking
+        "tap": "Tap",
+        "click": "Click",
+        "clicking": "Clicking",
+        "typing": "Typing",
+        "typing_computer_keyboard": "Typing",
+        "keyboard": "Keyboard",
+
+        // MARK: Camera & Office
+        "camera": "Camera",
+        "printing": "Printing",
+        "printer": "Printer",
+
+        // MARK: Music General
+        "music": "Music",
+        "orchestra": "Orchestra",
+        "musical_ensemble": "Ensemble",
+        "tuning_fork": "Tuning",
+
+        // MARK: Sports
+        "playing_tennis": "Tennis",
+        "playing_badminton": "Badminton",
+        "basketball_bounce": "Basketball",
+        "playing_table_tennis": "Ping Pong",
+        "skateboard": "Skateboard",
+        "skiing": "Skiing",
+        "person_running": "Running",
+        "person_walking": "Walking",
+        "rope_skipping": "Jump Rope",
+    ]
+
+    /// Default suffix when no transcript context is available
+    private static let audioLabelToDefaultSuffix: [String: String] = [
+        // Music-related get "Recording" or specific suffix
+        "acoustic_guitar": "Recording",
+        "electric_guitar": "Recording",
+        "piano": "Recording",
+        "drums": "Recording",
+        "singing": "Recording",
+        "violin_fiddle": "Recording",
+
+        // Animals get "Audio"
+        "dog_bark": "Audio",
+        "cat_meow": "Audio",
+        "bird": "Audio",
+
+        // Nature gets "Ambience"
+        "rain": "Ambience",
+        "thunder": "Ambience",
+        "wind": "Ambience",
+        "ocean": "Ambience",
+        "fire": "Ambience",
+
+        // Vehicles get "Sound"
+        "car_horn": "Sound",
+        "train": "Sound",
+        "airplane": "Sound",
+    ]
+
+    /// Synonyms for audio subjects (for matching in transcripts)
+    private static let subjectSynonyms: [String: [String]] = [
+        "guitar": ["acoustic", "electric", "strat", "stratocaster", "les paul", "fender", "gibson", "telecaster", "axe"],
+        "piano": ["keys", "keyboard", "grand", "upright", "steinway", "yamaha piano"],
+        "drums": ["kit", "drum set", "percussion", "snare", "kick", "cymbals", "hi-hat"],
+        "bass": ["bass guitar", "four string", "fender bass"],
+        "violin": ["fiddle", "viola"],
+        "sax": ["saxophone", "alto sax", "tenor sax", "soprano sax"],
+        "trumpet": ["horn", "brass"],
+        "vocal": ["voice", "singing", "vocals", "vocalist"],
+        "synth": ["synthesizer", "keyboard", "moog", "analog synth"],
+    ]
+
+    /// Find subject for labels not in the main dictionary (fuzzy matching)
+    private static func findSubjectForLabel(_ label: String) -> String? {
+        // Try partial matching
+        let labelLower = label.lowercased()
+
+        // Check if label contains a known instrument
+        let instruments = ["guitar", "piano", "drum", "bass", "violin", "flute", "trumpet", "sax", "organ", "harp"]
+        for instrument in instruments {
+            if labelLower.contains(instrument) {
+                return instrument.capitalized
+            }
+        }
+
+        // Check for animal sounds
+        let animals = ["dog", "cat", "bird", "horse", "cow", "pig", "frog", "snake", "whale", "lion"]
+        for animal in animals {
+            if labelLower.contains(animal) {
+                return animal.capitalized
+            }
+        }
+
+        // Check for nature
+        if labelLower.contains("rain") || labelLower.contains("water") { return "Water" }
+        if labelLower.contains("wind") { return "Wind" }
+        if labelLower.contains("thunder") || labelLower.contains("storm") { return "Storm" }
+        if labelLower.contains("fire") { return "Fire" }
 
         return nil
     }
@@ -322,5 +879,47 @@ enum TitleGeneratorService {
 
     private static func isStopWord(_ word: String) -> Bool {
         stopWords.contains(word.lowercased())
+    }
+
+    // MARK: - Duplicate Title Handling
+
+    /// Make a title unique by appending a number if it already exists
+    /// - Parameters:
+    ///   - title: The proposed title
+    ///   - existingTitles: Set of all existing recording titles
+    /// - Returns: Unique title (e.g., "Guitar Recording" → "Guitar Recording 2")
+    static func makeUnique(_ title: String, existingTitles: Set<String>) -> String {
+        // If title doesn't exist, return as-is
+        if !existingTitles.contains(title) {
+            return title
+        }
+
+        // Check for existing numbered versions and find the next number
+        // Pattern: "Title", "Title 2", "Title 3", etc.
+        var nextNumber = 2
+        while existingTitles.contains("\(title) \(nextNumber)") {
+            nextNumber += 1
+        }
+
+        return "\(title) \(nextNumber)"
+    }
+
+    /// Extract base title and number from a potentially numbered title
+    /// - Parameter title: Title that may have a number suffix (e.g., "Guitar Recording 3")
+    /// - Returns: Tuple of (baseTitle, number?) - number is nil if no suffix
+    static func parseNumberedTitle(_ title: String) -> (base: String, number: Int?) {
+        // Check if title ends with " N" where N is a number
+        let components = title.split(separator: " ")
+        guard components.count >= 2,
+              let lastComponent = components.last,
+              let number = Int(lastComponent),
+              number >= 2 else {
+            return (title, nil)
+        }
+
+        // Reconstruct base title without the number
+        let baseComponents = components.dropLast()
+        let base = baseComponents.joined(separator: " ")
+        return (base, number)
     }
 }

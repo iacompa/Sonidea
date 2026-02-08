@@ -563,8 +563,19 @@ struct SettingsSheetView: View {
                     Text("Transcription")
                         .foregroundColor(palette.textSecondary)
                 } footer: {
-                    Text("Auto-transcribe new recordings when saved.")
-                        .foregroundColor(palette.textSecondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Automatically transcribe new recordings when saved.")
+
+                        if !appState.appSettings.autoTranscribe {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Without transcripts, recordings won't appear in transcript search and Smart Naming won't work. You can still manually transcribe individual recordings.")
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .foregroundColor(palette.textSecondary)
                 }
 
                 Section {
@@ -607,6 +618,12 @@ struct SettingsSheetView: View {
                     Toggle("Location-based naming", isOn: $appState.appSettings.locationNamingEnabled)
                         .tint(palette.toggleOnTint)
                         .listRowBackground(palette.cardBackground)
+                        .onChange(of: appState.appSettings.locationNamingEnabled) { _, isOn in
+                            // Mutually exclusive: turn off smart naming when location is enabled
+                            if isOn && appState.appSettings.contextNamingEnabled {
+                                appState.appSettings.contextNamingEnabled = false
+                            }
+                        }
 
                     Toggle(isOn: $appState.appSettings.contextNamingEnabled) {
                         HStack(spacing: 8) {
@@ -620,25 +637,43 @@ struct SettingsSheetView: View {
                     }
                     .tint(palette.toggleOnTint)
                     .listRowBackground(palette.cardBackground)
+                    .onChange(of: appState.appSettings.contextNamingEnabled) { _, isOn in
+                        // Mutually exclusive: turn off location naming when smart naming is enabled
+                        if isOn && appState.appSettings.locationNamingEnabled {
+                            appState.appSettings.locationNamingEnabled = false
+                        }
+                    }
                 } header: {
                     Text("Auto-Naming")
                         .foregroundColor(palette.textSecondary)
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Location naming uses your current place (e.g., \"Starbucks - 2:14 PM\").")
+                        Text("Choose one naming style, or turn both off for generic numbering (\"Recording 1\", etc.).")
 
-                        if isAppleIntelligenceAvailable {
-                            HStack(spacing: 4) {
-                                Image(systemName: "apple.intelligence")
-                                    .font(.caption)
-                                Text("Smart Naming uses Apple Intelligence to generate short, descriptive titles from your transcripts (e.g., \"Guitar Practice\", \"Chemistry Lecture\"). All processing happens on-device.")
-                            }
-                            .foregroundColor(.purple)
-                        } else {
-                            Text("Smart Naming analyzes your transcripts to suggest short titles (e.g., \"Guitar Practice\"). On devices with Apple Intelligence, this feature uses on-device AI for better results.")
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "location.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("Location naming uses your current place (e.g., \"Starbucks - 2:14 PM\").")
                         }
 
-                        Text("Turn both off for generic numbering (\"Recording 1\", etc.).")
+                        if isAppleIntelligenceAvailable {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "apple.intelligence")
+                                    .font(.caption)
+                                    .foregroundColor(.purple)
+                                Text("Smart Naming combines audio detection (guitar, piano, drums) with transcripts to suggest titles like \"Guitar Practice\" or \"Piano Lesson\". Works for instrumental recordings too. All processing is on-device.")
+                            }
+                        } else {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "brain")
+                                    .font(.caption)
+                                Text("Smart Naming combines audio detection (guitar, piano, drums) with transcripts to suggest titles. Works for instrumental recordings too.")
+                            }
+                        }
+
+                        Text("Duplicate titles are automatically numbered (\"Guitar Recording\", \"Guitar Recording 2\", etc.).")
+                            .font(.caption2)
                     }
                     .foregroundColor(palette.textSecondary)
                 }
