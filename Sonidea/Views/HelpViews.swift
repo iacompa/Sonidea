@@ -12,89 +12,125 @@ struct SonideaOverviewView: View {
     var body: some View {
         InfoGuideView(
             title: "What is Sonidea?",
-            intro: "Sonidea is a professional voice memo app built for creators, musicians, journalists, students, and anyone who records audio. It goes far beyond basic recording \u{2014} think of it as a mobile studio in your pocket.",
+            intro: "Sonidea is a professional audio recording app designed for creators, musicians, podcasters, journalists, and anyone who captures audio. More than a voice memo app \u{2014} it's a mobile recording studio with editing, transcription, collaboration, and studio-grade effects.",
             sections: [
                 InfoGuideSection(
-                    headline: "Record",
+                    headline: "Professional Recording",
                     bullets: [
-                        "Tap the floating button anywhere to start recording instantly",
-                        "Choose quality presets: Standard, High, Lossless, or WAV",
-                        "Adjust input gain and use a built-in limiter to prevent clipping",
-                        "Pause and resume without losing your place",
-                        "Record in mono (built-in mic) or stereo (external mic)"
+                        "Four quality presets: Standard (AAC 128kbps), High (AAC 256kbps), Lossless (ALAC), and WAV (16-bit PCM)",
+                        "Real-time input gain control (-6 to +6 dB) with peak metering",
+                        "Built-in limiter to prevent clipping on loud sources",
+                        "Noise reduction for cleaner voice recordings",
+                        "Pause and resume mid-recording with seamless stitching",
+                        "Metronome/click track with tap tempo, time signatures, and count-in (plays through headphones only, never recorded)",
+                        "Live monitoring effects: 4-band EQ and compressor while recording (audio stays clean)"
                     ]
                 ),
                 InfoGuideSection(
-                    headline: "Edit",
+                    headline: "Multi-Track & Overdub",
                     bullets: [
-                        "Tap Edit on any recording to open the waveform editor",
-                        "Trim, cut, and splice audio with visual precision",
-                        "Apply fade in/out, normalize, noise gate, compression, reverb, and echo",
-                        "Zoom and pan the waveform for sample-level accuracy",
-                        "Full undo/redo support \u{2014} experiment without worry"
+                        "Layer up to 3 overdub tracks on any recording",
+                        "Per-track volume, pan, mute, and solo controls",
+                        "Sync adjustment (±500ms) to align layers perfectly",
+                        "Bounce/mixdown to stereo WAV for sharing",
+                        "Preview your mix before committing"
                     ]
                 ),
                 InfoGuideSection(
-                    headline: "Organize",
+                    headline: "Waveform Editing",
                     bullets: [
-                        "Create albums to group related recordings",
-                        "Add color-coded tags for quick filtering",
-                        "Use projects to track multiple takes and mark your best version",
-                        "Smart naming suggests titles using AI or your location",
-                        "Browse recordings by calendar, timeline, or map view"
+                        "Interactive waveform editor with up to 100x zoom",
+                        "Trim to selection or cut and remove sections",
+                        "Crossfade cuts for smooth, click-free splices",
+                        "Fade in/out with linear, S-curve, exponential, or logarithmic curves",
+                        "Peak and LUFS loudness normalization (broadcast-standard ITU-R BS.1770-4)",
+                        "Noise gate, compression, reverb, and echo effects",
+                        "Full undo/redo history \u{2014} experiment freely",
+                        "Reset to original: one tap restores your unedited recording"
                     ]
                 ),
                 InfoGuideSection(
-                    headline: "Search",
+                    headline: "Transcription & Search",
                     bullets: [
-                        "Search inside transcripts to find exactly what you said",
-                        "Typo-tolerant matching \u{2014} \"mitocondria\" finds \"mitochondria\"",
-                        "Tap any result to jump directly to that moment",
-                        "Recent recordings appear higher in results",
-                        "Search by title, notes, tags, albums, or transcript content"
+                        "On-device speech-to-text in 10+ languages",
+                        "Word-level timestamps \u{2014} tap any word in the transcript to jump to that moment",
+                        "Currently-playing word highlights as audio plays",
+                        "Full-text search across all transcripts with typo tolerance",
+                        "Search by title, tags, albums, notes, or spoken content",
+                        "Fuzzy matching: \"mitocondria\" finds \"mitochondria\""
                     ]
                 ),
                 InfoGuideSection(
-                    headline: "Collaborate",
+                    headline: "Smart Features",
                     bullets: [
-                        "Create shared albums and invite up to 5 people via iCloud",
-                        "Participants can add, comment on, and listen to recordings",
-                        "Role-based permissions: admin, member, or viewer",
-                        "Overdub lets you layer recordings over existing tracks",
-                        "Mix and bounce multi-track sessions to stereo"
+                        "Auto-icon detection classifies recordings (voice, guitar, drums, piano, etc.)",
+                        "Smart Naming suggests titles based on content and audio type",
+                        "Location-based naming uses your current place (e.g., \"Starbucks \u{2014} 2:14 PM\")",
+                        "GPS tagging with map view of all your recording locations"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Organization",
+                    bullets: [
+                        "Albums for grouping related recordings",
+                        "Color-coded tags for instant filtering",
+                        "Projects with version tracking (V1, V2, V3) and best-take marking",
+                        "Calendar view to browse recordings by date",
+                        "Timeline/journal view for chronological browsing",
+                        "Map view to see recordings by location"
                     ]
                 ),
                 InfoGuideSection(
                     headline: "Playback & EQ",
                     bullets: [
-                        "4-band parametric EQ to shape your sound on playback",
-                        "Adjustable playback speed (0.5x to 2x)",
+                        "4-band parametric EQ with interactive graph and rotary knobs",
+                        "Variable speed playback (0.5x to 2.0x) with pitch preserved",
                         "Skip silence detection to jump past quiet sections",
-                        "Drop markers at key moments and jump back to them anytime",
-                        "Skip forward/back with configurable intervals"
+                        "Configurable skip intervals (5s, 10s, 15s)",
+                        "Drop markers at key moments and tap to return"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Collaboration",
+                    bullets: [
+                        "Shared albums via iCloud with up to 5 participants",
+                        "Role-based permissions: Admin, Member, or Viewer",
+                        "Comments on shared recordings for feedback",
+                        "Activity feed shows all changes and who made them",
+                        "Shared album trash with configurable retention (7\u{2013}30 days)"
                     ]
                 ),
                 InfoGuideSection(
                     headline: "Export & Sync",
                     bullets: [
-                        "Export in Original, WAV, M4A (AAC), or ALAC format",
-                        "Bulk export albums as ZIP files",
-                        "iCloud sync keeps everything in sync across iPhone, iPad, and Apple Watch",
-                        "Record on Apple Watch and recordings auto-transfer to your phone",
+                        "Export in Original, WAV, M4A (AAC 256kbps), or ALAC format",
+                        "Chapter markers embedded in M4A exports (visible in Podcasts, iTunes)",
+                        "Bulk export albums as ZIP with metadata manifest",
+                        "iCloud sync across iPhone, iPad, and Apple Watch",
+                        "Apple Watch companion app with auto-transfer to phone",
                         "Tamper-evident proof receipts with SHA-256 timestamps"
                     ]
                 ),
                 InfoGuideSection(
-                    headline: "Personalize",
+                    headline: "Siri & Shortcuts",
+                    bullets: [
+                        "\"Hey Siri, start recording\" to capture hands-free",
+                        "Shortcuts for: Start Recording, Get Last Recording, Transcribe, and Export",
+                        "Action Button support on iPhone 15 Pro and later",
+                        "Lock Screen widget for one-tap recording"
+                    ]
+                ),
+                InfoGuideSection(
+                    headline: "Personalization",
                     bullets: [
                         "7 studio-inspired themes: System, Angst Robot, Cream, Logic Pro, Fruity, AVID, and Dynamite",
-                        "Auto-icon detection classifies your recordings by sound type",
-                        "Movable floating record button \u{2014} drag it anywhere on screen",
-                        "GPS tagging to remember where you recorded"
+                        "Movable floating record button \u{2014} drag it anywhere",
+                        "Configurable playback speed, skip intervals, and more",
+                        "Theme syncs to Apple Watch"
                     ]
                 )
             ],
-            tip: "Explore the guides below for step-by-step details on each feature."
+            tip: "Explore the feature guides below for detailed instructions on each capability."
         )
     }
 }
@@ -202,7 +238,8 @@ struct GuideView: View {
                     Text("Learn how to get the most out of Sonidea's features.")
                         .font(.subheadline)
                         .foregroundStyle(palette.textSecondary)
-                        .listRowBackground(palette.cardBackground)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 16, trailing: 20))
                 }
 
                 // Overview section at the top
@@ -375,6 +412,9 @@ struct GuideView: View {
                 } header: {
                     Text("Features")
                         .foregroundStyle(palette.textSecondary)
+                } footer: {
+                    Spacer()
+                        .frame(height: 24)
                 }
             }
             .listStyle(.insetGrouped)
@@ -1127,17 +1167,31 @@ struct SearchInfoView: View {
             title: "Search & Browse",
             intro: "Find any recording instantly using search, or browse your library by calendar or timeline.",
             sections: [
-                InfoGuideSection(headline: "Search", bullets: [
+                InfoGuideSection(headline: "Transcript Search", bullets: [
+                    "Search inside transcripts to find exactly what was said",
+                    "Typo-tolerant matching \u{2014} \"mitocondria\" finds \"mitochondria\"",
+                    "Results show matching snippets with highlighted keywords",
+                    "Tap a result to open the recording at that exact moment",
+                    "Recent recordings rank higher in search results"
+                ]),
+                InfoGuideSection(headline: "Tappable Transcripts", bullets: [
+                    "Open any transcribed recording to see the full transcript",
+                    "Each word is tappable \u{2014} tap to jump to that moment in the audio",
+                    "The currently-playing word highlights as the recording plays",
+                    "Scroll through the transcript while listening to follow along"
+                ]),
+                InfoGuideSection(headline: "Quick Search", bullets: [
                     "Tap the magnifying glass in the top bar",
-                    "Search by recording name or tag (e.g., \"melody\")",
+                    "Search by title, tags, albums, or transcript content",
                     "Filter results by tapping tag chips below the search bar",
                     "Results update as you type"
                 ]),
-                InfoGuideSection(headline: "Browse modes", bullets: [
+                InfoGuideSection(headline: "Browse Modes", bullets: [
                     "List — classic scrollable list of all recordings",
                     "Grid — visual card layout with color thumbnails",
                     "Calendar — monthly view with dots on days you recorded; tap a day to see that day's recordings",
-                    "Timeline — chronological journal grouped by day, showing time, tags, location, and project context"
+                    "Timeline — chronological journal grouped by day, showing time, tags, location, and project context",
+                    "Map — see all GPS-tagged recordings on an interactive map"
                 ])
             ],
             tip: "Switch browse modes using the view picker at the top of the recordings list."

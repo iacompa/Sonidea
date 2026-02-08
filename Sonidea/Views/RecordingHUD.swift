@@ -100,18 +100,26 @@ struct RecordingHUDCard: View {
                 .padding(.bottom, 12)
             }
 
-            // Waveform
+            // Waveform - Apple Voice Memos style
             ZStack {
+                // Background with subtle rounded container
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(palette.textPrimary.opacity(0.03))
+                    .frame(height: 72)
+
                 if liveSamples.isEmpty {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(palette.textPrimary.opacity(0.05))
-                        .frame(height: 56)
+                    // Subtle center line when no samples yet
+                    Rectangle()
+                        .fill(palette.textPrimary.opacity(0.08))
+                        .frame(height: 1)
                 } else {
                     LiveWaveformView(samples: liveSamples, accentColor: isPaused ? palette.textSecondary : palette.liveRecordingAccent)
-                        .frame(height: 56)
+                        .frame(height: 72)
                         .opacity(isPaused ? 0.5 : 1.0)
+                        .animation(.easeOut(duration: 0.1), value: liveSamples.count)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 20)
 
             // Level meter (green → yellow → red with dB scale)

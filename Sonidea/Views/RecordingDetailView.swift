@@ -539,6 +539,25 @@ struct RecordingDetailView: View {
                     silenceRMSMeter.clear()
                 }
             }
+            .onChange(of: appState.recordings) { _, _ in
+                // Sync autoTitle and iconPredictions from AppState when they change
+                // This handles the case where auto-classification runs after the view opens
+                if let updated = appState.recording(for: currentRecording.id) {
+                    // Only sync autoTitle if we don't have one yet
+                    if currentRecording.autoTitle == nil && updated.autoTitle != nil {
+                        currentRecording.autoTitle = updated.autoTitle
+                    }
+                    // Sync icon predictions if they changed
+                    if currentRecording.iconPredictions != updated.iconPredictions {
+                        currentRecording.iconPredictions = updated.iconPredictions
+                    }
+                    // Sync icon if it was auto-selected
+                    if currentRecording.iconName != updated.iconName && updated.iconSource != .user {
+                        currentRecording.iconName = updated.iconName
+                        editedIconSymbol = updated.iconName ?? currentRecording.presetIcon.systemName
+                    }
+                }
+            }
     }
 
     private var mainContentWithModals: some View {

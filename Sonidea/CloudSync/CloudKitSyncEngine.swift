@@ -1471,6 +1471,10 @@ extension RecordingItem {
         // Metronome tracking
         record["wasRecordedWithMetronome"] = wasRecordedWithMetronome
 
+        // Title source and auto-title for smart naming sync
+        record["titleSourceRaw"] = titleSourceRaw
+        record["autoTitle"] = autoTitle
+
         // Icon classification fields
         record["iconSourceRaw"] = iconSourceRaw
         if let predictions = iconPredictions,
@@ -1566,7 +1570,9 @@ extension RecordingItem {
             overdubOffsetSeconds: record["overdubOffsetSeconds"] as? Double ?? 0,
             overdubSourceBaseId: (record["overdubSourceBaseId"] as? String).flatMap { UUID(uuidString: $0) },
             wasRecordedWithMetronome: record["wasRecordedWithMetronome"] as? Bool ?? false,
-            modifiedAt: record["modifiedAt"] as? Date ?? createdAt
+            modifiedAt: record["modifiedAt"] as? Date ?? createdAt,
+            autoTitle: record["autoTitle"] as? String,
+            titleSourceRaw: record["titleSourceRaw"] as? String
         )
     }
 }

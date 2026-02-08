@@ -101,10 +101,17 @@ struct SonideaApp: App {
 
                         // Retry any icon classifications that failed in background
                         appState.retryPendingClassifications()
+
+                        // Pre-warm audio engine for instant recording start
+                        if !appState.recorder.isActive {
+                            appState.recorder.prewarm()
+                        }
                     } else if newPhase == .background {
                         // When going to background, verify Live Activity state matches recording state
                         if !appState.recorder.isActive {
                             RecordingLiveActivityManager.shared.endAllActivities()
+                            // Release pre-warmed audio resources
+                            appState.recorder.cooldown()
                         }
 
                         // Schedule background sync if iCloud sync is enabled

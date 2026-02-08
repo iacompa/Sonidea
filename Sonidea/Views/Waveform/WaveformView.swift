@@ -464,72 +464,280 @@ struct MiniWaveformView: View {
     }
 }
 
-// MARK: - Live Waveform View for Recording
+// MARK: - Live Waveform View for Recording (Apple Voice Memos Style)
 
+/// A professional live waveform visualization that matches Apple Voice Memos.
+/// Features:
+/// - Clean vertical bars that animate smoothly
+/// - Bars grow from center outward (mirrored top/bottom)
+/// - Consistent bar width with small gaps
+/// - Smooth amplitude animation without jitter
+/// - Gradient from left (older/dimmer) to right (newer/brighter)
+/// - New audio appears on the right, older audio scrolls left
 struct LiveWaveformView: View {
     let samples: [Float]
     var accentColor: Color = .red  // Default to red for backward compatibility
 
+    // Configuration for Apple Voice Memos style
+    private let barWidth: CGFloat = 3.0
+    private let barSpacing: CGFloat = 2.0
+    private let cornerRadius: CGFloat = 1.5
+    private let minBarHeightRatio: CGFloat = 0.04  // Minimum visible bar (4% of height)
+
     var body: some View {
-        Canvas { context, size in
-            guard !samples.isEmpty else { return }
-
+        GeometryReader { geometry in
+            let size = geometry.size
             let centerY = size.height / 2
-            let maxAmplitude = size.height / 2 * 0.9
-            let barCount = samples.count
-            let xStep = size.width / CGFloat(barCount)
+            let maxAmplitude = (size.height / 2) * 0.92  // Leave small margin at top/bottom
 
-            // Apple Voice Memos style: thin bars with rounded caps, centered on midline
-            let barWidth: CGFloat = min(1.5, max(1.0, xStep * 0.5))
-            let minBarHeight: CGFloat = 1.5
+            // Calculate how many bars fit in the available width
+            let totalBarWidth = barWidth + barSpacing
+            let maxBars = Int(size.width / totalBarWidth)
 
-            for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * xStep + xStep / 2
+            // Use the samples we have, up to maxBars
+            let displaySamples = samples.suffix(maxBars)
+            let barCount = displaySamples.count
 
-                let amplitude = max(minBarHeight, CGFloat(sample) * maxAmplitude)
+            // Calculate starting X position to right-align the bars
+            // New audio appears on the right, older scrolls left
+            let totalContentWidth = CGFloat(barCount) * totalBarWidth - barSpacing
+            let startX = size.width - totalContentWidth
 
-                let yTop = centerY - amplitude
-                let yBottom = centerY + amplitude
+            Canvas { context, _ in
+                guard barCount > 0 else { return }
 
-                var linePath = Path()
-                linePath.move(to: CGPoint(x: x, y: yTop))
-                linePath.addLine(to: CGPoint(x: x, y: yBottom))
+                for (index, sample) in displaySamples.enumerated() {
+                    // X position for this bar (right-aligned, newest on right)
+                    let x = startX + CGFloat(index) * totalBarWidth
 
-                // Gradient effect: more recent samples are brighter
-                let alpha = 0.3 + (Double(index) / Double(barCount)) * 0.7
-                context.stroke(
-                    linePath,
-                    with: .color(accentColor.opacity(alpha)),
-                    style: StrokeStyle(lineWidth: barWidth, lineCap: .round)
-                )
+                    // Calculate bar height with smooth amplitude scaling
+                    // Apply a subtle power curve for more dynamic range visualization
+                    let normalizedSample = CGFloat(max(0, min(1, sample)))
+                    let curvedSample = pow(normalizedSample, 0.7)  // Slight compression for smoother look
+                    let minHeight = size.height * minBarHeightRatio
+                    let barHeight = max(minHeight, curvedSample * maxAmplitude * 2)
+
+                    // Bar grows from center (mirrored top/bottom)
+                    let halfHeight = barHeight / 2
+                    let barRect = CGRect(
+                        x: x,
+                        y: centerY - halfHeight,
+                        width: barWidth,
+                        height: barHeight
+                    )
+
+                    // Gradient opacity: older samples (left) are dimmer, newer (right) are brighter
+                    // This creates the scrolling fade effect like Apple Voice Memos
+                    let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
+                    let fadeStart: CGFloat = 0.25  // Oldest bars at 25% opacity
+                    let fadeEnd: CGFloat = 1.0     // Newest bars at full opacity
+                    let opacity = fadeStart + (fadeEnd - fadeStart) * progress
+
+                    // Draw rounded rectangle bar
+                    let roundedBar = RoundedRectangle(cornerRadius: cornerRadius)
+                        .path(in: barRect)
+
+                    context.fill(roundedBar, with: .color(accentColor.opacity(opacity)))
+                }
             }
         }
     }
 }
 
+/// A more advanced live waveform with smooth interpolation and glow effects.
+/// Use this for higher-end visual presentation when performance allows.
+struct LiveWaveformViewPro: View {
+    let samples: [Float]
+    var accentColor: Color = .red
+
+    // Smoothed samples for jitter reduction
+    @State private var smoothedSamples: [Float] = []
+
+    private let barWidth: CGFloat = 3.0
+    private let barSpacing: CGFloat = 2.0
+    private let cornerRadius: CGFloat = 1.5
+    private let minBarHeightRatio: CGFloat = 0.04
+    private let smoothingFactor: Float = 0.4  // 0 = no smoothing, 1 = max smoothing
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            let centerY = size.height / 2
+            let maxAmplitude = (size.height / 2) * 0.92
+
+            let totalBarWidth = barWidth + barSpacing
+            let maxBars = Int(size.width / totalBarWidth)
+
+            let displaySamples = smoothedSamples.suffix(maxBars)
+            let barCount = displaySamples.count
+
+            let totalContentWidth = CGFloat(barCount) * totalBarWidth - barSpacing
+            let startX = size.width - totalContentWidth
+
+            ZStack {
+                // Glow layer (subtle blur behind bars for polish)
+                Canvas { context, _ in
+                    guard barCount > 0 else { return }
+
+                    for (index, sample) in displaySamples.enumerated() {
+                        let x = startX + CGFloat(index) * totalBarWidth
+
+                        let normalizedSample = CGFloat(max(0, min(1, sample)))
+                        let curvedSample = pow(normalizedSample, 0.7)
+                        let minHeight = size.height * minBarHeightRatio
+                        let barHeight = max(minHeight, curvedSample * maxAmplitude * 2)
+
+                        let halfHeight = barHeight / 2
+                        let glowRect = CGRect(
+                            x: x - 1,
+                            y: centerY - halfHeight - 1,
+                            width: barWidth + 2,
+                            height: barHeight + 2
+                        )
+
+                        let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
+                        let opacity = 0.1 + 0.2 * progress
+
+                        let glowPath = RoundedRectangle(cornerRadius: cornerRadius + 1)
+                            .path(in: glowRect)
+
+                        context.fill(glowPath, with: .color(accentColor.opacity(opacity)))
+                    }
+                }
+                .blur(radius: 4)
+
+                // Main bars layer
+                Canvas { context, _ in
+                    guard barCount > 0 else { return }
+
+                    for (index, sample) in displaySamples.enumerated() {
+                        let x = startX + CGFloat(index) * totalBarWidth
+
+                        let normalizedSample = CGFloat(max(0, min(1, sample)))
+                        let curvedSample = pow(normalizedSample, 0.7)
+                        let minHeight = size.height * minBarHeightRatio
+                        let barHeight = max(minHeight, curvedSample * maxAmplitude * 2)
+
+                        let halfHeight = barHeight / 2
+                        let barRect = CGRect(
+                            x: x,
+                            y: centerY - halfHeight,
+                            width: barWidth,
+                            height: barHeight
+                        )
+
+                        let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
+                        let opacity = 0.25 + 0.75 * progress
+
+                        let roundedBar = RoundedRectangle(cornerRadius: cornerRadius)
+                            .path(in: barRect)
+
+                        context.fill(roundedBar, with: .color(accentColor.opacity(opacity)))
+                    }
+                }
+            }
+        }
+        .onChange(of: samples) { _, newSamples in
+            updateSmoothedSamples(newSamples)
+        }
+        .onAppear {
+            smoothedSamples = samples
+        }
+    }
+
+    private func updateSmoothedSamples(_ newSamples: [Float]) {
+        // If we don't have existing samples, just use the new ones
+        guard !smoothedSamples.isEmpty else {
+            smoothedSamples = newSamples
+            return
+        }
+
+        // Apply exponential smoothing to reduce jitter
+        var result: [Float] = []
+        let oldCount = smoothedSamples.count
+        let newCount = newSamples.count
+
+        // For existing positions, blend old and new
+        let overlap = min(oldCount, newCount)
+        let offset = newCount - overlap
+
+        for i in 0..<newCount {
+            if i >= offset && (i - offset) < oldCount {
+                // Blend with existing sample
+                let oldSample = smoothedSamples[i - offset]
+                let newSample = newSamples[i]
+                result.append(oldSample * smoothingFactor + newSample * (1 - smoothingFactor))
+            } else {
+                // New sample, no blending
+                result.append(newSamples[i])
+            }
+        }
+
+        smoothedSamples = result
+    }
+}
+
 // MARK: - Preview
 
-#Preview {
-    VStack(spacing: 20) {
+#Preview("Waveform Views") {
+    VStack(spacing: 24) {
         // Static waveform
-        WaveformView(
-            samples: (0..<100).map { _ in Float.random(in: 0.1...1.0) },
-            progress: 0.4,
-            zoomScale: .constant(1.0)
-        )
-        .frame(height: 80)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Static Waveform")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            WaveformView(
+                samples: (0..<100).map { _ in Float.random(in: 0.1...1.0) },
+                progress: 0.4,
+                zoomScale: .constant(1.0)
+            )
+            .frame(height: 80)
+        }
 
-        // Live waveform
-        LiveWaveformView(
-            samples: (0..<60).map { _ in Float.random(in: 0.1...1.0) }
-        )
-        .frame(height: 60)
+        // Live waveform (Apple Voice Memos style)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Live Recording Waveform")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black.opacity(0.03))
+                LiveWaveformView(
+                    samples: (0..<60).map { _ in Float.random(in: 0.05...1.0) },
+                    accentColor: .red
+                )
+            }
+            .frame(height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+
+        // Live waveform with custom accent
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Live Waveform (Custom Accent)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black.opacity(0.03))
+                LiveWaveformView(
+                    samples: (0..<45).map { _ in Float.random(in: 0.1...0.9) },
+                    accentColor: .purple
+                )
+            }
+            .frame(height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
 
         // Mini waveform
-        MiniWaveformView(
-            samples: (0..<30).map { _ in Float.random(in: 0.1...1.0) }
-        )
-        .frame(width: 60, height: 30)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Mini Waveform (List Row)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            MiniWaveformView(
+                samples: (0..<30).map { _ in Float.random(in: 0.1...1.0) }
+            )
+            .frame(width: 80, height: 30)
+        }
     }
     .padding()
 }

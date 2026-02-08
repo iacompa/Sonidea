@@ -125,7 +125,15 @@ actor TranscriptSearchService {
 
         try executeSQL(createTrigramTableSQL)
 
-        // Create sync triggers
+        // Migration: Drop old triggers with incorrect FTS5 external content syntax
+        // The old triggers used "DELETE FROM transcripts_fts WHERE rowid = old.id" which doesn't work
+        // for external content FTS5 tables. Must use special 'delete' INSERT command.
+        try executeSQL("DROP TRIGGER IF EXISTS transcripts_ad;")
+        try executeSQL("DROP TRIGGER IF EXISTS transcripts_au;")
+
+        // Create sync triggers for external content FTS5 table
+        // FTS5 external content tables require special INSERT syntax for delete operations:
+        // INSERT INTO fts_table(fts_table, rowid, ...) VALUES('delete', old.id, old.columns...)
         let createInsertTriggerSQL = """
         CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts_segments BEGIN
             INSERT INTO transcripts_fts(rowid, recordingId, startTime, endTime, text)
@@ -135,9 +143,11 @@ actor TranscriptSearchService {
 
         try executeSQL(createInsertTriggerSQL)
 
+        // For external content FTS5, deletion requires special 'delete' command
         let createDeleteTriggerSQL = """
         CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts_segments BEGIN
-            DELETE FROM transcripts_fts WHERE rowid = old.id;
+            INSERT INTO transcripts_fts(transcripts_fts, rowid, recordingId, startTime, endTime, text)
+            VALUES('delete', old.id, old.recordingId, old.startTime, old.endTime, old.text);
             DELETE FROM transcripts_trigrams WHERE segmentId = old.id;
         END;
         """
@@ -146,7 +156,8 @@ actor TranscriptSearchService {
 
         let createUpdateTriggerSQL = """
         CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE ON transcripts_segments BEGIN
-            DELETE FROM transcripts_fts WHERE rowid = old.id;
+            INSERT INTO transcripts_fts(transcripts_fts, rowid, recordingId, startTime, endTime, text)
+            VALUES('delete', old.id, old.recordingId, old.startTime, old.endTime, old.text);
             DELETE FROM transcripts_trigrams WHERE segmentId = old.id;
             INSERT INTO transcripts_fts(rowid, recordingId, startTime, endTime, text)
             VALUES(new.id, new.recordingId, new.startTime, new.endTime, new.text);
@@ -159,6 +170,11 @@ actor TranscriptSearchService {
         try executeSQL("CREATE INDEX IF NOT EXISTS idx_segments_recording ON transcripts_segments(recordingId);")
         try executeSQL("CREATE INDEX IF NOT EXISTS idx_trigrams_trigram ON transcripts_trigrams(trigram);")
         try executeSQL("CREATE INDEX IF NOT EXISTS idx_trigrams_segment ON transcripts_trigrams(segmentId);")
+
+        // Rebuild FTS index from content table to ensure consistency
+        // This is especially important after trigger migration to fix any stale FTS data
+        // The 'rebuild' command reconstructs the FTS index from the external content table
+        try? executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');")
 
         Self.logger.info("TranscriptSearchService database initialized")
     }
@@ -617,6 +633,10 @@ actor TranscriptSearchService {
 
     /// Full index rebuild (used on first launch or when needed)
     private func fullRebuild(from recordings: [RecordingItem]) throws {
+        // Clear existing FTS index first using the 'delete-all' command
+        // This ensures the FTS index is consistent before rebuilding
+        try? executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('delete-all');")
+
         // Clear existing data
         try executeSQL("DELETE FROM transcripts_segments;")
         try executeSQL("DELETE FROM transcripts_trigrams;")

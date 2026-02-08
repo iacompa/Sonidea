@@ -404,8 +404,10 @@ struct SearchSheetView: View {
 
     private func handleTranscriptResultTap(_ result: TranscriptSearchResult) {
         // Find the recording and open it with seek time
+        // Seek 2-3 seconds before the match for better context
         if let recording = appState.recording(for: result.recordingId) {
-            seekToTime = result.startTime
+            let contextOffset: TimeInterval = 2.5  // seconds before the match
+            seekToTime = max(0, result.startTime - contextOffset)
             highlightQuery = debouncedQuery
             selectedRecording = recording
         }

@@ -104,6 +104,15 @@ final class RecorderManager: NSObject {
     /// Guard against double-start during async Bluetooth path
     private var isPreparing = false
 
+    /// Whether the audio engine is pre-warmed and ready for instant recording
+    private(set) var isPrewarmed = false
+
+    /// Pre-warmed engine components (ready to record instantly)
+    private var prewarmedEngine: AVAudioEngine?
+    private var prewarmedGainMixer: AVAudioMixerNode?
+    private var prewarmedLimiter: AVAudioUnitEffect?
+    private var prewarmedInputFormat: AVAudioFormat?
+
     /// Resolved sample rate for engine recording (set when engine output format is created)
     private var resolvedEngineSampleRate: Double?
 
@@ -245,8 +254,16 @@ final class RecorderManager: NSObject {
 
         switch status {
         case .notDetermined:
+            // Request authorization - location will be requested in the delegate callback
+            // after the user grants permission
             locationManager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways:
+            // Reset any stale location data from previous recordings
+            currentLocation = nil
+            currentLocationLabel = ""
+            lastGeocodedCoordinate = nil
+            reverseGeocodeTask?.cancel()
+            // Request fresh location
             locationManager.requestLocation()
         default:
             // Permission denied or restricted
@@ -342,6 +359,107 @@ final class RecorderManager: NSObject {
         return true
     }
 
+    // MARK: - Pre-Warm (Instant Recording Start)
+
+    /// Pre-warm the audio engine for instant recording start.
+    /// Call this when the user enters the recording view or when app becomes active.
+    func prewarm() {
+        guard !isPrewarmed, recordingState == .idle else { return }
+
+        Task { @MainActor in
+            do {
+                // Configure audio session
+                let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
+                    || AudioSessionManager.shared.isBluetoothInput()
+
+                if isBluetooth {
+                    try await AudioSessionManager.shared.configureForRecording(
+                        quality: qualityPreset,
+                        settings: appSettings
+                    )
+                } else {
+                    try await AudioSessionManager.shared.configureForRecording(
+                        quality: qualityPreset,
+                        settings: appSettings
+                    )
+                }
+
+                // Create and prepare engine
+                let engine = AVAudioEngine()
+
+                // Enable Voice Processing if needed
+                if appSettings.noiseReductionEnabled {
+                    try? engine.inputNode.setVoiceProcessingEnabled(true)
+                }
+
+                // Get input format
+                guard let inputFormat = Self.hardwareInputFormat(for: engine) else {
+                    print("[RecorderManager] Pre-warm failed: no valid input format")
+                    return
+                }
+
+                // Create nodes
+                let gainMixer = AVAudioMixerNode()
+                engine.attach(gainMixer)
+
+                let limiterDesc = AudioComponentDescription(
+                    componentType: kAudioUnitType_Effect,
+                    componentSubType: kAudioUnitSubType_DynamicsProcessor,
+                    componentManufacturer: kAudioUnitManufacturer_Apple,
+                    componentFlags: 0,
+                    componentFlagsMask: 0
+                )
+                let limiter = AVAudioUnitEffect(audioComponentDescription: limiterDesc)
+                engine.attach(limiter)
+
+                // Connect: Input → Gain Mixer → Limiter → Silent output
+                engine.connect(engine.inputNode, to: gainMixer, format: inputFormat)
+                engine.connect(gainMixer, to: limiter, format: inputFormat)
+
+                let silentMixer = AVAudioMixerNode()
+                engine.attach(silentMixer)
+                silentMixer.outputVolume = 0
+                engine.connect(limiter, to: silentMixer, format: inputFormat)
+                engine.connect(silentMixer, to: engine.mainMixerNode, format: inputFormat)
+
+                // Prepare engine (resolves formats, allocates buffers)
+                engine.prepare()
+
+                // Start engine (keeps audio graph hot)
+                try engine.start()
+
+                // Store pre-warmed components
+                self.prewarmedEngine = engine
+                self.prewarmedGainMixer = gainMixer
+                self.prewarmedLimiter = limiter
+                self.prewarmedInputFormat = inputFormat
+                self.isPrewarmed = true
+
+                print("[RecorderManager] Pre-warmed and ready for instant recording")
+
+            } catch {
+                print("[RecorderManager] Pre-warm failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Release pre-warmed resources when leaving recording view.
+    func cooldown() {
+        guard isPrewarmed else { return }
+
+        prewarmedEngine?.stop()
+        prewarmedEngine = nil
+        prewarmedGainMixer = nil
+        prewarmedLimiter = nil
+        prewarmedInputFormat = nil
+        isPrewarmed = false
+
+        // Deactivate audio session
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+
+        print("[RecorderManager] Cooled down, resources released")
+    }
+
     // MARK: - Recording Control
 
     func startRecording() {
@@ -381,12 +499,39 @@ final class RecorderManager: NSObject {
         }
         recordingError = nil
 
-        isPreparing = true
-
         // Prevent screen sleep if enabled
         if appSettings.preventSleepWhileRecording {
             UIApplication.shared.isIdleTimerDisabled = true
         }
+
+        // FAST PATH: Use pre-warmed engine for instant start
+        if isPrewarmed, let engine = prewarmedEngine,
+           let gainMixer = prewarmedGainMixer,
+           let limiter = prewarmedLimiter,
+           let inputFormat = prewarmedInputFormat {
+            // Transfer ownership to recording
+            self.audioEngine = engine
+            self.gainMixerNode = gainMixer
+            self.limiterNode = limiter
+
+            // Clear pre-warm state
+            prewarmedEngine = nil
+            prewarmedGainMixer = nil
+            prewarmedLimiter = nil
+            prewarmedInputFormat = nil
+            isPrewarmed = false
+
+            // Start recording immediately
+            isUsingEngine = true
+            requestLocationIfNeeded()
+            let fileURL = generateFileURL(for: qualityPreset)
+            currentFileURL = fileURL
+            startPrewarmedRecording(fileURL: fileURL, engine: engine, limiter: limiter, inputFormat: inputFormat)
+            return
+        }
+
+        // SLOW PATH: Need to configure audio session and create engine
+        isPreparing = true
 
         let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
             || AudioSessionManager.shared.isBluetoothInput()
@@ -446,6 +591,108 @@ final class RecorderManager: NSObject {
         // marker on the level meter), so the engine must always be in the signal chain.
         isUsingEngine = true
         startEngineRecording(fileURL: fileURL)
+    }
+
+    /// Start recording using pre-warmed engine (instant start)
+    private func startPrewarmedRecording(fileURL: URL, engine: AVAudioEngine, limiter: AVAudioUnitEffect, inputFormat: AVAudioFormat) {
+        do {
+            // Log diagnostic info
+            AudioDiagnostics.logRecordingStart(
+                context: "PrewarmedRecording",
+                outputURL: fileURL,
+                engine: engine
+            )
+
+            // Store resolved format info
+            let tapFormat = limiter.outputFormat(forBus: 0)
+            let effectiveTapFormat = (tapFormat.sampleRate > 0 && tapFormat.channelCount > 0) ? tapFormat : inputFormat
+            resolvedEngineSampleRate = effectiveTapFormat.sampleRate
+            resolvedEngineChannelCount = Int(effectiveTapFormat.channelCount)
+
+            // Create audio file with settings that match the tap format
+            let settings = recordingSettings(for: qualityPreset)
+            let processingFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: effectiveTapFormat.sampleRate,
+                channels: effectiveTapFormat.channelCount,
+                interleaved: effectiveTapFormat.isInterleaved
+            )
+
+            audioFile = try AVAudioFile(forWriting: fileURL, settings: settings, commonFormat: processingFormat!.commonFormat, interleaved: false)
+
+            // Apply gain/limiter settings
+            applyInputSettings()
+
+            // Reset write counters
+            writeErrorCount.reset()
+            bufferWriteCount.reset()
+            lastWriteErrorMessage = nil
+
+            // Install tap on limiter to capture audio
+            let writeQueue = self.fileWriteQueue
+            limiter.installTap(onBus: 0, bufferSize: 4096, format: effectiveTapFormat) { [weak self] (buffer: AVAudioPCMBuffer, time: AVAudioTime) in
+                guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+                copy.frameLength = buffer.frameLength
+                if let srcData = buffer.floatChannelData, let dstData = copy.floatChannelData {
+                    for ch in 0..<Int(buffer.format.channelCount) {
+                        memcpy(dstData[ch], srcData[ch], Int(buffer.frameLength) * MemoryLayout<Float>.size)
+                    }
+                }
+
+                // Compute peak for metering on audio thread
+                var peak: Float = 0
+                if let data = copy.floatChannelData {
+                    for ch in 0..<Int(copy.format.channelCount) {
+                        for i in 0..<Int(copy.frameLength) {
+                            peak = max(peak, abs(data[ch][i]))
+                        }
+                    }
+                }
+
+                writeQueue.async { [weak self] in
+                    guard let self = self, let file = self.audioFile else { return }
+                    do {
+                        try file.write(from: copy)
+                        self.bufferWriteCount.increment()
+                    } catch {
+                        self.writeErrorCount.increment()
+                        self.lastWriteErrorMessage = error.localizedDescription
+                    }
+                }
+
+                // Update meter on main thread
+                Task { @MainActor [weak self] in
+                    self?.updateMeterWithPeak(peak)
+                }
+            }
+
+            // Start recording state
+            recordingState = .recording
+            let startDate = Date()
+            segmentStartTime = startDate
+            recordingStartDate = startDate
+            accumulatedDuration = 0
+            currentDuration = 0
+            liveMeterSamples = []
+            startTimer()
+
+            // Track in-progress recording
+            markRecordingInProgress(fileURL)
+
+            // Start Live Activity
+            currentRecordingId = UUID().uuidString
+            RecordingLiveActivityManager.shared.startActivity(
+                recordingId: currentRecordingId!,
+                startDate: startDate
+            )
+
+            print("[RecorderManager] Started recording instantly (pre-warmed)")
+
+        } catch {
+            print("[RecorderManager] Failed to start pre-warmed recording: \(error)")
+            // Fall back to regular path
+            startEngineRecording(fileURL: fileURL)
+        }
     }
 
     /// Start recording using AVAudioRecorder (no gain/limiter processing)
@@ -1080,7 +1327,16 @@ final class RecorderManager: NSObject {
         // Capture location data
         let latitude = currentLocation?.coordinate.latitude
         let longitude = currentLocation?.coordinate.longitude
-        let locationLabel = currentLocationLabel
+
+        // Get location label, falling back to coordinates if reverse geocoding hasn't completed
+        var locationLabel = currentLocationLabel
+        if locationLabel.isEmpty, let loc = currentLocation {
+            // Use coordinates as fallback label if geocoding is still in progress
+            locationLabel = String(format: "%.4f, %.4f", loc.coordinate.latitude, loc.coordinate.longitude)
+        }
+
+        // Cancel any pending geocode task since we've captured the location
+        reverseGeocodeTask?.cancel()
 
         // Capture actual recording quality before reset clears them
         let capturedSampleRate = resolvedEngineSampleRate
@@ -1760,8 +2016,13 @@ extension RecorderManager: CLLocationManagerDelegate {
         Task { @MainActor in
             self.currentLocation = location
 
+            // Determine if this is the first location update for this recording session
+            // (lastGeocodedCoordinate is nil after being reset in requestLocationIfNeeded)
+            let isFirstLocationUpdate = self.lastGeocodedCoordinate == nil
+
             // Skip reverse geocode if location hasn't moved significantly (debounce rapid-fire updates)
-            if let last = self.lastGeocodedCoordinate {
+            // But always process the first update immediately
+            if !isFirstLocationUpdate, let last = self.lastGeocodedCoordinate {
                 let latDiff = abs(location.coordinate.latitude - last.latitude)
                 let lonDiff = abs(location.coordinate.longitude - last.longitude)
                 // ~100m threshold — skip if barely moved
@@ -1770,10 +2031,17 @@ extension RecorderManager: CLLocationManagerDelegate {
                 }
             }
 
-            // Cancel any pending geocode and debounce with 500ms delay
+            // Cancel any pending geocode
             self.reverseGeocodeTask?.cancel()
+
+            // For first location update, geocode immediately (no debounce)
+            // For subsequent updates, debounce with 500ms delay
+            let debounceDelay: Duration = isFirstLocationUpdate ? .zero : .milliseconds(500)
+
             self.reverseGeocodeTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(500))
+                if debounceDelay != .zero {
+                    try? await Task.sleep(for: debounceDelay)
+                }
                 guard !Task.isCancelled else { return }
 
                 self.lastGeocodedCoordinate = location.coordinate
@@ -1812,7 +2080,14 @@ extension RecorderManager: CLLocationManagerDelegate {
         Task { @MainActor in
             let status = manager.authorizationStatus
             if status == .authorizedWhenInUse || status == .authorizedAlways {
+                // Request location when authorization is granted during an active recording
+                // This handles the case where the user grants permission while recording is in progress
                 if self.recordingState.isActive {
+                    // Reset stale data and request fresh location
+                    self.currentLocation = nil
+                    self.currentLocationLabel = ""
+                    self.lastGeocodedCoordinate = nil
+                    self.reverseGeocodeTask?.cancel()
                     manager.requestLocation()
                 }
             }

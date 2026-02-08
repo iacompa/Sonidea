@@ -9,6 +9,88 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
+// MARK: - Theme Selector Sheet
+
+struct ThemeSelectorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        NavigationStack {
+            List {
+                themeRows
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background)
+            .navigationTitle("Theme")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(palette.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private var themeRows: some View {
+        ForEach(AppTheme.allCases, id: \.self) { theme in
+            themeRow(for: theme)
+        }
+    }
+
+    private func themeRow(for theme: AppTheme) -> some View {
+        let themePalette = theme.palette(for: colorScheme)
+        return Button {
+            selectTheme(theme)
+        } label: {
+            HStack(spacing: 12) {
+                // Theme color preview
+                Circle()
+                    .fill(themePalette.accent)
+                    .frame(width: 28, height: 28)
+                    .overlay(
+                        Circle()
+                            .stroke(palette.stroke, lineWidth: 1)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(theme.displayName)
+                        .font(.body)
+                        .foregroundStyle(palette.textPrimary)
+                    Text(theme.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(palette.textSecondary)
+                }
+
+                Spacer()
+
+                if appState.selectedTheme == theme {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(palette.accent)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(palette.cardBackground)
+    }
+
+    private func selectTheme(_ theme: AppTheme) {
+        appState.selectedTheme = theme
+        dismiss()
+    }
+}
+
 enum HelpTopic: String, Identifiable, CaseIterable {
     case iCloud
     case collaboration
@@ -221,6 +303,7 @@ struct SettingsSheetView: View {
     @State private var showLockScreenHelp = false
     @State private var showActionButtonHelp = false
     @State private var showMicrophoneSheet = false
+    @State private var showThemeSheet = false
     @State private var showStorageEstimateSheet = false
     @State private var showSiriShortcutsHelp = false
     @State private var showGuide = false
@@ -275,12 +358,22 @@ struct SettingsSheetView: View {
         }
     }
 
+    // MARK: - State for disclosure groups
+    @State private var showAdvancedRecording = false
+    @State private var showAutoNamingOptions = false
+    @State private var showAdvancedAbout = false
+
+    // MARK: - Guide button animation
+    @State private var guideButtonScale: CGFloat = 1.0
+
     var body: some View {
         @Bindable var appState = appState
 
         NavigationStack {
             List {
-                // MARK: Quick Access Section
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 1. QUICK ACCESS & SHORTCUTS
+                // ══════════════════════════════════════════════════════════════
                 Section {
                     Button { showLockScreenHelp = true } label: {
                         HStack {
@@ -326,26 +419,13 @@ struct SettingsSheetView: View {
                         }
                     }
                     .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("Quick Access")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    Text("Set up fast ways to start recording from anywhere.")
-                        .foregroundColor(palette.textSecondary)
-                }
 
-                // MARK: Record Button Position Section
-                Section {
                     Button {
-                        // Perform reset
                         appState.resetRecordButtonPosition()
-                        // Trigger animation after reset
                         withAnimation(.easeInOut(duration: 0.4)) {
                             isResetButtonAnimating = true
                         }
-                        // Success haptic
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
-                        // Reset animation state after completion
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             isResetButtonAnimating = false
                         }
@@ -356,19 +436,26 @@ struct SettingsSheetView: View {
                                 .frame(width: 24)
                                 .rotationEffect(.degrees(isResetButtonAnimating ? -360 : 0))
                                 .animation(.easeInOut(duration: 0.4), value: isResetButtonAnimating)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Reset Record Button Position")
-                                    .foregroundColor(palette.textPrimary)
-                                Text("Moves the floating button back to the default location.")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
+                            Text("Reset Record Button Position")
+                                .foregroundColor(palette.textPrimary)
                         }
                     }
                     .listRowBackground(palette.cardBackground)
+                } header: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.tap")
+                            .foregroundColor(.cyan)
+                        Text("Quick Access & Shortcuts")
+                    }
+                    .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Set up fast ways to start recording from anywhere.")
+                        .foregroundColor(palette.textSecondary)
                 }
 
-                // MARK: Recording Section
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 2. RECORDING & PLAYBACK
+                // ══════════════════════════════════════════════════════════════
                 Section {
                     // Recording Quality
                     Picker("Quality", selection: $appState.appSettings.recordingQuality) {
@@ -408,131 +495,7 @@ struct SettingsSheetView: View {
                     .disabled(isRecordingActive)
                     .listRowBackground(palette.cardBackground)
 
-                    // Prevent Sleep
-                    Toggle("Prevent Sleep", isOn: $appState.appSettings.preventSleepWhileRecording)
-                        .tint(palette.accent)
-                        .listRowBackground(palette.cardBackground)
-
-                    // Noise Reduction (Voice Processing)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Noise Reduction", isOn: $appState.appSettings.noiseReductionEnabled)
-                            .tint(palette.accent)
-                            .disabled(isRecordingActive)
-                        Text("Reduces background noise during recording. Best for speech. May affect audio quality for music.")
-                            .font(.caption)
-                            .foregroundStyle(palette.textSecondary)
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    // Metronome (plays through headphones only during recording)
-                    Toggle("Metronome", isOn: $appState.appSettings.metronomeEnabled)
-                        .tint(palette.accent)
-                        .disabled(isRecordingActive)
-                        .onChange(of: appState.appSettings.metronomeEnabled) { _, enabled in
-                            if enabled && !appState.supportManager.canUseProFeatures && !ProFeatureContext.metronome.isFree {
-                                appState.appSettings.metronomeEnabled = false
-                                proUpgradeContext = .metronome
-                            }
-                        }
-                        .listRowBackground(palette.cardBackground)
-
-                    if appState.appSettings.metronomeEnabled {
-                        VStack(alignment: .leading, spacing: 8) {
-                            // Headphone requirement note
-                            HStack(spacing: 6) {
-                                Image(systemName: "headphones")
-                                    .foregroundStyle(palette.accent)
-                                    .font(.caption)
-                                Text("Requires headphones (wired or Bluetooth)")
-                                    .font(.caption)
-                                    .foregroundStyle(palette.textSecondary)
-                            }
-
-                            Divider()
-
-                            HStack {
-                                Text("BPM")
-                                    .foregroundStyle(palette.textPrimary)
-                                Spacer()
-                                Text("\(Int(appState.appSettings.metronomeBPM))")
-                                    .foregroundStyle(palette.textSecondary)
-                                    .monospacedDigit()
-                            }
-                            Slider(value: $appState.appSettings.metronomeBPM, in: 10...240, step: 1)
-                                .tint(palette.accent)
-                            Button {
-                                appState.recorder.metronome.tapTempo()
-                                appState.appSettings.metronomeBPM = appState.recorder.metronome.bpm
-                            } label: {
-                                HStack {
-                                    Image(systemName: "hand.tap")
-                                    Text("Tap Tempo")
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(palette.accent)
-
-                            Divider()
-
-                            HStack {
-                                Text("Volume")
-                                    .foregroundStyle(palette.textPrimary)
-                                Spacer()
-                                Text("\(Int(appState.appSettings.metronomeVolume * 100))%")
-                                    .foregroundStyle(palette.textSecondary)
-                                    .monospacedDigit()
-                            }
-                            HStack(spacing: 8) {
-                                Image(systemName: "speaker.fill")
-                                    .foregroundStyle(palette.textSecondary)
-                                    .font(.caption)
-                                Slider(value: $appState.appSettings.metronomeVolume, in: 0.1...1.0, step: 0.05)
-                                    .tint(palette.accent)
-                                Image(systemName: "speaker.wave.3.fill")
-                                    .foregroundStyle(palette.textSecondary)
-                                    .font(.caption)
-                            }
-                        }
-                        .listRowBackground(palette.cardBackground)
-                    }
-                } header: {
-                    HStack {
-                        Text("Recording")
-                        Spacer()
-                        Button {
-                            showStorageEstimateSheet = true
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.subheadline)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(palette.textSecondary)
-                    }
-                    .textCase(nil)
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(appState.appSettings.recordingQuality.description)
-                        Text(appState.appSettings.recordingMode.description)
-                        if appState.appSettings.preventSleepWhileRecording {
-                            Text("Screen will stay on while recording.")
-                        }
-                        if appState.appSettings.metronomeEnabled {
-                            Text("Metronome: \(Int(appState.appSettings.metronomeBPM)) BPM · \(Int(appState.appSettings.metronomeVolume * 100))% vol. Plays through headphones only and is not recorded.")
-                        }
-                    }
-                    .foregroundColor(palette.textSecondary)
-                }
-
-                Section {
-                    Picker("Skip Interval", selection: $appState.appSettings.skipInterval) {
-                        ForEach(SkipInterval.allCases) { interval in
-                            Text(interval.displayName).tag(interval)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-
+                    // Playback Speed
                     Picker("Playback Speed", selection: $appState.appSettings.playbackSpeed) {
                         Text("0.5x").tag(Float(0.5))
                         Text("0.75x").tag(Float(0.75))
@@ -543,54 +506,178 @@ struct SettingsSheetView: View {
                         Text("2.0x").tag(Float(2.0))
                     }
                     .listRowBackground(palette.cardBackground)
+
+                    // Skip Interval
+                    Picker("Skip Interval", selection: $appState.appSettings.skipInterval) {
+                        ForEach(SkipInterval.allCases) { interval in
+                            Text(interval.displayName).tag(interval)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    // Advanced Recording Options (disclosure group)
+                    DisclosureGroup(isExpanded: $showAdvancedRecording) {
+                        // Prevent Sleep
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Prevent Sleep", isOn: $appState.appSettings.preventSleepWhileRecording)
+                                .tint(palette.accent)
+                            Text("Keeps screen on while recording.")
+                                .font(.caption)
+                                .foregroundStyle(palette.textSecondary)
+                        }
+                        .listRowBackground(palette.cardBackground)
+
+                        // Noise Reduction (Voice Processing)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Noise Reduction", isOn: $appState.appSettings.noiseReductionEnabled)
+                                .tint(palette.accent)
+                                .disabled(isRecordingActive)
+                            Text("Reduces background noise. Best for speech.")
+                                .font(.caption)
+                                .foregroundStyle(palette.textSecondary)
+                        }
+                        .listRowBackground(palette.cardBackground)
+
+                        // Metronome
+                        Toggle("Metronome", isOn: $appState.appSettings.metronomeEnabled)
+                            .tint(palette.accent)
+                            .disabled(isRecordingActive)
+                            .onChange(of: appState.appSettings.metronomeEnabled) { _, enabled in
+                                if enabled && !appState.supportManager.canUseProFeatures && !ProFeatureContext.metronome.isFree {
+                                    appState.appSettings.metronomeEnabled = false
+                                    proUpgradeContext = .metronome
+                                }
+                            }
+                            .listRowBackground(palette.cardBackground)
+
+                        if appState.appSettings.metronomeEnabled {
+                            VStack(alignment: .leading, spacing: 8) {
+                                // Headphone requirement note
+                                HStack(spacing: 6) {
+                                    Image(systemName: "headphones")
+                                        .foregroundStyle(palette.accent)
+                                        .font(.caption)
+                                    Text("Requires headphones (wired or Bluetooth)")
+                                        .font(.caption)
+                                        .foregroundStyle(palette.textSecondary)
+                                }
+
+                                Divider()
+
+                                HStack {
+                                    Text("BPM")
+                                        .foregroundStyle(palette.textPrimary)
+                                    Spacer()
+                                    Text("\(Int(appState.appSettings.metronomeBPM))")
+                                        .foregroundStyle(palette.textSecondary)
+                                        .monospacedDigit()
+                                }
+                                Slider(value: $appState.appSettings.metronomeBPM, in: 10...240, step: 1)
+                                    .tint(palette.accent)
+                                Button {
+                                    appState.recorder.metronome.tapTempo()
+                                    appState.appSettings.metronomeBPM = appState.recorder.metronome.bpm
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "hand.tap")
+                                        Text("Tap Tempo")
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(palette.accent)
+
+                                Divider()
+
+                                HStack {
+                                    Text("Volume")
+                                        .foregroundStyle(palette.textPrimary)
+                                    Spacer()
+                                    Text("\(Int(appState.appSettings.metronomeVolume * 100))%")
+                                        .foregroundStyle(palette.textSecondary)
+                                        .monospacedDigit()
+                                }
+                                HStack(spacing: 8) {
+                                    Image(systemName: "speaker.fill")
+                                        .foregroundStyle(palette.textSecondary)
+                                        .font(.caption)
+                                    Slider(value: $appState.appSettings.metronomeVolume, in: 0.1...1.0, step: 0.05)
+                                        .tint(palette.accent)
+                                    Image(systemName: "speaker.wave.3.fill")
+                                        .foregroundStyle(palette.textSecondary)
+                                        .font(.caption)
+                                }
+                            }
+                            .listRowBackground(palette.cardBackground)
+                        }
+                    } label: {
+                        Label("Advanced Options", systemImage: "gearshape")
+                            .foregroundStyle(palette.textPrimary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+                    .tint(palette.accent)
                 } header: {
-                    Text("Playback")
-                        .foregroundColor(palette.textSecondary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "waveform")
+                            .foregroundColor(.red)
+                        Text("Recording & Playback")
+                        Spacer()
+                        Button {
+                            showStorageEstimateSheet = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(palette.textSecondary)
+                    }
+                    .foregroundColor(palette.textSecondary)
+                    .textCase(nil)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(appState.appSettings.recordingQuality.description)
+                        Text(appState.appSettings.recordingMode.description)
+                    }
+                    .foregroundColor(palette.textSecondary)
                 }
 
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 2. SMART FEATURES
+                // ══════════════════════════════════════════════════════════════
                 Section {
+                    // Auto-Transcribe
                     Toggle("Auto-Transcribe", isOn: $appState.appSettings.autoTranscribe)
                         .tint(palette.toggleOnTint)
                         .listRowBackground(palette.cardBackground)
 
+                    // Transcription Language
                     Picker("Language", selection: $appState.appSettings.transcriptionLanguage) {
                         ForEach(TranscriptionLanguage.allCases) { language in
                             Text(language.displayName).tag(language)
                         }
                     }
                     .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("Transcription")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Automatically transcribe new recordings when saved.")
 
-                        if !appState.appSettings.autoTranscribe {
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Without transcripts, recordings won't appear in transcript search and Smart Naming won't work. You can still manually transcribe individual recordings.")
-                            }
-                            .font(.caption)
-                        }
-                    }
-                    .foregroundColor(palette.textSecondary)
-                }
-
-                Section {
+                    // Auto-Select Icon
                     HStack {
-                        Toggle("Auto-Select Icon", isOn: $appState.appSettings.autoSelectIcon)
-                            .tint(palette.toggleOnTint)
-                            .onChange(of: appState.appSettings.autoSelectIcon) { oldValue, enabled in
-                                if enabled && !appState.supportManager.canUseProFeatures && !ProFeatureContext.autoIcons.isFree {
-                                    appState.appSettings.autoSelectIcon = false
-                                    proUpgradeContext = .autoIcons
-                                    return
+                        Toggle(isOn: $appState.appSettings.autoSelectIcon) {
+                            HStack(spacing: 6) {
+                                Text("Auto-Select Icon")
+                                if !appState.supportManager.canUseProFeatures && !ProFeatureContext.autoIcons.isFree {
+                                    ProBadge()
                                 }
-                                // Avoid acting on programmatic revert (false -> false)
-                                guard oldValue != enabled else { return }
                             }
+                        }
+                        .tint(palette.toggleOnTint)
+                        .onChange(of: appState.appSettings.autoSelectIcon) { oldValue, enabled in
+                            if enabled && !appState.supportManager.canUseProFeatures && !ProFeatureContext.autoIcons.isFree {
+                                appState.appSettings.autoSelectIcon = false
+                                proUpgradeContext = .autoIcons
+                                return
+                            }
+                            guard oldValue != enabled else { return }
+                        }
 
                         Button {
                             showAutoIconInfo = true
@@ -602,120 +689,94 @@ struct SettingsSheetView: View {
                         .buttonStyle(.plain)
                     }
                     .listRowBackground(palette.cardBackground)
+
+                    // Auto-Naming (disclosure group)
+                    DisclosureGroup(isExpanded: $showAutoNamingOptions) {
+                        Toggle("Location-based naming", isOn: $appState.appSettings.locationNamingEnabled)
+                            .tint(palette.toggleOnTint)
+                            .listRowBackground(palette.cardBackground)
+                            .onChange(of: appState.appSettings.locationNamingEnabled) { _, isOn in
+                                if isOn && appState.appSettings.contextNamingEnabled {
+                                    appState.appSettings.contextNamingEnabled = false
+                                }
+                                if isOn {
+                                    appState.locationManager.requestPermission()
+                                }
+                            }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle(isOn: $appState.appSettings.contextNamingEnabled) {
+                                HStack(spacing: 8) {
+                                    Text("Smart Naming")
+                                    if isAppleIntelligenceAvailable {
+                                        Image(systemName: "apple.intelligence")
+                                            .font(.footnote)
+                                            .foregroundColor(.purple)
+                                    }
+                                }
+                            }
+                            .tint(palette.toggleOnTint)
+                            .onChange(of: appState.appSettings.contextNamingEnabled) { _, isOn in
+                                if isOn && appState.appSettings.locationNamingEnabled {
+                                    appState.appSettings.locationNamingEnabled = false
+                                }
+                            }
+                            Text("Names recordings based on content and audio type.")
+                                .font(.caption)
+                                .foregroundStyle(palette.textSecondary)
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    } label: {
+                        Text("Auto-Naming")
+                            .foregroundStyle(palette.textPrimary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+                    .tint(palette.accent)
                 } header: {
                     HStack(spacing: 6) {
-                        Text("Smart Detection")
-                        if !appState.supportManager.canUseProFeatures { ProBadge() }
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.purple)
+                        Text("Smart Features")
                     }
                     .foregroundColor(palette.textSecondary)
                 } footer: {
-                    Text("Automatically detect audio type (voice, guitar, drums, keys) and set the recording icon.")
-                        .foregroundColor(palette.textSecondary)
-                }
-
-                // MARK: - Auto-Naming Section
-                Section {
-                    Toggle("Location-based naming", isOn: $appState.appSettings.locationNamingEnabled)
-                        .tint(palette.toggleOnTint)
-                        .listRowBackground(palette.cardBackground)
-                        .onChange(of: appState.appSettings.locationNamingEnabled) { _, isOn in
-                            // Mutually exclusive: turn off smart naming when location is enabled
-                            if isOn && appState.appSettings.contextNamingEnabled {
-                                appState.appSettings.contextNamingEnabled = false
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Automatically transcribe, detect audio type, and name recordings.")
+                        if !appState.appSettings.autoTranscribe {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Without transcripts, recordings won't appear in transcript search and Smart Naming won't work.")
                             }
-                        }
-
-                    Toggle(isOn: $appState.appSettings.contextNamingEnabled) {
-                        HStack(spacing: 8) {
-                            Text("Smart Naming")
-                            if isAppleIntelligenceAvailable {
-                                Image(systemName: "apple.intelligence")
-                                    .font(.footnote)
-                                    .foregroundColor(.purple)
-                            }
+                            .font(.caption)
                         }
                     }
-                    .tint(palette.toggleOnTint)
+                    .foregroundColor(palette.textSecondary)
+                }
+
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 3. APPEARANCE
+                // ══════════════════════════════════════════════════════════════
+                Section {
+                    // Theme selector row
+                    Button {
+                        showThemeSheet = true
+                    } label: {
+                        HStack {
+                            Text("Theme")
+                                .foregroundStyle(palette.textPrimary)
+                            Spacer()
+                            Text(appState.selectedTheme.displayName)
+                                .foregroundStyle(palette.textSecondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.textTertiary)
+                        }
+                    }
                     .listRowBackground(palette.cardBackground)
-                    .onChange(of: appState.appSettings.contextNamingEnabled) { _, isOn in
-                        // Mutually exclusive: turn off location naming when smart naming is enabled
-                        if isOn && appState.appSettings.locationNamingEnabled {
-                            appState.appSettings.locationNamingEnabled = false
-                        }
-                    }
-                } header: {
-                    Text("Auto-Naming")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Choose one naming style, or turn both off for generic numbering (\"Recording 1\", etc.).")
 
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "location.fill")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                            Text("Location naming uses your current place (e.g., \"Starbucks - 2:14 PM\").")
-                        }
-
-                        if isAppleIntelligenceAvailable {
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "apple.intelligence")
-                                    .font(.caption)
-                                    .foregroundColor(.purple)
-                                Text("Smart Naming combines audio detection (guitar, piano, drums) with transcripts to suggest titles like \"Guitar Practice\" or \"Piano Lesson\". Works for instrumental recordings too. All processing is on-device.")
-                            }
-                        } else {
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "brain")
-                                    .font(.caption)
-                                Text("Smart Naming combines audio detection (guitar, piano, drums) with transcripts to suggest titles. Works for instrumental recordings too.")
-                            }
-                        }
-
-                        Text("Duplicate titles are automatically numbered (\"Guitar Recording\", \"Guitar Recording 2\", etc.).")
-                            .font(.caption2)
-                    }
-                    .foregroundColor(palette.textSecondary)
-                }
-
-                // MARK: Theme Section
-                Section {
-                    ForEach(AppTheme.allCases) { theme in
-                        Button {
-                            appState.selectedTheme = theme
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(theme.displayName)
-                                        .font(.body)
-                                        .foregroundStyle(palette.textPrimary)
-                                    Text(theme.subtitle)
-                                        .font(.caption)
-                                        .foregroundStyle(palette.textSecondary)
-                                }
-                                Spacer()
-                                if appState.selectedTheme == theme {
-                                    Image(systemName: "checkmark")
-                                        .font(.body.weight(.semibold))
-                                        .foregroundStyle(palette.accent)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(palette.cardBackground)
-                    }
-                } header: {
-                    Text("Theme")
-                        .foregroundStyle(palette.textSecondary)
-                } footer: {
-                    Text("Not all pages will change themes.")
-                        .foregroundStyle(palette.textSecondary)
-                }
-
-                Section {
-                    Picker("Appearance", selection: $appState.appearanceMode) {
+                    // Light/Dark mode picker
+                    Picker("Light/Dark Mode", selection: $appState.appearanceMode) {
                         ForEach(AppearanceMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
                         }
@@ -723,25 +784,36 @@ struct SettingsSheetView: View {
                     .pickerStyle(.segmented)
                     .listRowBackground(palette.cardBackground)
                 } header: {
-                    Text("Light/Dark Mode")
-                        .foregroundColor(palette.textSecondary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "paintbrush")
+                            .foregroundColor(.orange)
+                        Text("Appearance")
+                    }
+                    .foregroundStyle(palette.textSecondary)
                 } footer: {
-                    Text("Applies when using the System theme.")
+                    Text("Light/Dark mode applies when using the System theme.")
                         .foregroundColor(palette.textSecondary)
                 }
 
-                // MARK: - iCloud Sync Section
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 4. CLOUD & SYNC
+                // ══════════════════════════════════════════════════════════════
                 Section {
-                    Toggle("iCloud Sync", isOn: $appState.appSettings.iCloudSyncEnabled)
-                        .tint(palette.toggleOnTint)
-                        .listRowBackground(palette.cardBackground)
-                        .onChange(of: appState.appSettings.iCloudSyncEnabled) { oldValue, enabled in
+                    // iCloud Sync
+                    Toggle(isOn: $appState.appSettings.iCloudSyncEnabled) {
+                        HStack(spacing: 6) {
+                            Text("iCloud Sync")
+                            if !appState.supportManager.canUseProFeatures { ProBadge() }
+                        }
+                    }
+                    .tint(palette.toggleOnTint)
+                    .listRowBackground(palette.cardBackground)
+                    .onChange(of: appState.appSettings.iCloudSyncEnabled) { oldValue, enabled in
                             if enabled && !appState.supportManager.canUseProFeatures {
                                 appState.appSettings.iCloudSyncEnabled = false
                                 proUpgradeContext = .icloudSync
                                 return
                             }
-                            // Avoid acting on programmatic revert (false -> false)
                             guard oldValue != enabled else { return }
                             Task {
                                 if enabled {
@@ -773,13 +845,11 @@ struct SettingsSheetView: View {
                                 }
                             }
 
-                            // Progress bar when syncing
                             if let progress = appState.syncManager.status.progress, progress > 0 {
                                 ProgressView(value: progress)
                                     .tint(palette.accent)
                             }
 
-                            // Show current upload if any
                             if let currentUpload = appState.syncManager.uploadProgress.first(where: { $0.status == .uploading }) {
                                 HStack(spacing: 4) {
                                     Image(systemName: "arrow.up.circle")
@@ -799,26 +869,15 @@ struct SettingsSheetView: View {
                         }
                         .listRowBackground(palette.cardBackground)
                     }
-                } header: {
-                    SettingsSectionHeader(
-                        title: "iCloud",
-                        topic: .iCloud,
-                        onInfoTap: { activeHelpTopic = .iCloud },
-                        showProBadge: !appState.supportManager.canUseProFeatures
-                    )
-                } footer: {
-                    Text("Sync recordings, tags, albums, and projects across all your devices.")
-                        .foregroundColor(palette.textSecondary)
-                }
 
-                // MARK: - Watch Sync Section
-                Section {
+                    // Apple Watch Sync
                     Toggle(isOn: $appState.appSettings.watchSyncEnabled) {
                         HStack(spacing: 8) {
                             Image(systemName: "applewatch")
                                 .foregroundColor(.green)
                                 .font(.system(size: 14))
-                            Text("Auto Sync Watch Recordings")
+                            Text("Apple Watch Sync")
+                            if !appState.supportManager.canUseProFeatures { ProBadge() }
                         }
                     }
                     .tint(palette.toggleOnTint)
@@ -829,31 +888,16 @@ struct SettingsSheetView: View {
                             proUpgradeContext = .watchSync
                             return
                         }
-                        // Avoid acting on programmatic revert (false -> false)
                         guard oldValue != enabled else { return }
                     }
-                } header: {
-                    HStack(spacing: 6) {
-                        Text("Apple Watch")
-                            .foregroundStyle(palette.textSecondary)
-                        if !appState.supportManager.canUseProFeatures {
-                            ProBadge()
-                        }
-                    }
-                } footer: {
-                    Text("Automatically import recordings from the Sonidea Apple Watch app into the ⌚️ Recordings album. Requires the Sonidea watch app and a Pro plan.")
-                        .foregroundColor(palette.textSecondary)
-                }
 
-                // MARK: - Shared Albums Section
-                Section {
+                    // Shared Albums
                     Button {
                         if requirePro(.sharedAlbums) {
                             showCreateSharedAlbumSheet = true
                         }
                     } label: {
                         HStack(spacing: 12) {
-                            // Gold gradient icon
                             ZStack {
                                 Circle()
                                     .fill(
@@ -863,67 +907,36 @@ struct SettingsSheetView: View {
                                             endPoint: .bottomTrailing
                                         )
                                     )
-                                    .frame(width: 32, height: 32)
+                                    .frame(width: 28, height: 28)
                                 Image(systemName: "person.2.fill")
-                                    .font(.system(size: 14, weight: .semibold))
+                                    .font(.system(size: 12, weight: .semibold))
                                     .foregroundColor(.white)
                             }
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Create Shared Album")
-                                    .font(.headline)
-                                    .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
-                                Text("Collaborate with others")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
+                            Text("Shared Albums")
+                                .foregroundColor(palette.textPrimary)
+
+                            if !appState.supportManager.canUseProFeatures { ProBadge() }
 
                             Spacer()
 
-                            // Premium badge
-                            Text("NEW")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    LinearGradient(
-                                        colors: [Color(red: 1.0, green: 0.84, blue: 0.0), Color(red: 0.85, green: 0.65, blue: 0.13)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(4)
+                            if !appState.sharedAlbums.isEmpty {
+                                Text("\(appState.sharedAlbums.count)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color(red: 0.85, green: 0.65, blue: 0.13))
+                                    .cornerRadius(10)
+                            }
 
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
-                                .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
+                                .foregroundColor(palette.textTertiary)
                         }
-                        .padding(.vertical, 4)
                     }
                     .listRowBackground(palette.cardBackground)
 
-                    // Show existing shared albums count
-                    if !appState.sharedAlbums.isEmpty {
-                        HStack {
-                            Image(systemName: "square.stack.fill")
-                                .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.13))
-                                .frame(width: 24)
-                            Text("Your Shared Albums")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Text("\(appState.sharedAlbums.count)")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(Color(red: 0.85, green: 0.65, blue: 0.13))
-                                .cornerRadius(10)
-                        }
-                        .listRowBackground(palette.cardBackground)
-                    }
-
-                    // Debug mode toggle
                     #if DEBUG
                     Toggle(isOn: Binding(
                         get: { appState.isSharedAlbumsDebugMode },
@@ -938,240 +951,35 @@ struct SettingsSheetView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "ant.fill")
                                 .foregroundColor(.purple)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Demo Mode")
-                                    .foregroundColor(palette.textPrimary)
-                                Text("Test UI without iCloud")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
+                            Text("Demo Mode")
+                                .foregroundColor(palette.textPrimary)
                         }
                     }
                     .tint(.purple)
                     .listRowBackground(palette.cardBackground)
                     #endif
                 } header: {
-                    SettingsSectionHeader(
-                        title: "Collaboration",
-                        topic: .collaboration,
-                        onInfoTap: { activeHelpTopic = .collaboration },
-                        isGold: true,
-                        showProBadge: !appState.supportManager.canUseProFeatures
-                    )
-                } footer: {
-                    #if DEBUG
-                    if appState.isSharedAlbumsDebugMode {
-                        Text("Demo mode active - showing sample shared album data. Disable to remove demo content.")
-                            .foregroundColor(.purple)
-                    } else {
-                        Text("Collaborate on albums with up to 5 people. Share audio recordings in real-time with role-based permissions.")
-                            .foregroundColor(palette.textSecondary)
-                    }
-                    #else
-                    Text("Collaborate on albums with up to 5 people. Share audio recordings in real-time with role-based permissions.")
-                        .foregroundColor(palette.textSecondary)
-                    #endif
-                }
-
-                Section {
-                    Button {
-                        if requirePro(.tags) {
-                            showTagManager = true
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "tag.fill")
-                                .foregroundColor(palette.accent)
-                            Text("Manage Tags")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Text("\(appState.tags.count)")
-                                .foregroundColor(palette.textSecondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-                } header: {
-                    SettingsSectionHeader(
-                        title: "Tags",
-                        topic: .tags,
-                        onInfoTap: { activeHelpTopic = .tags },
-                        showProBadge: !appState.supportManager.canUseProFeatures
-                    )
-                }
-
-                Section {
-                    Button {
-                        bulkExportAlbum = nil
-                        showBulkFormatPicker = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up")
-                                .foregroundColor(palette.accent)
-                            Text("Export All Recordings")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            if isExporting && exportProgress == "all" {
-                                ProgressView()
-                                    .tint(palette.accent)
-                            }
-                        }
-                    }
-                    .disabled(isExporting || appState.activeRecordings.isEmpty)
-                    .listRowBackground(palette.cardBackground)
-
-                    Button { showAlbumPicker = true } label: {
-                        HStack {
-                            Image(systemName: "square.stack")
-                                .foregroundColor(palette.accent)
-                            Text("Export Album...")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            if isExporting && exportProgress == "album" {
-                                ProgressView()
-                                    .tint(palette.accent)
-                            }
-                        }
-                    }
-                    .disabled(isExporting || appState.albums.isEmpty)
-                    .listRowBackground(palette.cardBackground)
-
-                    Button { showFileImporter = true } label: {
-                        HStack {
-                            Image(systemName: "square.and.arrow.down")
-                                .foregroundColor(palette.accent)
-                            Text("Import Recordings")
-                                .foregroundColor(palette.textPrimary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("Export & Import")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    Text("Export as WAV files in ZIP. Import m4a, wav, mp3, or aiff files.")
-                        .foregroundColor(palette.textSecondary)
-                }
-
-                Section {
-                    Button { showTrashView = true } label: {
-                        HStack {
-                            Image(systemName: "trash")
-                                .foregroundColor(.red)
-                            Text("View Trash")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Text("\(appState.trashedCount) items")
-                                .foregroundColor(palette.textSecondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    Button(role: .destructive) { showEmptyTrashAlert = true } label: {
-                        HStack {
-                            Image(systemName: "trash.slash")
-                            Text("Empty Trash Now")
-                        }
-                    }
-                    .disabled(appState.trashedCount == 0)
-                    .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("Trash")
-                        .foregroundColor(palette.textSecondary)
-                } footer: {
-                    Text("Items in trash are automatically deleted after 30 days.")
-                        .foregroundColor(palette.textSecondary)
-                }
-
-                Section {
-                    HStack {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(palette.textSecondary)
-                        Text("Sonidea")
-                            .foregroundColor(palette.textPrimary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "icloud")
+                            .foregroundColor(.blue)
+                        Text("Cloud & Sync")
                         Spacer()
-                        Text("2.0")
-                            .foregroundColor(palette.textSecondary)
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df")!) {
-                        HStack {
-                            Image(systemName: "hand.raised")
-                                .foregroundColor(palette.accent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Privacy Policy")
-                                    .foregroundColor(palette.textPrimary)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                        Button {
+                            activeHelpTopic = .iCloud
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.subheadline)
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(palette.textSecondary)
                     }
-                    .listRowBackground(palette.cardBackground)
-
-                    Link(destination: URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490")!) {
-                        HStack {
-                            Image(systemName: "doc.text")
-                                .foregroundColor(palette.accent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Terms of Use")
-                                    .foregroundColor(palette.textPrimary)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    Link(destination: URL(string: "https://forms.gle/rmEQg3nXDaoHCGj5A")!) {
-                        HStack {
-                            Image(systemName: "ladybug")
-                                .foregroundColor(.red)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Report a Bug")
-                                    .foregroundColor(palette.textPrimary)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-
-                    Link(destination: URL(string: "https://forms.gle/4Hf5DMDJBCD9gdir6")!) {
-                        HStack {
-                            Image(systemName: "lightbulb")
-                                .foregroundColor(.yellow)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("App Suggestions")
-                                    .foregroundColor(palette.textPrimary)
-                                Text("Tell us what you'd like to see in our app.")
-                                    .font(.caption)
-                                    .foregroundColor(palette.textSecondary)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-                } header: {
-                    Text("About")
+                    .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Sync recordings across devices, Apple Watch, and collaborate with others.")
                         .foregroundColor(palette.textSecondary)
                 }
 
-                // MARK: - Sync Now Button (Bottom of Settings)
+                // Sync Now Button (only when iCloud enabled)
                 if appState.appSettings.iCloudSyncEnabled {
                     Section {
                         Button {
@@ -1197,6 +1005,218 @@ struct SettingsSheetView: View {
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
+                }
+
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 5. DATA & STORAGE
+                // ══════════════════════════════════════════════════════════════
+                Section {
+                    // Manage Tags
+                    Button {
+                        if requirePro(.tags) {
+                            showTagManager = true
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "tag.fill")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Manage Tags")
+                                .foregroundColor(palette.textPrimary)
+                            if !appState.supportManager.canUseProFeatures { ProBadge() }
+                            Spacer()
+                            Text("\(appState.tags.count)")
+                                .foregroundColor(palette.textSecondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    // Export All
+                    Button {
+                        bulkExportAlbum = nil
+                        showBulkFormatPicker = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Export All Recordings")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            if isExporting && exportProgress == "all" {
+                                ProgressView()
+                                    .tint(palette.accent)
+                            }
+                        }
+                    }
+                    .disabled(isExporting || appState.activeRecordings.isEmpty)
+                    .listRowBackground(palette.cardBackground)
+
+                    // Export Album
+                    Button { showAlbumPicker = true } label: {
+                        HStack {
+                            Image(systemName: "square.stack")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Export Album...")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            if isExporting && exportProgress == "album" {
+                                ProgressView()
+                                    .tint(palette.accent)
+                            }
+                        }
+                    }
+                    .disabled(isExporting || appState.albums.isEmpty)
+                    .listRowBackground(palette.cardBackground)
+
+                    // Import Recordings
+                    Button { showFileImporter = true } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Import Recordings")
+                                .foregroundColor(palette.textPrimary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    // Trash
+                    Button { showTrashView = true } label: {
+                        HStack {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                                .frame(width: 24)
+                            Text("Trash")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Text("\(appState.trashedCount) items")
+                                .foregroundColor(palette.textSecondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+                } header: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "externaldrive")
+                            .foregroundColor(.green)
+                        Text("Data & Storage")
+                    }
+                    .foregroundColor(palette.textSecondary)
+                } footer: {
+                    Text("Export as WAV/M4A/ALAC. Import m4a, wav, mp3, or aiff files. Trash items are auto-deleted after 30 days.")
+                        .foregroundColor(palette.textSecondary)
+                }
+
+                // ══════════════════════════════════════════════════════════════
+                // MARK: 6. ABOUT
+                // ══════════════════════════════════════════════════════════════
+                Section {
+                    HStack {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(palette.textSecondary)
+                            .frame(width: 24)
+                        Text("Version")
+                            .foregroundColor(palette.textPrimary)
+                        Spacer()
+                        Text("2.0")
+                            .foregroundColor(palette.textSecondary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df")!) {
+                        HStack {
+                            Image(systemName: "hand.raised")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Privacy Policy")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490")!) {
+                        HStack {
+                            Image(systemName: "doc.text")
+                                .foregroundColor(palette.accent)
+                                .frame(width: 24)
+                            Text("Terms of Use")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://forms.gle/rmEQg3nXDaoHCGj5A")!) {
+                        HStack {
+                            Image(systemName: "ladybug")
+                                .foregroundColor(.red)
+                                .frame(width: 24)
+                            Text("Report a Bug")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    Link(destination: URL(string: "https://forms.gle/4Hf5DMDJBCD9gdir6")!) {
+                        HStack {
+                            Image(systemName: "lightbulb")
+                                .foregroundColor(.yellow)
+                                .frame(width: 24)
+                            Text("Suggestions")
+                                .foregroundColor(palette.textPrimary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .listRowBackground(palette.cardBackground)
+
+                    // Advanced (disclosure group with Factory Reset)
+                    DisclosureGroup(isExpanded: $showAdvancedAbout) {
+                        Button(role: .destructive) {
+                            showResetStep1 = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .foregroundColor(.red)
+                                    .frame(width: 24)
+                                Text("Factory Reset")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                        .listRowBackground(palette.cardBackground)
+                    } label: {
+                        Label("Advanced", systemImage: "gearshape.2")
+                            .foregroundStyle(palette.textPrimary)
+                    }
+                    .listRowBackground(palette.cardBackground)
+                    .tint(palette.accent)
+                } header: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(.gray)
+                        Text("About")
+                    }
+                    .foregroundColor(palette.textSecondary)
                 }
 
                 #if DEBUG
@@ -1227,24 +1247,6 @@ struct SettingsSheetView: View {
                         .foregroundColor(.red)
                 }
                 #endif
-
-                // MARK: - Factory Reset
-                Section {
-                    Button(role: .destructive) {
-                        showResetStep1 = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "arrow.counterclockwise")
-                                .foregroundColor(.red)
-                            Text("Reset App")
-                                .foregroundColor(.red)
-                        }
-                    }
-                    .listRowBackground(palette.cardBackground)
-                } footer: {
-                    Text("Erase all recordings, albums, tags, projects, and settings. The app will return to its initial state.")
-                        .foregroundColor(palette.textSecondary)
-                }
             }
             .scrollContentBackground(.hidden)
             .background(palette.groupedBackground)
@@ -1256,10 +1258,22 @@ struct SettingsSheetView: View {
                         showGuide = true
                     }
                     .foregroundColor(palette.accent)
+                    .scaleEffect(guideButtonScale)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundColor(palette.accent)
+                }
+            }
+            .onAppear {
+                // Pop animation for Guide button
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
+                    guideButtonScale = 1.15
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                        guideButtonScale = 1.0
+                    }
                 }
             }
             .alert("Reset App?", isPresented: $showResetStep1) {
@@ -1358,6 +1372,9 @@ struct SettingsSheetView: View {
             }
             .sheet(isPresented: $showMicrophoneSheet) {
                 MicrophoneSelectorSheet()
+            }
+            .sheet(isPresented: $showThemeSheet) {
+                ThemeSelectorSheet()
             }
             .sheet(isPresented: $showStorageEstimateSheet) {
                 StorageEstimateSheet()

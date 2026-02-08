@@ -515,13 +515,10 @@ final class AppState {
         let existingTitles = Set(recordings.map { $0.title })
 
         // Priority 1: Location naming (if enabled and available)
+        // Just use the place name (e.g., "McDonald's", "Starbucks", "Home")
         if appSettings.locationNamingEnabled && !locationLabel.isEmpty {
-            let timeFormatter = DateFormatter()
-            timeFormatter.dateFormat = "h:mm a"
-            let time = timeFormatter.string(from: Date())
-            let baseTitle = "\(locationLabel) - \(time)"
-            // Make unique by adding number if duplicate
-            let uniqueTitle = TitleGeneratorService.makeUnique(baseTitle, existingTitles: existingTitles)
+            // Make unique by adding number if duplicate (e.g., "Starbucks", "Starbucks 2")
+            let uniqueTitle = TitleGeneratorService.makeUnique(locationLabel, existingTitles: existingTitles)
             // Still increment number for tracking
             nextRecordingNumber += 1
             saveNextRecordingNumber()
@@ -658,20 +655,24 @@ final class AppState {
             allLabels: predictions.compactMap { $0.classifierLabel }
         )
 
-        // Generate audio-only title
-        if var autoTitle = await TitleGeneratorService.generateTitle(
+        // Generate audio-only title and AUTO-APPLY it directly
+        if var smartTitle = await TitleGeneratorService.generateTitle(
             from: nil,  // No transcript
             audioContext: audioContext
         ) {
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                // Make the suggested title unique by adding number if duplicate
+                // Make the title unique by adding number if duplicate
                 let existingTitles = Set(self.recordings.map { $0.title })
-                autoTitle = TitleGeneratorService.makeUnique(autoTitle, existingTitles: existingTitles)
+                smartTitle = TitleGeneratorService.makeUnique(smartTitle, existingTitles: existingTitles)
 
                 if let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) {
-                    self.recordings[idx].autoTitle = autoTitle
+                    // Auto-apply the smart title directly
+                    self.recordings[idx].title = smartTitle
+                    self.recordings[idx].titleSource = .context
+                    self.recordings[idx].autoTitle = nil  // Clear since we applied it
                     self.saveRecordings()
+                    self.triggerSyncForRecording(self.recordings[idx])
                 }
             }
         }
@@ -708,22 +709,27 @@ final class AppState {
                 }()
 
                 // Use combined title generation (transcript + audio classification)
+                // AUTO-APPLY: Set the title directly instead of just suggesting
                 let textCopy = text
                 let recordingId = recordingID
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
                     // Use combined method that merges transcript context with audio classification
-                    if var autoTitle = await TitleGeneratorService.generateTitle(
+                    if var smartTitle = await TitleGeneratorService.generateTitle(
                         from: textCopy.isEmpty ? nil : textCopy,
                         audioContext: audioContext
                     ) {
-                        // Make the suggested title unique by adding number if duplicate
+                        // Make the title unique by adding number if duplicate
                         let existingTitles = Set(self.recordings.map { $0.title })
-                        autoTitle = TitleGeneratorService.makeUnique(autoTitle, existingTitles: existingTitles)
+                        smartTitle = TitleGeneratorService.makeUnique(smartTitle, existingTitles: existingTitles)
 
                         if let idx = self.recordings.firstIndex(where: { $0.id == recordingId }) {
-                            self.recordings[idx].autoTitle = autoTitle
+                            // Auto-apply the smart title directly
+                            self.recordings[idx].title = smartTitle
+                            self.recordings[idx].titleSource = .context
+                            self.recordings[idx].autoTitle = nil  // Clear suggestion since we applied it
                             self.saveRecordings()
+                            self.triggerSyncForRecording(self.recordings[idx])
                         }
                     }
                 }
@@ -1610,6 +1616,102 @@ final class AppState {
         // Trigger async waveform sampling
         Task {
             _ = await WaveformSampler.shared.samples(for: destURL, targetSampleCount: 150)
+        }
+
+        // Auto-classify icon for imported recording (Pro feature, or temporarily free)
+        // Only if auto-select is enabled and no user-set icon
+        if appSettings.autoSelectIcon && (supportManager.canUseProFeatures || ProFeatureContext.autoIcons.isFree) {
+            addToPendingClassifications(recording.id)
+            Task {
+                await autoClassifyImportedRecording(recording: recording)
+            }
+        }
+    }
+
+    /// Auto-classify imported recording and generate SUGGESTED title (not auto-applied).
+    /// Unlike recorded tracks where titles are auto-applied, imported tracks show a suggestion banner.
+    private func autoClassifyImportedRecording(recording: RecordingItem) async {
+        let taskID = await UIApplication.shared.beginBackgroundTask(withName: "ImportedIconClassification") {
+            // Expiration handler — classification will be retried on next foreground
+        }
+
+        // Only classify if user hasn't manually set an icon
+        guard recording.iconSource != .user else {
+            removeFromPendingClassifications(recording.id)
+            await UIApplication.shared.endBackgroundTask(taskID)
+            return
+        }
+
+        let updated = await AudioIconClassifierManager.shared.classifyAndUpdateIfNeeded(
+            recording: recording,
+            autoSelectEnabled: appSettings.autoSelectIcon
+        )
+
+        // Save if icon changed OR if predictions were updated
+        if updated.iconName != recording.iconName || updated.iconPredictions != recording.iconPredictions {
+            await MainActor.run {
+                updateRecording(updated)
+            }
+            removeFromPendingClassifications(recording.id)
+
+            // Generate SUGGESTED title for imports (not auto-applied)
+            // Only if context naming is enabled and title is still generic
+            await generateSuggestedTitleForImport(for: updated)
+        } else if updated.iconName == nil && updated.iconPredictions == nil {
+            // Classification produced no results — keep in retry queue
+            addToPendingClassifications(recording.id)
+        } else {
+            // No changes needed — remove from queue
+            removeFromPendingClassifications(recording.id)
+        }
+
+        await UIApplication.shared.endBackgroundTask(taskID)
+    }
+
+    /// Generate a SUGGESTED title for imported recordings (sets autoTitle, not title).
+    /// User can tap "Apply" in RecordingDetailView to accept the suggestion.
+    private func generateSuggestedTitleForImport(for recording: RecordingItem) async {
+        // Only if context naming is enabled
+        guard appSettings.contextNamingEnabled else { return }
+
+        // Don't suggest if user has already set a custom title
+        guard recording.titleSource != .user else { return }
+
+        // Don't overwrite existing suggestion
+        guard recording.autoTitle == nil else { return }
+
+        // Build audio context from predictions
+        guard let predictions = recording.iconPredictions,
+              let topPrediction = predictions.first,
+              let label = topPrediction.classifierLabel else {
+            return
+        }
+
+        let audioContext = AudioNamingContext(
+            primaryLabel: label,
+            confidence: topPrediction.confidence,
+            allLabels: predictions.compactMap { $0.classifierLabel }
+        )
+
+        // Generate title from audio classification (imports typically don't have transcripts)
+        if let suggestedTitle = await TitleGeneratorService.generateTitle(
+            from: nil,  // No transcript for imports
+            audioContext: audioContext
+        ) {
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                // Make the suggestion unique
+                let existingTitles = Set(self.recordings.map { $0.title })
+                let uniqueTitle = TitleGeneratorService.makeUnique(suggestedTitle, existingTitles: existingTitles)
+
+                if let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) {
+                    // Set as SUGGESTION only — user can tap "Apply" to accept
+                    self.recordings[idx].autoTitle = uniqueTitle
+                    // Don't change titleSource — keep it as generic until user applies
+                    self.saveRecordings()
+                    self.triggerSyncForRecording(self.recordings[idx])
+                }
+            }
         }
     }
 
