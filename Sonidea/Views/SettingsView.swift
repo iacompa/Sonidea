@@ -1130,65 +1130,73 @@ struct SettingsSheetView: View {
                     }
                     .listRowBackground(palette.cardBackground)
 
-                    Link(destination: URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df")!) {
-                        HStack {
-                            Image(systemName: "hand.raised")
-                                .foregroundColor(palette.accent)
-                                .frame(width: 24)
-                            Text("Privacy Policy")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                    if let privacyURL = URL(string: "https://www.notion.so/sonidea/Sonidea-Privacy-Policy-2f72934c965380a3bafaf7967e2295df") {
+                        Link(destination: privacyURL) {
+                            HStack {
+                                Image(systemName: "hand.raised")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+                                Text("Privacy Policy")
+                                    .foregroundColor(palette.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
-                    .listRowBackground(palette.cardBackground)
 
-                    Link(destination: URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490")!) {
-                        HStack {
-                            Image(systemName: "doc.text")
-                                .foregroundColor(palette.accent)
-                                .frame(width: 24)
-                            Text("Terms of Use")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                    if let termsURL = URL(string: "https://sonidea.notion.site/Sonidea-Terms-and-Conditions-2fb2934c965380fe8461ef99bab80490") {
+                        Link(destination: termsURL) {
+                            HStack {
+                                Image(systemName: "doc.text")
+                                    .foregroundColor(palette.accent)
+                                    .frame(width: 24)
+                                Text("Terms of Use")
+                                    .foregroundColor(palette.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
-                    .listRowBackground(palette.cardBackground)
 
-                    Link(destination: URL(string: "https://forms.gle/rmEQg3nXDaoHCGj5A")!) {
-                        HStack {
-                            Image(systemName: "ladybug")
-                                .foregroundColor(.red)
-                                .frame(width: 24)
-                            Text("Report a Bug")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                    if let bugURL = URL(string: "https://forms.gle/rmEQg3nXDaoHCGj5A") {
+                        Link(destination: bugURL) {
+                            HStack {
+                                Image(systemName: "ladybug")
+                                    .foregroundColor(.red)
+                                    .frame(width: 24)
+                                Text("Report a Bug")
+                                    .foregroundColor(palette.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
-                    .listRowBackground(palette.cardBackground)
 
-                    Link(destination: URL(string: "https://forms.gle/4Hf5DMDJBCD9gdir6")!) {
-                        HStack {
-                            Image(systemName: "lightbulb")
-                                .foregroundColor(.yellow)
-                                .frame(width: 24)
-                            Text("Suggestions")
-                                .foregroundColor(palette.textPrimary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundColor(palette.textSecondary)
+                    if let suggestionsURL = URL(string: "https://forms.gle/4Hf5DMDJBCD9gdir6") {
+                        Link(destination: suggestionsURL) {
+                            HStack {
+                                Image(systemName: "lightbulb")
+                                    .foregroundColor(.yellow)
+                                    .frame(width: 24)
+                                Text("Suggestions")
+                                    .foregroundColor(palette.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textSecondary)
+                            }
                         }
+                        .listRowBackground(palette.cardBackground)
                     }
-                    .listRowBackground(palette.cardBackground)
 
                     // Advanced (disclosure group with Factory Reset)
                     DisclosureGroup(isExpanded: $showAdvancedAbout) {

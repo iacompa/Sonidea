@@ -22,6 +22,17 @@ final class PlaybackEngine {
     }
     var eqSettings: EQSettings = .flat
 
+    // MARK: - A/B Loop
+
+    /// Whether A/B loop mode is active
+    var isLooping: Bool = false
+
+    /// Loop start time (point A)
+    var loopStart: TimeInterval?
+
+    /// Loop end time (point B)
+    var loopEnd: TimeInterval?
+
     /// Error state for UI to display
     var loadError: PlaybackError?
 
@@ -229,6 +240,9 @@ final class PlaybackEngine {
         currentTime = 0
         duration = 0
         seekFrame = 0
+        isLooping = false
+        loopStart = nil
+        loopEnd = nil
         stopTimer()
 
         // Deactivate audio session when playback is fully stopped
@@ -267,6 +281,49 @@ final class PlaybackEngine {
     /// Clear any load error (call after user dismisses error alert)
     func clearError() {
         loadError = nil
+    }
+
+    // MARK: - A/B Loop Control
+
+    /// Set the loop start point (A) to the current playback time
+    func setLoopStart() {
+        loopStart = currentTime
+        // If both points are set and start >= end, clear the end
+        if let start = loopStart, let end = loopEnd, start >= end {
+            loopEnd = nil
+        }
+    }
+
+    /// Set the loop end point (B) to the current playback time
+    func setLoopEnd() {
+        loopEnd = currentTime
+        // If both points are set and end <= start, clear the start
+        if let start = loopStart, let end = loopEnd, end <= start {
+            loopStart = nil
+        }
+    }
+
+    /// Set both loop points at once
+    func setLoop(start: TimeInterval, end: TimeInterval) {
+        guard start < end, start >= 0, end <= duration else { return }
+        loopStart = start
+        loopEnd = end
+    }
+
+    /// Toggle A/B loop on or off. When toggling on, both loop points must be set.
+    func toggleLoop() {
+        if isLooping {
+            isLooping = false
+        } else if loopStart != nil && loopEnd != nil {
+            isLooping = true
+        }
+    }
+
+    /// Clear loop points and disable looping
+    func clearLoop() {
+        isLooping = false
+        loopStart = nil
+        loopEnd = nil
     }
 
     // MARK: - Speed Control
@@ -403,6 +460,11 @@ final class PlaybackEngine {
         }
         if currentTime >= duration {
             currentTime = duration
+        }
+
+        // A/B loop: seek back to loop start when reaching loop end
+        if isLooping, let loopA = loopStart, let loopB = loopEnd, currentTime >= loopB {
+            seek(to: loopA)
         }
     }
 

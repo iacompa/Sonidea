@@ -18,6 +18,9 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
+    private var wasPlayingBeforeInterruption = false
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
 
     // MARK: - Load
 
@@ -33,6 +36,9 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
             player?.prepareToPlay()
             duration = player?.duration ?? 0
             currentTime = 0
+
+            setupInterruptionHandling()
+            setupRouteChangeHandling()
         } catch {
             #if DEBUG
             print("WatchPlayback: Failed to load: \(error)")
@@ -68,7 +74,9 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
         isPlaying = false
         currentTime = 0
         duration = 0
+        wasPlayingBeforeInterruption = false
         stopTimer()
+        removeObservers()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -88,6 +96,96 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
         let clampedTime = max(0, min(player.duration, time))
         player.currentTime = clampedTime
         currentTime = clampedTime
+    }
+
+    // MARK: - Interruption Handling
+
+    private func setupInterruptionHandling() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleInterruption(notification)
+            }
+        }
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            if isPlaying {
+                wasPlayingBeforeInterruption = true
+                pause()
+            }
+        case .ended:
+            if wasPlayingBeforeInterruption {
+                wasPlayingBeforeInterruption = false
+                if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    if options.contains(.shouldResume) {
+                        play()
+                    }
+                } else {
+                    play()
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    // MARK: - Route Change Handling
+
+    private func setupRouteChangeHandling() {
+        guard routeChangeObserver == nil else { return }
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleRouteChange(notification)
+            }
+        }
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+
+        switch reason {
+        case .oldDeviceUnavailable:
+            if isPlaying {
+                pause()
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Observer Cleanup
+
+    private func removeObservers() {
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            interruptionObserver = nil
+        }
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
+        }
     }
 
     // MARK: - Timer
@@ -110,6 +208,7 @@ class WatchPlaybackManager: NSObject, AVAudioPlayerDelegate {
         isPlaying = false
         currentTime = 0
         stopTimer()
+        removeObservers()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

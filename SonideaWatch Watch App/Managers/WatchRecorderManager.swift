@@ -25,9 +25,14 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     private var recordingStartTime: Date?
     private var extendedSession: WKExtendedRuntimeSession?
     private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
     /// Counter to throttle duration updates (every 5th tick = 0.5s) while
     /// metering runs at full 0.1s cadence.
     private var timerTickCount: Int = 0
+
+    // MARK: - Crash Recovery
+
+    private let inProgressKey = "watchInProgressRecordingFileName"
 
     // Cleanup handled by stopRecording() which invalidates extendedSession
     // and removes interruptionObserver. No deinit needed since @MainActor
@@ -57,7 +62,7 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default)
+            try session.setCategory(.record, mode: .default)
             try session.setActive(true)
         } catch {
             #if DEBUG
@@ -90,6 +95,9 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
             recordingStartTime = Date()
             startTimer()
 
+            // Mark recording in progress for crash recovery
+            markRecordingInProgress(filename)
+
             // --- Start extended runtime session for wrist-down protection ---
             let extSession = WKExtendedRuntimeSession()
             extSession.start()
@@ -108,6 +116,27 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
 
                     if type == .began {
                         // Auto-save on interruption (phone call, Siri, etc.) to prevent data loss
+                        Task { @MainActor [weak self] in
+                            guard let self, self.isRecording else { return }
+                            _ = self.stopRecording()
+                        }
+                    }
+                }
+            }
+
+            // --- Register route change observer ---
+            if routeChangeObserver == nil {
+                routeChangeObserver = NotificationCenter.default.addObserver(
+                    forName: AVAudioSession.routeChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    guard let self else { return }
+                    guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                          let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+
+                    if reason == .oldDeviceUnavailable {
+                        // Audio device disconnected — save what we have
                         Task { @MainActor [weak self] in
                             guard let self, self.isRecording else { return }
                             _ = self.stopRecording()
@@ -135,10 +164,14 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         extendedSession?.invalidate()
         extendedSession = nil
 
-        // Remove interruption observer
+        // Remove observers
         if let observer = interruptionObserver {
             NotificationCenter.default.removeObserver(observer)
             interruptionObserver = nil
+        }
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
         }
 
         guard let recorder = audioRecorder, recorder.isRecording else {
@@ -160,7 +193,56 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
         audioRecorder = nil
         recordingURL = nil
         recordingStartTime = nil
+        clearInProgressMarker()
         return (url, duration)
+    }
+
+    // MARK: - Crash Recovery Helpers
+
+    private func markRecordingInProgress(_ fileName: String) {
+        UserDefaults.standard.set(fileName, forKey: inProgressKey)
+    }
+
+    private func clearInProgressMarker() {
+        UserDefaults.standard.removeObject(forKey: inProgressKey)
+    }
+
+    /// Check for a recoverable recording left behind by a crash.
+    /// Returns the file URL and duration if a valid orphaned file is found.
+    func checkForRecoverableRecording() -> (URL, TimeInterval)? {
+        guard let fileName = UserDefaults.standard.string(forKey: inProgressKey) else { return nil }
+        // Don't recover if we're currently recording
+        guard !isRecording else { return nil }
+
+        let url = WatchRecordingItem.documentsDirectory.appendingPathComponent(fileName)
+
+        // Verify file exists and has meaningful content (>1KB)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64,
+              size > 1024 else {
+            // File doesn't exist or is too small — clean up
+            clearInProgressMarker()
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+
+        // Read duration via AVAudioPlayer
+        guard let player = try? AVAudioPlayer(contentsOf: url),
+              player.duration > 0.5 else {
+            clearInProgressMarker()
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+
+        return (url, player.duration)
+    }
+
+    /// Discard an orphaned recording file and clear the marker.
+    func dismissRecoverableRecording() {
+        guard let fileName = UserDefaults.standard.string(forKey: inProgressKey) else { return }
+        let url = WatchRecordingItem.documentsDirectory.appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: url)
+        clearInProgressMarker()
     }
 
     // MARK: - Consolidated Timer (duration + metering)
@@ -201,6 +283,9 @@ class WatchRecorderManager: NSObject, AVAudioRecorderDelegate {
     // MARK: - AVAudioRecorderDelegate
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        if flag {
+            clearInProgressMarker()
+        }
         if !flag {
             #if DEBUG
             print("WatchRecorder: Recording finished unsuccessfully")

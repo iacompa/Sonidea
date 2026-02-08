@@ -212,7 +212,9 @@ final class TranscriptionManager {
             }
 
             // Return the first result and cancel the other task
-            let result = try await group.next()!
+            guard let result = try await group.next() else {
+                throw TranscriptionError.timeout
+            }
             group.cancelAll()
             return result
         }

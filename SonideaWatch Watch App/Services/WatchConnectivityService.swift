@@ -34,8 +34,21 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
 
     var onThemeUpdate: ((String) -> Void)?
     var onTransferConfirmed: ((UUID) -> Void)?
+    /// Callback invoked when the phone becomes reachable, allowing callers to supply
+    /// the current recordings list for retry.
+    var onReachable: (() -> Void)?
 
     private let pendingTransfersKey = "pendingTransfers"
+
+    /// Continuations waiting for activation to complete.
+    private var activationContinuations: [CheckedContinuation<Void, Error>] = []
+    /// Tracks whether activation has completed successfully.
+    private var isActivated = false
+    /// Stores the activation error if activation failed.
+    private var activationError: Error?
+
+    /// Recordings queued for transfer when the session was not reachable.
+    private var failedTransferQueue: [WatchRecordingItem] = []
 
     private override init() {
         super.init()
@@ -47,6 +60,17 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
+    }
+
+    /// Waits until WCSession activation completes. Safe to call multiple times;
+    /// returns immediately if already activated.
+    func waitForActivation() async throws {
+        if isActivated { return }
+        if let error = activationError { throw error }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            activationContinuations.append(continuation)
+        }
     }
 
     // MARK: - Pending Transfers
@@ -90,6 +114,10 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
 
         guard WCSession.default.activationState == .activated,
               WCSession.default.isReachable else {
+            // Queue for retry when session becomes reachable
+            if !failedTransferQueue.contains(where: { $0.id == recording.id }) {
+                failedTransferQueue.append(recording)
+            }
             #if DEBUG
             print("WatchConnectivity: Session not activated or phone not reachable, queued for retry")
             #endif
@@ -130,6 +158,21 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
             #if DEBUG
             print("WatchConnectivity: Activation error: \(error)")
             #endif
+            activationError = error
+            // Resume all waiting continuations with the error
+            let continuations = activationContinuations
+            activationContinuations.removeAll()
+            for continuation in continuations {
+                continuation.resume(throwing: error)
+            }
+        } else if activationState == .activated {
+            isActivated = true
+            // Resume all waiting continuations successfully
+            let continuations = activationContinuations
+            activationContinuations.removeAll()
+            for continuation in continuations {
+                continuation.resume()
+            }
         }
 
         // Check for any pending theme from applicationContext
@@ -141,6 +184,26 @@ class WatchConnectivityService: NSObject, WCSessionDelegate {
 
         // Check for transfer confirmations
         checkForConfirmations(in: session.receivedApplicationContext)
+    }
+
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        guard session.isReachable else { return }
+
+        #if DEBUG
+        print("WatchConnectivity: Phone became reachable, retrying \(failedTransferQueue.count) queued transfers")
+        #endif
+
+        // Retry all queued transfers
+        let queued = failedTransferQueue
+        failedTransferQueue.removeAll()
+        for recording in queued {
+            performTransfer(recording)
+        }
+
+        // Notify callers so they can retry pending transfers with full recordings list
+        DispatchQueue.main.async { [weak self] in
+            self?.onReachable?()
+        }
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {

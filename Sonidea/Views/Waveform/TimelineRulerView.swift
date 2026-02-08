@@ -29,7 +29,7 @@ func chooseMajorStep(pixelsPerSecond: CGFloat, minLabelWidth: CGFloat = 65) -> T
             return spacing
         }
     }
-    return candidates.last!
+    return candidates.last ?? 3600
 }
 
 /// Format a time label depending on the major step size.

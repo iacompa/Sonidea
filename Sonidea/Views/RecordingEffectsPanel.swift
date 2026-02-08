@@ -50,6 +50,7 @@ struct RecordingEffectsPanel: View {
                             }
                             Slider(value: $effects.compressorThreshold, in: -40...0, step: 1)
                                 .tint(palette.accent)
+                                .accessibilityLabel("Threshold")
 
                             HStack {
                                 Text("Ratio")
@@ -61,6 +62,7 @@ struct RecordingEffectsPanel: View {
                             }
                             Slider(value: $effects.compressorRatio, in: 1...20, step: 0.5)
                                 .tint(palette.accent)
+                                .accessibilityLabel("Ratio")
                         }
                     } header: {
                         Label("Compressor", systemImage: "waveform.badge.minus")
@@ -74,6 +76,7 @@ struct RecordingEffectsPanel: View {
                                 .foregroundColor(palette.textSecondary)
                             Slider(value: $effects.monitorVolume, in: 0...1.5, step: 0.05)
                                 .tint(palette.accent)
+                                .accessibilityLabel("Monitor Volume")
                             Image(systemName: "speaker.wave.3.fill")
                                 .font(.caption)
                                 .foregroundColor(palette.textSecondary)

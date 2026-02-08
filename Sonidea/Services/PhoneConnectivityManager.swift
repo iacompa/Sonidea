@@ -111,7 +111,13 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, let appState = self.appState else {
                 // Cleanup stable copy if we can't proceed
-                try? FileManager.default.removeItem(at: stableURL)
+                do {
+                    try FileManager.default.removeItem(at: stableURL)
+                } catch {
+                    #if DEBUG
+                    print("PhoneConnectivity: Failed to clean up stable copy (no appState): \(error)")
+                    #endif
+                }
                 return
             }
 
@@ -122,7 +128,13 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
                 #if DEBUG
                 print("PhoneConnectivity: Duplicate recording \(uuidString), skipping")
                 #endif
-                try? FileManager.default.removeItem(at: stableURL)
+                do {
+                    try FileManager.default.removeItem(at: stableURL)
+                } catch {
+                    #if DEBUG
+                    print("PhoneConnectivity: Failed to clean up duplicate stable copy: \(error)")
+                    #endif
+                }
                 return
             }
 
@@ -132,7 +144,13 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
                 #if DEBUG
                 print("PhoneConnectivity: Watch sync requires Pro plan and Watch Sync enabled in settings")
                 #endif
-                try? FileManager.default.removeItem(at: stableURL)
+                do {
+                    try FileManager.default.removeItem(at: stableURL)
+                } catch {
+                    #if DEBUG
+                    print("PhoneConnectivity: Failed to clean up stable copy (sync disabled): \(error)")
+                    #endif
+                }
                 return
             }
 
@@ -170,7 +188,13 @@ class PhoneConnectivityManager: NSObject, WCSessionDelegate {
             }
 
             // Clean up the stable copy (importRecording copies into its own location)
-            try? FileManager.default.removeItem(at: stableURL)
+            do {
+                try FileManager.default.removeItem(at: stableURL)
+            } catch {
+                #if DEBUG
+                print("PhoneConnectivity: Failed to clean up stable copy after import: \(error)")
+                #endif
+            }
         }
     }
 }

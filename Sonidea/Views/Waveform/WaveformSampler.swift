@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CryptoKit
 import Foundation
 
 /// Waveform sample pair: min and max values for a time bucket
@@ -26,6 +27,10 @@ final class WaveformSampler {
     private var accessOrder: [String] = []
     private var saveDebounceTask: Task<Void, Never>?
     private var saveMinMaxDebounceTask: Task<Void, Never>?
+
+    /// Reverse mapping: URL absoluteString -> Set of SHA-256 cache keys derived from that URL.
+    /// Needed because SHA-256 keys can't be prefix-matched for eviction.
+    private var urlToCacheKeys: [String: Set<String>] = [:]
 
     // Resampling cache to avoid redundant recalculations during rapid zoom/scroll
     private var lastResampleKey: String?
@@ -51,15 +56,26 @@ final class WaveformSampler {
 
     // MARK: - Cache Key
 
-    /// Build a cache key that includes the file's modification date.
+    /// Build a cache key using SHA-256 of (URL + modification date).
+    /// SHA-256 is collision-resistant even for similar file paths (e.g. UUIDs differing by one char).
     /// When the file is edited (trim, fade, normalize, etc.), the modification date changes,
     /// so the old cache entry is automatically missed and fresh samples are extracted.
     private func cacheKey(for url: URL) -> String {
+        var raw = url.absoluteString
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let modDate = attrs[.modificationDate] as? Date {
-            return "\(url.absoluteString)|\(modDate.timeIntervalSince1970)"
+            raw += "|\(modDate.timeIntervalSince1970)"
         }
-        return url.absoluteString
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Register a SHA-256 cache key in the reverse lookup for later eviction by URL.
+    private func registerCacheKey(_ key: String, for url: URL) {
+        let urlString = url.absoluteString
+        var keys = urlToCacheKeys[urlString] ?? []
+        keys.insert(key)
+        urlToCacheKeys[urlString] = keys
     }
 
     // MARK: - LRU Helpers
@@ -74,6 +90,15 @@ final class WaveformSampler {
             accessOrder.removeFirst()
             cache.removeValue(forKey: oldest)
             minMaxCache.removeValue(forKey: oldest)
+            // Clean up reverse map: remove evicted key from all URL entries
+            for (urlString, var keys) in urlToCacheKeys {
+                keys.remove(oldest)
+                if keys.isEmpty {
+                    urlToCacheKeys.removeValue(forKey: urlString)
+                } else {
+                    urlToCacheKeys[urlString] = keys
+                }
+            }
         }
     }
 
@@ -81,6 +106,7 @@ final class WaveformSampler {
 
     func samples(for url: URL, targetSampleCount: Int = 200) async -> [Float] {
         let key = cacheKey(for: url)
+        registerCacheKey(key, for: url)
 
         // Check memory cache first
         if let cached = cache[key] {
@@ -117,6 +143,7 @@ final class WaveformSampler {
     /// Get min/max sample pairs for true waveform rendering
     func minMaxSamples(for url: URL, targetSampleCount: Int = 200) async -> [WaveformSamplePair] {
         let key = cacheKey(for: url)
+        registerCacheKey(key, for: url)
 
         // Check memory cache first
         if let cached = minMaxCache[key] {
@@ -151,13 +178,14 @@ final class WaveformSampler {
     }
 
     func clearCache(for url: URL) {
-        let prefix = url.absoluteString
-        let keysToRemove = cache.keys.filter { $0 == prefix || $0.hasPrefix("\(prefix)|") }
+        let urlString = url.absoluteString
+        let keysToRemove = urlToCacheKeys[urlString] ?? []
         for key in keysToRemove {
             cache.removeValue(forKey: key)
             minMaxCache.removeValue(forKey: key)
             accessOrder.removeAll { $0 == key }
         }
+        urlToCacheKeys.removeValue(forKey: urlString)
         saveCache()
         saveMinMaxCache()
     }
@@ -165,8 +193,149 @@ final class WaveformSampler {
     func clearAllCache() {
         cache.removeAll()
         minMaxCache.removeAll()
+        urlToCacheKeys.removeAll()
         saveCache()
         saveMinMaxCache()
+    }
+
+    // MARK: - Incremental Waveform Update (Trim Optimization)
+
+    /// Incrementally update waveform for a trim operation by slicing the cached array
+    /// instead of re-extracting from disk. Falls back to full extraction if no cache exists.
+    ///
+    /// - Parameters:
+    ///   - oldURL: The URL of the audio file before the trim
+    ///   - newURL: The URL of the trimmed audio file
+    ///   - originalDuration: Duration of the original audio in seconds
+    ///   - trimStart: Start time of the kept region in seconds
+    ///   - trimEnd: End time of the kept region in seconds
+    ///   - targetSampleCount: Number of samples to return (resampled from storage)
+    /// - Returns: Resampled waveform array for the trimmed region
+    func samplesAfterTrim(
+        oldURL: URL,
+        newURL: URL,
+        originalDuration: TimeInterval,
+        trimStart: TimeInterval,
+        trimEnd: TimeInterval,
+        targetSampleCount: Int = 200
+    ) async -> [Float] {
+        // Try to find cached samples for the old URL (any mod-date variant)
+        let oldSamples = findCachedSamples(for: oldURL)
+
+        guard let oldSamples, !oldSamples.isEmpty, originalDuration > 0 else {
+            // No cache available — fall back to full extraction from the new file
+            return await samples(for: newURL, targetSampleCount: targetSampleCount)
+        }
+
+        // Compute slice indices proportional to time
+        let startFraction = max(0, trimStart / originalDuration)
+        let endFraction = min(1, trimEnd / originalDuration)
+        let startIndex = Int(startFraction * Double(oldSamples.count))
+        let endIndex = min(Int(endFraction * Double(oldSamples.count)), oldSamples.count)
+
+        guard startIndex < endIndex else {
+            return await samples(for: newURL, targetSampleCount: targetSampleCount)
+        }
+
+        let sliced = Array(oldSamples[startIndex..<endIndex])
+
+        // Re-normalize the sliced region to 0...1
+        let maxValue = sliced.max() ?? 1.0
+        let normalized: [Float]
+        if maxValue > 0 {
+            normalized = sliced.map { $0 / maxValue }
+        } else {
+            normalized = sliced
+        }
+
+        // Cache the trimmed result under the new URL's key
+        let newKey = cacheKey(for: newURL)
+        registerCacheKey(newKey, for: newURL)
+        cache[newKey] = normalized
+        touchCache(newKey)
+        evictIfNeeded()
+        saveCache()
+
+        let result = resample(normalized, to: targetSampleCount)
+        lastResampleKey = newKey
+        lastResampleTarget = targetSampleCount
+        lastResampleResult = result
+        return result
+    }
+
+    /// Incrementally update min/max waveform for a trim operation.
+    func minMaxSamplesAfterTrim(
+        oldURL: URL,
+        newURL: URL,
+        originalDuration: TimeInterval,
+        trimStart: TimeInterval,
+        trimEnd: TimeInterval,
+        targetSampleCount: Int = 200
+    ) async -> [WaveformSamplePair] {
+        let oldSamples = findCachedMinMaxSamples(for: oldURL)
+
+        guard let oldSamples, !oldSamples.isEmpty, originalDuration > 0 else {
+            return await minMaxSamples(for: newURL, targetSampleCount: targetSampleCount)
+        }
+
+        let startFraction = max(0, trimStart / originalDuration)
+        let endFraction = min(1, trimEnd / originalDuration)
+        let startIndex = Int(startFraction * Double(oldSamples.count))
+        let endIndex = min(Int(endFraction * Double(oldSamples.count)), oldSamples.count)
+
+        guard startIndex < endIndex else {
+            return await minMaxSamples(for: newURL, targetSampleCount: targetSampleCount)
+        }
+
+        let sliced = Array(oldSamples[startIndex..<endIndex])
+
+        // Re-normalize to -1...1
+        var peakAmplitude: Float = 0.001
+        for pair in sliced {
+            peakAmplitude = Swift.max(peakAmplitude, abs(pair.min), abs(pair.max))
+        }
+        let normalized = sliced.map { pair in
+            WaveformSamplePair(min: pair.min / peakAmplitude, max: pair.max / peakAmplitude)
+        }
+
+        let newKey = cacheKey(for: newURL)
+        registerCacheKey(newKey, for: newURL)
+        minMaxCache[newKey] = normalized
+        touchCache(newKey)
+        evictIfNeeded()
+        saveMinMaxCache()
+
+        let result = resampleMinMax(normalized, to: targetSampleCount)
+        lastResampleMinMaxKey = newKey
+        lastResampleMinMaxTarget = targetSampleCount
+        lastResampleMinMaxResult = result
+        return result
+    }
+
+    /// Find cached envelope samples for a URL regardless of modification date.
+    /// Searches all cache keys associated with this URL via the reverse lookup.
+    private func findCachedSamples(for url: URL) -> [Float]? {
+        let urlString = url.absoluteString
+        guard let keys = urlToCacheKeys[urlString] else { return nil }
+        // Return the most recently accessed entry
+        for key in accessOrder.reversed() {
+            if keys.contains(key), let samples = cache[key] {
+                return samples
+            }
+        }
+        return nil
+    }
+
+    /// Find cached min/max samples for a URL regardless of modification date.
+    private func findCachedMinMaxSamples(for url: URL) -> [WaveformSamplePair]? {
+        let urlString = url.absoluteString
+        guard let keys = urlToCacheKeys[urlString] else { return nil }
+        for key in accessOrder.reversed() {
+            if keys.contains(key), let samples = minMaxCache[key] {
+                return samples
+            }
+        }
+        return nil
     }
 
     // MARK: - Sample Extraction
@@ -329,7 +498,7 @@ final class WaveformSampler {
             result.reserveCapacity(targetCount)
 
             for i in 0..<targetCount {
-                let position = Float(i) * Float(samples.count - 1) / Float(targetCount - 1)
+                let position = Float(i) * Float(samples.count - 1) / Float(max(1, targetCount - 1))
                 let lowerIndex = Int(position)
                 let upperIndex = min(lowerIndex + 1, samples.count - 1)
                 let fraction = position - Float(lowerIndex)
@@ -373,7 +542,7 @@ final class WaveformSampler {
             result.reserveCapacity(targetCount)
 
             for i in 0..<targetCount {
-                let position = Float(i) * Float(samples.count - 1) / Float(targetCount - 1)
+                let position = Float(i) * Float(samples.count - 1) / Float(max(1, targetCount - 1))
                 let lowerIndex = Int(position)
                 let upperIndex = min(lowerIndex + 1, samples.count - 1)
                 let fraction = position - Float(lowerIndex)
@@ -448,19 +617,32 @@ final class WaveformSampler {
         }
     }
 
+    /// SHA-256 hash a raw string (used during cache loading to migrate old keys).
+    private static func sha256Key(for raw: String) -> String {
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private func loadCache() {
-        // Load envelope cache from Caches directory
-        // Keys are now "url|modDate" strings; legacy "url" keys are migrated on load
+        // Load envelope cache from Caches directory.
+        // Keys may be legacy "url|modDate" raw strings or SHA-256 hex strings.
+        // Legacy keys are re-hashed; SHA-256 keys (64 hex chars) are kept as-is.
         let envelopeFile = Self.cacheDirectory.appendingPathComponent("envelope.json")
         if let data = try? Data(contentsOf: envelopeFile),
            let stringKeyedCache = try? JSONDecoder().decode([String: [Float]].self, from: data) {
             for (key, samples) in stringKeyedCache {
-                if key.contains("|") {
-                    // New format: already includes modification date
+                if key.count == 64, key.allSatisfy({ $0.isHexDigit }) {
+                    // Already a SHA-256 key
                     cache[key] = samples
+                } else if key.contains("|") {
+                    // Legacy "url|modDate" format — re-hash to SHA-256
+                    let newKey = Self.sha256Key(for: key)
+                    cache[newKey] = samples
                 } else if let url = URL(string: key) {
-                    // Legacy format: bare URL string — re-key with current mod date
-                    cache[cacheKey(for: url)] = samples
+                    // Legacy bare URL — re-key with current mod date then hash
+                    let newKey = cacheKey(for: url)
+                    cache[newKey] = samples
+                    registerCacheKey(newKey, for: url)
                 }
             }
         }
@@ -470,12 +652,18 @@ final class WaveformSampler {
         if let data = try? Data(contentsOf: minMaxFile),
            let stringKeyedCache = try? JSONDecoder().decode([String: [WaveformSamplePair]].self, from: data) {
             for (key, samples) in stringKeyedCache {
-                if key.contains("|") {
-                    // New format: already includes modification date
+                if key.count == 64, key.allSatisfy({ $0.isHexDigit }) {
+                    // Already a SHA-256 key
                     minMaxCache[key] = samples
+                } else if key.contains("|") {
+                    // Legacy "url|modDate" format — re-hash to SHA-256
+                    let newKey = Self.sha256Key(for: key)
+                    minMaxCache[newKey] = samples
                 } else if let url = URL(string: key) {
-                    // Legacy format: bare URL string — re-key with current mod date
-                    minMaxCache[cacheKey(for: url)] = samples
+                    // Legacy bare URL — re-key with current mod date then hash
+                    let newKey = cacheKey(for: url)
+                    minMaxCache[newKey] = samples
+                    registerCacheKey(newKey, for: url)
                 }
             }
         }

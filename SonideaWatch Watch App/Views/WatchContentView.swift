@@ -45,7 +45,12 @@ struct WatchContentView: View {
                 x: containerSize.width / 2,
                 y: containerSize.height - radius - 12
             )
-            let buttonPosition = appState.recordButtonPosition ?? defaultPosition
+            let rawPosition = appState.recordButtonPosition ?? defaultPosition
+            // Clamp to visible bounds so the button never ends up off screen
+            let buttonPosition = CGPoint(
+                x: min(max(rawPosition.x, minX), maxX),
+                y: min(max(rawPosition.y, minY), maxY)
+            )
 
             ZStack {
                 // Layer 1: Main content
@@ -146,6 +151,28 @@ struct WatchContentView: View {
                     handleRecordTap()
                 }
             }
+
+            // Check for crash-recovered recording
+            if let (url, duration) = recorder.checkForRecoverableRecording() {
+                appState.crashRecoveryURL = url
+                appState.crashRecoveryDuration = duration
+                appState.showCrashRecoveryAlert = true
+            }
+        }
+        .alert("Recording Found", isPresented: Bindable(appState).showCrashRecoveryAlert) {
+            Button("Save") {
+                if let url = appState.crashRecoveryURL {
+                    appState.recoverCrashedRecording(from: url, duration: appState.crashRecoveryDuration)
+                    recorder.dismissRecoverableRecording()
+                }
+            }
+            Button("Discard", role: .destructive) {
+                recorder.dismissRecoverableRecording()
+            }
+        } message: {
+            let minutes = Int(appState.crashRecoveryDuration) / 60
+            let seconds = Int(appState.crashRecoveryDuration) % 60
+            Text("An unsaved recording (\(minutes):\(String(format: "%02d", seconds))) was found. Would you like to save it?")
         }
     }
 
@@ -159,6 +186,7 @@ struct WatchContentView: View {
                     .font(.system(size: 38, weight: .light, design: .monospaced))
                     .foregroundColor(palette.liveRecordingAccent)
                     .contentTransition(.numericText())
+                    .accessibilityLabel("Recording duration")
                     .padding(.top, 6)
 
                 // Waveform — right below timer
@@ -345,6 +373,7 @@ struct WatchContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: recorder.isRecording)
+        .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start recording")
     }
 
     // MARK: - Reset Pill

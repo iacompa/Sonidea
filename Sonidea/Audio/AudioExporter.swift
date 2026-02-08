@@ -703,9 +703,8 @@ final class AudioExporter {
             let timeRange = CMTimeRange(start: chapterStart, end: chapterEnd)
 
             // Chapter title
-            let title = marker.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? marker.label!
-                : "Chapter \(index + 1)"
+            let trimmedLabel = marker.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = (trimmedLabel?.isEmpty == false) ? (trimmedLabel ?? "Chapter \(index + 1)") : "Chapter \(index + 1)"
 
             // Create metadata item in the QuickTime Metadata keyspace ("mdta")
             // matching the format description's key: "com.apple.quicktime.chapter"

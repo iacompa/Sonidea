@@ -124,7 +124,7 @@ struct SupportView: View {
                     .foregroundColor(palette.textPrimary)
             }
             if let endDate = manager.trialEndDate {
-                let daysLeft = max(0, Calendar.current.dateComponents([.day], from: Date(), to: endDate).day ?? 0)
+                let daysLeft = max(0, Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: endDate)).day ?? 0)
                 Text(daysLeft == 1 ? "1 day remaining" : "\(daysLeft) days remaining")
                     .font(.caption)
                     .foregroundColor(palette.textSecondary)

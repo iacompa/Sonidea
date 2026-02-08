@@ -144,7 +144,7 @@ final class TrialNudgeManager {
     func nextNudgeToShow(trialStartDate: Date?, now: Date = Date()) -> TrialNudge? {
         guard let start = trialStartDate else { return nil }
 
-        let trialDay = Calendar.current.dateComponents([.day], from: start, to: now).day ?? 0
+        let trialDay = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: start), to: Calendar.current.startOfDay(for: now)).day ?? 0
 
         // Enforce max 1 nudge per day
         if let lastShown = lastNudgeShownDate,

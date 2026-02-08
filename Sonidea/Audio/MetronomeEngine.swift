@@ -148,12 +148,24 @@ final class MetronomeEngine {
         // connection format. Without this, the source node uses the engine's
         // default format (potentially stereo at a different sample rate),
         // which can cause silence when connected with a mismatched format.
-        let renderFormat = AVAudioFormat(
+        guard let renderFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
             channels: 1,
             interleaved: false
-        )!
+        ) else {
+            print("[MetronomeEngine] createSourceNode: failed to create AVAudioFormat")
+            let node = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+                let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
+                for buffer in ablPointer {
+                    guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    for i in 0..<Int(frameCount) { data[i] = 0 }
+                }
+                return noErr
+            }
+            self.sourceNode = node
+            return node
+        }
 
         let beatPtr = self.currentBeatPtr
 
@@ -388,12 +400,15 @@ final class MetronomeEngine {
             let clickNode = createSourceNode(sampleRate: sr)
 
             engine.attach(clickNode)
-            let monoFormat = AVAudioFormat(
+            guard let monoFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: sr,
                 channels: 1,
                 interleaved: false
-            )!
+            ) else {
+                print("[MetronomeEngine] startPreview: failed to create AVAudioFormat")
+                return false
+            }
             engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
 
             try engine.start()

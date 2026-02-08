@@ -114,6 +114,18 @@ final class iCloudSyncManager {
     private static let foregroundSyncDebounceInterval: TimeInterval = 30
     private var lastForegroundSyncDate: Date = .distantPast
 
+    // MARK: - Progress Throttling
+
+    /// Timer-based throttle for UI status updates — fires at most every 0.5 seconds
+    private var progressThrottleTimer: Timer?
+    private var pendingStatusUpdate: SyncStatusState?
+    private static let progressThrottleInterval: TimeInterval = 0.5
+
+    // MARK: - Status Persistence Keys
+
+    private static let persistedStatusKey = "iCloudSync.persistedStatus"
+    private static let persistedStatusMessageKey = "iCloudSync.persistedStatusMessage"
+
     // MARK: - iCloud Availability
 
     var iCloudAvailable: Bool {
@@ -123,6 +135,8 @@ final class iCloudSyncManager {
     // MARK: - Initialization
 
     init() {
+        // Restore persisted sync status from previous session (crash recovery)
+        restorePersistedStatus()
         // Observe CloudKit engine status changes
         observeCloudKitStatus()
     }
@@ -137,6 +151,9 @@ final class iCloudSyncManager {
             // Re-register observation and apply updated status on next main actor turn
             Task { @MainActor [weak self] in
                 self?.updateStatusFromEngine()
+                // Delay before re-registering to prevent recursive Task stacking
+                // when property changes fire rapidly during sync
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 self?.observeCloudKitStatus()
             }
         }
@@ -151,6 +168,7 @@ final class iCloudSyncManager {
         logger.info("Enabling iCloud sync")
         isEnabled = true
         status = .initializing
+        persistStatus(.initializing)
 
         // Use CloudKit as primary sync
         await cloudKitEngine.enable()
@@ -163,9 +181,11 @@ final class iCloudSyncManager {
     func disableSync() {
         logger.info("Disabling iCloud sync")
         isEnabled = false
+        invalidateProgressThrottleTimer()
         cloudKitEngine.disable()
         status = .disabled
         syncError = nil
+        persistStatus(.disabled)
     }
 
     /// Perform sync now
@@ -431,10 +451,38 @@ final class iCloudSyncManager {
     // MARK: - Status Updates
 
     private func updateStatusFromEngine() {
-        // Convert CloudSyncStatus to SyncStatusState
-        status = convertStatus(cloudKitEngine.status)
+        let newStatus = convertStatus(cloudKitEngine.status)
         lastSyncDate = cloudKitEngine.lastSyncDate
         uploadProgress = cloudKitEngine.uploadProgress
+
+        // Throttle .syncing progress updates to avoid excessive UI redraws
+        if case .syncing = newStatus {
+            pendingStatusUpdate = newStatus
+            if progressThrottleTimer == nil {
+                // Fire immediately for the first update, then throttle subsequent ones
+                status = newStatus
+                progressThrottleTimer = Timer.scheduledTimer(withTimeInterval: Self.progressThrottleInterval, repeats: true) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        if let pending = self.pendingStatusUpdate {
+                            self.status = pending
+                            self.pendingStatusUpdate = nil
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-syncing status — apply immediately and stop throttle timer
+            invalidateProgressThrottleTimer()
+            status = newStatus
+            persistStatus(newStatus)
+        }
+    }
+
+    private func invalidateProgressThrottleTimer() {
+        progressThrottleTimer?.invalidate()
+        progressThrottleTimer = nil
+        pendingStatusUpdate = nil
     }
 
     private func convertStatus(_ cloudStatus: CloudSyncStatus) -> SyncStatusState {
@@ -453,6 +501,67 @@ final class iCloudSyncManager {
             return .accountUnavailable
         case .networkUnavailable:
             return .networkUnavailable
+        }
+    }
+
+    // MARK: - Status Persistence
+
+    /// Persist significant sync status to UserDefaults so the UI can show the correct status after a crash.
+    /// Only persists terminal states (.synced, .error, .accountUnavailable, .networkUnavailable).
+    /// Transient states (.syncing, .initializing) are persisted as .error("Sync interrupted")
+    /// since a crash during sync means the sync did not complete.
+    private func persistStatus(_ newStatus: SyncStatusState) {
+        let defaults = UserDefaults.standard
+        switch newStatus {
+        case .synced:
+            defaults.set("synced", forKey: Self.persistedStatusKey)
+            defaults.removeObject(forKey: Self.persistedStatusMessageKey)
+        case .error(let message):
+            defaults.set("error", forKey: Self.persistedStatusKey)
+            defaults.set(message, forKey: Self.persistedStatusMessageKey)
+        case .accountUnavailable:
+            defaults.set("accountUnavailable", forKey: Self.persistedStatusKey)
+            defaults.removeObject(forKey: Self.persistedStatusMessageKey)
+        case .networkUnavailable:
+            defaults.set("networkUnavailable", forKey: Self.persistedStatusKey)
+            defaults.removeObject(forKey: Self.persistedStatusMessageKey)
+        case .disabled:
+            defaults.set("disabled", forKey: Self.persistedStatusKey)
+            defaults.removeObject(forKey: Self.persistedStatusMessageKey)
+        case .initializing, .syncing:
+            // Transient states — persist as "syncing" so we know sync was in progress
+            defaults.set("syncing", forKey: Self.persistedStatusKey)
+            defaults.removeObject(forKey: Self.persistedStatusMessageKey)
+        }
+    }
+
+    /// Restore sync status from UserDefaults on launch.
+    /// If the app crashed during sync, show an error indicating sync was interrupted.
+    private func restorePersistedStatus() {
+        let defaults = UserDefaults.standard
+        guard let savedStatus = defaults.string(forKey: Self.persistedStatusKey) else { return }
+
+        switch savedStatus {
+        case "synced":
+            // Restore last sync date if available
+            if let date = defaults.object(forKey: "cloudkit.lastSync") as? Date {
+                status = .synced(date)
+                lastSyncDate = date
+            }
+        case "error":
+            let message = defaults.string(forKey: Self.persistedStatusMessageKey) ?? "Previous sync failed"
+            status = .error(message)
+        case "accountUnavailable":
+            status = .accountUnavailable
+        case "networkUnavailable":
+            status = .networkUnavailable
+        case "syncing":
+            // App crashed or was terminated during sync — show interrupted error
+            status = .error("Sync interrupted — will retry")
+        case "disabled":
+            status = .disabled
+        default:
+            break
         }
     }
 }

@@ -701,18 +701,18 @@ enum CardDateFormatter {
 enum CardGradientGenerator {
     /// Predefined gradient palettes that look good together
     private static let palettes: [[Color]] = [
-        [Color(hex: "#667eea")!, Color(hex: "#764ba2")!],  // Purple-blue
-        [Color(hex: "#f093fb")!, Color(hex: "#f5576c")!],  // Pink-red
-        [Color(hex: "#4facfe")!, Color(hex: "#00f2fe")!],  // Blue-cyan
-        [Color(hex: "#43e97b")!, Color(hex: "#38f9d7")!],  // Green-teal
-        [Color(hex: "#fa709a")!, Color(hex: "#fee140")!],  // Pink-yellow
-        [Color(hex: "#a18cd1")!, Color(hex: "#fbc2eb")!],  // Lavender-pink
-        [Color(hex: "#ff9a9e")!, Color(hex: "#fecfef")!],  // Coral-pink
-        [Color(hex: "#a1c4fd")!, Color(hex: "#c2e9fb")!],  // Sky blue
-        [Color(hex: "#d299c2")!, Color(hex: "#fef9d7")!],  // Mauve-cream
-        [Color(hex: "#89f7fe")!, Color(hex: "#66a6ff")!],  // Aqua-blue
-        [Color(hex: "#fddb92")!, Color(hex: "#d1fdff")!],  // Yellow-mint
-        [Color(hex: "#9890e3")!, Color(hex: "#b1f4cf")!],  // Purple-mint
+        [Color(hex: "#667eea") ?? .gray, Color(hex: "#764ba2") ?? .gray],  // Purple-blue
+        [Color(hex: "#f093fb") ?? .gray, Color(hex: "#f5576c") ?? .gray],  // Pink-red
+        [Color(hex: "#4facfe") ?? .gray, Color(hex: "#00f2fe") ?? .gray],  // Blue-cyan
+        [Color(hex: "#43e97b") ?? .gray, Color(hex: "#38f9d7") ?? .gray],  // Green-teal
+        [Color(hex: "#fa709a") ?? .gray, Color(hex: "#fee140") ?? .gray],  // Pink-yellow
+        [Color(hex: "#a18cd1") ?? .gray, Color(hex: "#fbc2eb") ?? .gray],  // Lavender-pink
+        [Color(hex: "#ff9a9e") ?? .gray, Color(hex: "#fecfef") ?? .gray],  // Coral-pink
+        [Color(hex: "#a1c4fd") ?? .gray, Color(hex: "#c2e9fb") ?? .gray],  // Sky blue
+        [Color(hex: "#d299c2") ?? .gray, Color(hex: "#fef9d7") ?? .gray],  // Mauve-cream
+        [Color(hex: "#89f7fe") ?? .gray, Color(hex: "#66a6ff") ?? .gray],  // Aqua-blue
+        [Color(hex: "#fddb92") ?? .gray, Color(hex: "#d1fdff") ?? .gray],  // Yellow-mint
+        [Color(hex: "#9890e3") ?? .gray, Color(hex: "#b1f4cf") ?? .gray],  // Purple-mint
     ]
 
     /// Generate a deterministic gradient based on recording ID

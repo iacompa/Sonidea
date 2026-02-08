@@ -126,6 +126,7 @@ final class LocationManager: NSObject {
 
     /// Cache for reverse geocode results keyed by rounded coordinate to avoid redundant API calls
     private var reverseGeocodeCache: [String: String] = [:]
+    private static let maxCacheSize = 200
 
     func reverseGeocode(_ coordinate: CLLocationCoordinate2D) async -> String? {
         // Use rounded coordinates as cache key (~100m precision)
@@ -148,6 +149,11 @@ final class LocationManager: NSObject {
             let result = labelParts.isEmpty ? nil : labelParts.joined(separator: ", ")
             if let result {
                 reverseGeocodeCache[cacheKey] = result
+                // Evict cache if it exceeds max size to prevent unbounded memory growth
+                if reverseGeocodeCache.count > Self.maxCacheSize {
+                    reverseGeocodeCache.removeAll()
+                    reverseGeocodeCache[cacheKey] = result
+                }
             }
             return result
         } catch {

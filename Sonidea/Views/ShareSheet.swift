@@ -18,8 +18,26 @@ struct ShareSheet: UIViewControllerRepresentable {
             applicationActivities: nil
         )
         controller.excludedActivityTypes = excludedActivityTypes
+
+        // iPad safety: configure popover source so UIActivityViewController
+        // doesn't crash if presented outside SwiftUI's .sheet() context
+        if let popover = controller.popoverPresentationController {
+            popover.permittedArrowDirections = []
+        }
+
         return controller
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        if let popover = uiViewController.popoverPresentationController,
+           popover.sourceView == nil {
+            popover.sourceView = uiViewController.view
+            popover.sourceRect = CGRect(
+                x: uiViewController.view.bounds.midX,
+                y: uiViewController.view.bounds.midY,
+                width: 0, height: 0
+            )
+            popover.permittedArrowDirections = []
+        }
+    }
 }

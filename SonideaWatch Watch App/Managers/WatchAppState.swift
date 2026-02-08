@@ -20,6 +20,20 @@ class WatchAppState {
     /// Number of recordings waiting to be confirmed by the phone
     var pendingTransferCount: Int = 0
 
+    // MARK: - Crash Recovery
+
+    var showCrashRecoveryAlert = false
+    var crashRecoveryURL: URL?
+    var crashRecoveryDuration: TimeInterval = 0
+
+    /// Recover a crashed recording: create a WatchRecordingItem, add it, and trigger transfer.
+    func recoverCrashedRecording(from url: URL, duration: TimeInterval) {
+        let title = generateTitle()
+        let item = WatchRecordingItem(fileURL: url, duration: duration, title: title)
+        addRecording(item)
+        WatchConnectivityService.shared.transferRecording(item)
+    }
+
     // MARK: - Record Button Position
 
     var recordButtonPosition: CGPoint?

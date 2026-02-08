@@ -162,6 +162,7 @@ struct OverdubSessionView: View {
             } message: {
                 Text("A bounced mix already exists for this recording. This will replace it.")
             }
+            .interactiveDismissDisabled(isRecording || recordedLayerURL != nil)
             .onAppear {
                 setupSession()
             }
@@ -549,6 +550,7 @@ struct OverdubSessionView: View {
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isRecording)
 
                     // Sync adjust toggle
                     Button {
@@ -1100,6 +1102,7 @@ struct OverdubSessionView: View {
     // MARK: - Loop Toggle Actions
 
     private func toggleLoopForBase() {
+        guard !isRecording else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         // Create overdub group if it doesn't exist yet
         if overdubGroup == nil {
@@ -1113,6 +1116,7 @@ struct OverdubSessionView: View {
     }
 
     private func toggleLoopForLayer(at index: Int) {
+        guard !isRecording else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         // Create overdub group if it doesn't exist yet
         if overdubGroup == nil {

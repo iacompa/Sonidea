@@ -828,33 +828,53 @@ struct RecordingDetailView: View {
                         // Skip Silence toggle for playback (non-destructive)
                         SkipSilenceToggle(skipSilenceManager: skipSilenceManager)
                     } else {
-                        // Undo/Redo buttons (edit mode only)
+                        // Undo/Redo buttons (edit mode only) with operation descriptions
                         HStack(spacing: 8) {
                             Button {
                                 performUndo()
                             } label: {
-                                Image(systemName: "arrow.uturn.backward")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(editHistory.canUndo ? palette.accent : palette.textTertiary)
-                                    .frame(width: 32, height: 28)
-                                    .background(editHistory.canUndo ? palette.accent.opacity(0.15) : palette.inputBackground)
-                                    .cornerRadius(6)
+                                VStack(spacing: 1) {
+                                    Image(systemName: "arrow.uturn.backward")
+                                        .font(.system(size: 14, weight: .medium))
+                                    if let desc = editHistory.undoActionDescription {
+                                        Text(desc)
+                                            .font(.system(size: 8, weight: .medium))
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .foregroundColor(editHistory.canUndo ? palette.accent : palette.textTertiary)
+                                .frame(minWidth: 32, minHeight: 28)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(editHistory.canUndo ? palette.accent.opacity(0.15) : palette.inputBackground)
+                                .cornerRadius(6)
                             }
                             .disabled(!editHistory.canUndo)
-                            .accessibilityLabel("Undo")
+                            .accessibilityLabel(editHistory.canUndo ? "Undo \(editHistory.undoActionDescription ?? "")" : "Undo")
+                            .keyboardShortcut("z", modifiers: .command)
 
                             Button {
                                 performRedo()
                             } label: {
-                                Image(systemName: "arrow.uturn.forward")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(editHistory.canRedo ? palette.accent : palette.textTertiary)
-                                    .frame(width: 32, height: 28)
-                                    .background(editHistory.canRedo ? palette.accent.opacity(0.15) : palette.inputBackground)
-                                    .cornerRadius(6)
+                                VStack(spacing: 1) {
+                                    Image(systemName: "arrow.uturn.forward")
+                                        .font(.system(size: 14, weight: .medium))
+                                    if let desc = editHistory.redoActionDescription {
+                                        Text(desc)
+                                            .font(.system(size: 8, weight: .medium))
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .foregroundColor(editHistory.canRedo ? palette.accent : palette.textTertiary)
+                                .frame(minWidth: 32, minHeight: 28)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(editHistory.canRedo ? palette.accent.opacity(0.15) : palette.inputBackground)
+                                .cornerRadius(6)
                             }
                             .disabled(!editHistory.canRedo)
-                            .accessibilityLabel("Redo")
+                            .accessibilityLabel(editHistory.canRedo ? "Redo \(editHistory.redoActionDescription ?? "")" : "Redo")
+                            .keyboardShortcut("z", modifiers: [.command, .shift])
 
                             // Divider
                             Rectangle()
@@ -1143,6 +1163,7 @@ struct RecordingDetailView: View {
                                 .shadow(color: .white.opacity(0.15), radius: 1, y: -1)
                         }
                         .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+                        .keyboardShortcut(.space, modifiers: [])
 
                         // Skip forward
                         Button {
@@ -1400,6 +1421,7 @@ struct RecordingDetailView: View {
                             .shadow(color: palette.accent.opacity(0.35), radius: 6, y: 3)
                             .shadow(color: .white.opacity(0.15), radius: 1, y: -1)
                     }
+                    .keyboardShortcut(.space, modifiers: [])
 
                     // Skip forward
                     Button {
@@ -1439,8 +1461,94 @@ struct RecordingDetailView: View {
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
 
+            // Status badges row (format, edited, proof)
+            recordingStatusBadges
+
             // Inline Version Recorder (New Version / Overdub buttons)
             inlineVersionRecorder
+        }
+    }
+
+    // MARK: - Recording Status Badges
+
+    private var audioFormatLabel: String {
+        let ext = currentRecording.fileURL.pathExtension.lowercased()
+        switch ext {
+        case "wav": return "WAV"
+        case "m4a": return "AAC"
+        case "caf": return "ALAC"
+        default: return ext.uppercased()
+        }
+    }
+
+    private var proofBadgeText: String {
+        switch currentRecording.proofStatus {
+        case .proven: return "Verified"
+        case .pending: return "Pending"
+        case .mismatch: return "Mismatch"
+        case .none, .error: return "Unverified"
+        }
+    }
+
+    private var proofBadgeIcon: String {
+        switch currentRecording.proofStatus {
+        case .proven: return "checkmark.shield.fill"
+        case .pending: return "clock.fill"
+        case .mismatch: return "exclamationmark.triangle.fill"
+        case .none, .error: return "shield.slash"
+        }
+    }
+
+    private var proofBadgeColor: Color {
+        switch currentRecording.proofStatus {
+        case .proven: return .green
+        case .pending: return .orange
+        case .mismatch: return .red
+        case .none, .error: return palette.textTertiary
+        }
+    }
+
+    /// Small inline badges showing format, edited status, and proof status
+    private var recordingStatusBadges: some View {
+        HStack(spacing: 6) {
+            // Format badge (AAC / ALAC / WAV)
+            Text(audioFormatLabel)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(palette.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(palette.inputBackground)
+                .cornerRadius(4)
+
+            // Edited badge (shown if original backup exists)
+            if currentRecording.originalAudioFileName != nil {
+                HStack(spacing: 2) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text("Edited")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundColor(.orange)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(4)
+            }
+
+            // Proof status badge
+            HStack(spacing: 2) {
+                Image(systemName: proofBadgeIcon)
+                    .font(.system(size: 8, weight: .semibold))
+                Text(proofBadgeText)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundColor(proofBadgeColor)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(proofBadgeColor.opacity(0.12))
+            .cornerRadius(4)
+
+            Spacer()
         }
     }
 
@@ -1718,22 +1826,24 @@ struct RecordingDetailView: View {
         isProcessingEdit = true
         let sourceURL = pendingAudioEdit ?? currentRecording.fileURL
 
-        // Capture original duration before trim for feedback notification
+        // Capture original duration and trim bounds before they're reset
         let originalDuration = playback.duration > 0 ? playback.duration : (pendingDuration ?? currentRecording.duration)
+        let trimStart = selectionStart
+        let trimEnd = selectionEnd
 
         Task {
             let result = await AudioEditor.shared.trim(
                 sourceURL: sourceURL,
-                startTime: selectionStart,
-                endTime: selectionEnd
+                startTime: trimStart,
+                endTime: trimEnd
             )
 
             await MainActor.run {
                 if result.success {
                     // Update markers to match new timeline
                     editedMarkers = editedMarkers.afterTrim(
-                        keepingStart: selectionStart,
-                        keepingEnd: selectionEnd
+                        keepingStart: trimStart,
+                        keepingEnd: trimEnd
                     )
 
                     // Store pending edit
@@ -1741,8 +1851,34 @@ struct RecordingDetailView: View {
                     pendingDuration = result.newDuration
                     hasAudioEdits = true
 
-                    // Reload waveform for new file
-                    reloadWaveformForPendingEdit()
+                    // Incremental waveform update: slice cached waveform instead of re-extracting
+                    skipSilenceManager.clear()
+                    let oldURL = sourceURL
+                    let newURL = result.outputURL
+                    Task {
+                        let samples = await WaveformSampler.shared.samplesAfterTrim(
+                            oldURL: oldURL,
+                            newURL: newURL,
+                            originalDuration: originalDuration,
+                            trimStart: trimStart,
+                            trimEnd: trimEnd,
+                            targetSampleCount: 150
+                        )
+                        let minMaxSamples = await WaveformSampler.shared.minMaxSamplesAfterTrim(
+                            oldURL: oldURL,
+                            newURL: newURL,
+                            originalDuration: originalDuration,
+                            trimStart: trimStart,
+                            trimEnd: trimEnd,
+                            targetSampleCount: 150
+                        )
+                        let waveformData = try? await AudioWaveformExtractor.shared.extractWaveform(from: newURL)
+                        await MainActor.run {
+                            waveformSamples = samples
+                            waveformMinMaxSamples = minMaxSamples
+                            highResWaveformData = waveformData
+                        }
+                    }
 
                     // Reset selection to full new duration
                     selectionStart = 0
@@ -4640,6 +4776,7 @@ struct IconColorPickerSheet: View {
                         Spacer()
                         ColorPicker("", selection: $selectedColor, supportsOpacity: false)
                             .labelsHidden()
+                            .accessibilityLabel("Icon color")
                             .onChange(of: selectedColor) { _, _ in
                                 onColorChanged()
                             }
@@ -5660,6 +5797,7 @@ struct ManageTagsSheet: View {
                         TextField("Tag name", text: $newTagName)
                         ColorPicker("", selection: $newTagColor, supportsOpacity: false)
                             .labelsHidden()
+                            .accessibilityLabel("Tag color")
                     }
 
                     Button("Create Tag") {

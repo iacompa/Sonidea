@@ -34,6 +34,11 @@ struct SonideaApp: App {
                     PhoneConnectivityManager.shared.appState = appState
                     PhoneConnectivityManager.shared.activate()
 
+                    // Pre-warm audio engine on launch for instant recording start
+                    if !appState.recorder.isActive {
+                        appState.recorder.prewarm()
+                    }
+
                     // Set up shared album real-time sync subscriptions
                     Task {
                         await appState.sharedAlbumManager.setupDatabaseSubscriptions()

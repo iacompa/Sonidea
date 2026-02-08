@@ -85,6 +85,9 @@ final class SupportManager {
     var isLoadingProducts = true
     var productsLoadFailed = false
 
+    /// Banner message shown when subscription renewal fails but grace period is active
+    var renewalFailedBannerMessage: String?
+
     /// Callback invoked when Pro access is lost (trial expired or subscription cancelled)
     var onProAccessLost: (() -> Void)?
 
@@ -147,6 +150,9 @@ final class SupportManager {
 
     // MARK: - Keys
 
+    /// Number of days to grant access after a subscription expires (billing grace period)
+    private static let gracePeriodDays = 3
+
     private enum Keys {
         static let isSubscribed = "subscription.isSubscribed"
         static let currentPlan = "subscription.currentPlan"
@@ -155,6 +161,7 @@ final class SupportManager {
         static let isOnTrial = "subscription.isOnTrial"
         static let trialStartDate = "subscription.trialStartDate"
         static let trialEndDate = "subscription.trialEndDate"
+        static let subscriptionExpirationDate = "subscription.expirationDate"
     }
 
     // MARK: - Trial State
@@ -172,6 +179,20 @@ final class SupportManager {
     var trialEndDate: Date? {
         get { UserDefaults.standard.object(forKey: Keys.trialEndDate) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: Keys.trialEndDate) }
+    }
+
+    /// Stored expiration date of the most recent subscription transaction
+    var subscriptionExpirationDate: Date? {
+        get { UserDefaults.standard.object(forKey: Keys.subscriptionExpirationDate) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.subscriptionExpirationDate) }
+    }
+
+    /// Whether the subscription is within the billing grace period (expired < 3 days ago)
+    var isInGracePeriod: Bool {
+        guard let expirationDate = subscriptionExpirationDate, expirationDate < Date() else { return false }
+        let calendar = Calendar.current
+        let daysSinceExpiration = calendar.dateComponents([.day], from: expirationDate, to: Date()).day ?? Int.max
+        return daysSinceExpiration <= Self.gracePeriodDays
     }
 
     // MARK: - Shared Album Trial Warning
@@ -218,9 +239,13 @@ final class SupportManager {
         // Listen for transaction updates
         transactionListener = Task {
             for await result in Transaction.updates {
-                if case .verified(let transaction) = result {
+                switch result {
+                case .verified(let transaction):
                     await handleVerifiedTransaction(transaction)
                     await transaction.finish()
+                case .unverified(let transaction, let verificationError):
+                    print("[SupportManager] Transaction verification failed for \(transaction.productID): \(verificationError)")
+                    purchaseError = "Purchase couldn't be verified. Please try again or contact Apple Support."
                 }
             }
         }
@@ -312,19 +337,33 @@ final class SupportManager {
         var foundActive = false
 
         for await result in Transaction.currentEntitlements {
-            if case .verified(let transaction) = result {
+            switch result {
+            case .verified(let transaction):
                 if transaction.revocationDate == nil {
                     foundActive = true
                     isSubscribed = true
                     currentPlanRawValue = transaction.productID
+                    subscriptionExpirationDate = transaction.expirationDate
+                    renewalFailedBannerMessage = nil
                 }
+            case .unverified(let transaction, let verificationError):
+                print("[SupportManager] Entitlement verification failed for \(transaction.productID): \(verificationError)")
+                purchaseError = "Purchase couldn't be verified. Please try again or contact Apple Support."
             }
         }
 
         if !foundActive {
+            // Check grace period before revoking access
+            if isInGracePeriod {
+                isSubscribed = true
+                renewalFailedBannerMessage = "Subscription renewal failed. Please update your payment method to keep Pro access."
+                return
+            }
+
             let wasSubscribed = isSubscribed
             isSubscribed = false
             currentPlanRawValue = nil
+            renewalFailedBannerMessage = nil
 
             // Notify if Pro access was lost
             if wasSubscribed {
@@ -340,23 +379,41 @@ final class SupportManager {
                 isSubscribed = false
                 currentPlanRawValue = nil
                 isOnTrial = false
+                renewalFailedBannerMessage = nil
                 onProAccessLost?()
             }
         } else {
+            // Store expiration date for grace period tracking
+            subscriptionExpirationDate = transaction.expirationDate
+
             // Check if subscription has expired
             if let expirationDate = transaction.expirationDate, expirationDate < Date() {
-                // Subscription has expired
+                // Check if within grace period (expired < 3 days ago)
+                let calendar = Calendar.current
+                let daysSinceExpiration = calendar.dateComponents([.day], from: expirationDate, to: Date()).day ?? Int.max
+                if daysSinceExpiration <= Self.gracePeriodDays {
+                    // Grace period: keep access but show renewal banner
+                    isSubscribed = true
+                    renewalFailedBannerMessage = "Subscription renewal failed. Please update your payment method to keep Pro access."
+                    return
+                }
+
+                // Past grace period: revoke access
                 let wasSubscribed = isSubscribed
                 isSubscribed = false
                 currentPlanRawValue = nil
                 isOnTrial = false
+                renewalFailedBannerMessage = nil
                 if wasSubscribed {
                     onProAccessLost?()
                 }
                 return
             }
+
+            // Active subscription
             isSubscribed = true
             currentPlanRawValue = transaction.productID
+            renewalFailedBannerMessage = nil
 
             // Detect introductory offer (trial period)
             if transaction.offerType == .introductory {

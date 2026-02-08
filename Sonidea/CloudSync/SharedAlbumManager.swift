@@ -147,6 +147,12 @@ final class SharedAlbumManager {
     }
 
     private let maxRetryCount = 5
+    private let maxCacheItemCount = 200
+
+    /// Timestamp of last share metadata refresh, keyed by album ID.
+    /// Used to avoid redundant CloudKit fetches when permissions are checked in quick succession.
+    private var lastShareMetadataRefresh: [UUID: Date] = [:]
+    private let shareMetadataStaleInterval: TimeInterval = 60  // seconds
 
     // MARK: - Initialization
 
@@ -167,6 +173,9 @@ final class SharedAlbumManager {
 
     /// Create a new shared album (born-shared, starts empty)
     func createSharedAlbum(name: String) async throws -> Album {
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
         logger.info("Creating shared album: \(name, privacy: .private)")
         isProcessing = true
         defer { isProcessing = false }
@@ -315,8 +324,14 @@ final class SharedAlbumManager {
     func addRecordingToSharedAlbum(recording: RecordingItem, album: Album, locationMode: LocationSharingMode = .none) async throws {
         guard album.isShared else { return }
 
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
+        // Refresh share metadata if stale to avoid acting on outdated permissions
+        let freshAlbum = await refreshShareMetadataIfStale(for: album)
+
         // Check permission: only owner/admin/member can add recordings
-        guard album.canAddRecordings else {
+        guard freshAlbum.canAddRecordings else {
             throw SharedAlbumError.permissionDenied
         }
 
@@ -399,8 +414,14 @@ final class SharedAlbumManager {
     func deleteRecordingFromSharedAlbum(recordingId: UUID, album: Album) async throws {
         guard album.isShared else { return }
 
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
+        // Refresh share metadata if stale to avoid acting on outdated permissions
+        let freshAlbum = await refreshShareMetadataIfStale(for: album)
+
         // Check permission: only owner/admin can delete any recording
-        guard album.canDeleteAnyRecording else {
+        guard freshAlbum.canDeleteAnyRecording else {
             throw SharedAlbumError.permissionDenied
         }
 
@@ -758,9 +779,15 @@ final class SharedAlbumManager {
             throw SharedAlbumError.albumNotFound
         }
 
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
+        // Refresh share metadata if stale to avoid acting on outdated permissions
+        let freshAlbum = await refreshShareMetadataIfStale(for: album)
+
         // Check permissions
-        let canDelete = album.canDeleteAnyRecording ||
-            (album.canDeleteOwnRecording && recording.creatorId == deletedBy)
+        let canDelete = freshAlbum.canDeleteAnyRecording ||
+            (freshAlbum.canDeleteOwnRecording && recording.creatorId == deletedBy)
         guard canDelete else {
             throw SharedAlbumError.permissionDenied
         }
@@ -828,6 +855,9 @@ final class SharedAlbumManager {
 
     /// Restore a recording from trash
     func restoreFromTrash(trashItem: SharedAlbumTrashItem, album: Album) async throws {
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
         guard album.isShared && album.canRestoreFromTrash else {
             throw SharedAlbumError.permissionDenied
         }
@@ -893,6 +923,9 @@ final class SharedAlbumManager {
 
     /// Permanently delete a trash item
     func permanentlyDelete(trashItem: SharedAlbumTrashItem, album: Album) async throws {
+        // Require network before attempting CloudKit operation
+        try requireOnline()
+
         guard album.isShared && album.canDeleteAnyRecording else {
             throw SharedAlbumError.permissionDenied
         }
@@ -1713,6 +1746,43 @@ final class SharedAlbumManager {
         return caches.appendingPathComponent("SharedAlbumAudio/\(albumId.uuidString)", isDirectory: true)
     }
 
+    // MARK: - Reachability Guard
+
+    /// Throws `.offline` if the device is not currently reachable.
+    /// Call before any CloudKit operation that requires network.
+    private func requireOnline() throws {
+        guard isOnline else {
+            throw SharedAlbumError.offline
+        }
+    }
+
+    // MARK: - Share Metadata Refresh
+
+    /// Refreshes the album's share metadata (participant roles, permissions) from CloudKit
+    /// if the cached metadata is older than `shareMetadataStaleInterval` (60 seconds).
+    /// This prevents acting on stale permission data after a share was recently modified.
+    @discardableResult
+    private func refreshShareMetadataIfStale(for album: Album) async -> Album {
+        let now = Date()
+        if let lastRefresh = lastShareMetadataRefresh[album.id],
+           now.timeIntervalSince(lastRefresh) < shareMetadataStaleInterval {
+            // Metadata is fresh enough
+            return album
+        }
+
+        // Refresh: resolve the current user's role from the live CKShare
+        let refreshed = await resolveCurrentUserRole(for: album)
+        lastShareMetadataRefresh[album.id] = now
+
+        // Push the refreshed album back to AppState so subsequent permission checks use fresh data
+        if let appState = appState,
+           let idx = appState.albums.firstIndex(where: { $0.id == album.id }) {
+            appState.albums[idx].currentUserRole = refreshed.currentUserRole
+        }
+
+        return refreshed
+    }
+
     // MARK: - Helper Methods
 
     /// Get current user's CloudKit ID
@@ -2040,8 +2110,9 @@ final class SharedAlbumManager {
 
     // MARK: - Audio Cache Management
 
-    /// Evict cached audio files: delete files not accessed in 30 days,
-    /// then LRU-evict oldest-accessed files if total cache exceeds 500MB.
+    /// Evict cached audio files: (1) delete files not accessed in 30 days,
+    /// (2) LRU-evict oldest-accessed files if total cache exceeds 500MB,
+    /// (3) enforce a hard cap of 200 cached items to prevent unbounded growth with many small recordings.
     func evictAudioCacheIfNeeded() {
         guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
         let cacheBase = cachesDir.appendingPathComponent("SharedAlbumAudio", isDirectory: true)
@@ -2090,26 +2161,45 @@ final class SharedAlbumManager {
             logger.info("Evicted \(staleEvicted) bytes of stale (>30 days) cached audio")
         }
 
-        // Phase 2: LRU eviction if total cache still exceeds 500MB limit
-        guard totalSize > maxCacheSizeBytes else { return }
-
-        // Sort oldest-accessed first (LRU eviction)
+        // Sort oldest-accessed first (LRU eviction) — shared by Phase 2 and Phase 3
         files.sort { $0.lastAccessed < $1.lastAccessed }
 
-        var evicted: Int64 = 0
-        for file in files {
-            guard totalSize - evicted > maxCacheSizeBytes else { break }
-            do {
-                try fm.removeItem(at: file.url)
-                evicted += file.size
-                logger.debug("Evicted cached audio: \(file.url.lastPathComponent) (\(file.size) bytes)")
-            } catch {
-                logger.error("Failed to evict cache file: \(error.localizedDescription)")
+        // Phase 2: LRU eviction if total cache exceeds 500MB size limit
+        if totalSize > maxCacheSizeBytes {
+            var evicted: Int64 = 0
+            files.removeAll { file in
+                guard totalSize - evicted > maxCacheSizeBytes else { return false }
+                do {
+                    try fm.removeItem(at: file.url)
+                    evicted += file.size
+                    logger.debug("Evicted cached audio (size): \(file.url.lastPathComponent) (\(file.size) bytes)")
+                } catch {
+                    logger.error("Failed to evict cache file: \(error.localizedDescription)")
+                }
+                return true
+            }
+            totalSize -= evicted
+            if evicted > 0 {
+                logger.info("Evicted \(evicted) bytes from shared album audio cache (LRU)")
             }
         }
 
-        if evicted > 0 {
-            logger.info("Evicted \(evicted) bytes from shared album audio cache (LRU)")
+        // Phase 3: Item count cap — evict oldest-accessed files if count exceeds 200
+        if files.count > maxCacheItemCount {
+            let excess = files.count - maxCacheItemCount
+            var itemCountEvicted = 0
+            for file in files.prefix(excess) {
+                do {
+                    try fm.removeItem(at: file.url)
+                    itemCountEvicted += 1
+                    logger.debug("Evicted cached audio (count cap): \(file.url.lastPathComponent)")
+                } catch {
+                    logger.error("Failed to evict cache file for count cap: \(error.localizedDescription)")
+                }
+            }
+            if itemCountEvicted > 0 {
+                logger.info("Evicted \(itemCountEvicted) cached items to enforce \(self.maxCacheItemCount)-item cap")
+            }
         }
     }
 
@@ -2183,6 +2273,13 @@ extension SharedAlbumManager {
         for album: Album,
         completion: @escaping (UICloudSharingController?) -> Void
     ) {
+        // Check reachability before attempting to fetch share
+        guard isOnline else {
+            self.error = SharedAlbumError.offline.localizedDescription
+            completion(nil)
+            return
+        }
+
         Task {
             do {
                 guard let share = try await getShare(for: album) else {

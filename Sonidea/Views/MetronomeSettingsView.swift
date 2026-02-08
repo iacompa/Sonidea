@@ -39,6 +39,7 @@ struct MetronomeSettingsView: View {
 
                         Slider(value: $metronome.bpm, in: 40...240, step: 1)
                             .tint(palette.accent)
+                            .accessibilityLabel("BPM")
 
                         // Tap tempo
                         Button {
@@ -92,6 +93,7 @@ struct MetronomeSettingsView: View {
                                 .foregroundColor(palette.textSecondary)
                             Slider(value: $metronome.volume, in: 0.1...1.0, step: 0.05)
                                 .tint(palette.accent)
+                                .accessibilityLabel("Volume")
                             Image(systemName: "speaker.wave.3.fill")
                                 .font(.caption)
                                 .foregroundColor(palette.textSecondary)

@@ -192,14 +192,25 @@ actor DataSafetyManager {
 
         // Delete oldest backup (slot 3)
         let slot3 = directory.appendingPathComponent(collection.backupFilename(slot: Self.backupSlots))
-        try? fm.removeItem(at: slot3)
+        do {
+            try fm.removeItem(at: slot3)
+        } catch let error as NSError {
+            // File not found is expected (no slot 3 yet); only log unexpected errors
+            if error.domain != NSCocoaErrorDomain || error.code != NSFileNoSuchFileError {
+                Self.logger.error("Backup rotation: failed to delete slot \(Self.backupSlots) for \(collection.rawValue): \(error.localizedDescription)")
+            }
+        }
 
         // Shift each slot up: 2->3, 1->2
         for slot in stride(from: Self.backupSlots - 1, through: 1, by: -1) {
             let source = directory.appendingPathComponent(collection.backupFilename(slot: slot))
             let dest = directory.appendingPathComponent(collection.backupFilename(slot: slot + 1))
             if fm.fileExists(atPath: source.path) {
-                try? fm.moveItem(at: source, to: dest)
+                do {
+                    try fm.moveItem(at: source, to: dest)
+                } catch {
+                    Self.logger.error("Backup rotation: failed to move slot \(slot) -> \(slot + 1) for \(collection.rawValue): \(error.localizedDescription)")
+                }
             }
         }
 
@@ -207,7 +218,11 @@ actor DataSafetyManager {
         let primary = directory.appendingPathComponent(collection.filename)
         let slot1 = directory.appendingPathComponent(collection.backupFilename(slot: 1))
         if fm.fileExists(atPath: primary.path) {
-            try? fm.copyItem(at: primary, to: slot1)
+            do {
+                try fm.copyItem(at: primary, to: slot1)
+            } catch {
+                Self.logger.error("Backup rotation: failed to copy primary to slot 1 for \(collection.rawValue): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -268,10 +283,19 @@ enum DataSafetyFileOps {
         // Try backups (newest first)
         for slot in 1...DataSafetyManager.backupSlots {
             let backupURL = directory.appendingPathComponent(collection.backupFilename(slot: slot))
-            // First try as envelope
-            if let items: [T] = loadAndVerify(url: backupURL, decoder: decoder) {
+            // First try as envelope with checksum verification
+            let result: LoadResult<T> = loadAndVerifyResult(url: backupURL, decoder: decoder)
+            switch result {
+            case .success(let items):
                 logger.warning("Recovered \(collection.rawValue) from backup slot \(slot): \(items.count) items")
                 return items
+            case .checksumMismatch:
+                logger.error("Backup slot \(slot) for \(collection.rawValue) has CORRUPTED checksum — skipping to next backup")
+                continue
+            case .fileNotFound:
+                break // Expected — not all slots may exist
+            case .readError, .decodeFailed, .reEncodeFailed:
+                logger.warning("Backup slot \(slot) for \(collection.rawValue) unreadable — trying next backup")
             }
             // Then try as raw array (legacy migration backup)
             if let items: [T] = loadRawArray(url: backupURL, decoder: decoder) {
@@ -295,14 +319,24 @@ enum DataSafetyFileOps {
         return []
     }
 
+    /// Result of attempting to load and verify a SafeEnvelope from a file URL.
+    private enum LoadResult<T> {
+        case success([T])
+        case fileNotFound
+        case readError
+        case decodeFailed
+        case checksumMismatch
+        case reEncodeFailed
+    }
+
     /// Attempt to load and verify a SafeEnvelope from a file URL.
-    /// Returns nil if file doesn't exist, can't be decoded, or checksum fails.
-    private static func loadAndVerify<T: Codable>(url: URL, decoder: JSONDecoder) -> [T]? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    /// Returns a `LoadResult` that distinguishes checksum failures from other errors.
+    private static func loadAndVerifyResult<T: Codable>(url: URL, decoder: JSONDecoder) -> LoadResult<T> {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .fileNotFound }
 
         guard let data = try? Data(contentsOf: url) else {
             logger.warning("Cannot read file: \(url.lastPathComponent)")
-            return nil
+            return .readError
         }
 
         // Decode envelope
@@ -311,7 +345,7 @@ enum DataSafetyFileOps {
             envelope = try decoder.decode(SafeEnvelope<[T]>.self, from: data)
         } catch {
             logger.warning("Envelope decode failed for \(url.lastPathComponent): \(error.localizedDescription)")
-            return nil
+            return .decodeFailed
         }
 
         // Verify checksum
@@ -320,22 +354,31 @@ enum DataSafetyFileOps {
         payloadEncoder.outputFormatting = [.sortedKeys]
         guard let payloadData = try? payloadEncoder.encode(envelope.payload) else {
             logger.warning("Cannot re-encode payload for checksum verification: \(url.lastPathComponent)")
-            return nil
+            return .reEncodeFailed
         }
 
         let actualChecksum = SHA256.hash(data: payloadData).hexString
         guard actualChecksum == envelope.checksum else {
             logger.error("Checksum mismatch for \(url.lastPathComponent): expected \(envelope.checksum.prefix(8))…, got \(actualChecksum.prefix(8))…")
-            return nil
+            return .checksumMismatch
         }
 
         // Run schema migration if the envelope is from an older version
         if envelope.schemaVersion < SafeEnvelope<[T]>.currentSchemaVersion {
             logger.info("Migrating \(url.lastPathComponent) from schema v\(envelope.schemaVersion) to v\(SafeEnvelope<[T]>.currentSchemaVersion)")
-            return SchemaMigration.migrate(payload: envelope.payload, from: envelope.schemaVersion)
+            return .success(SchemaMigration.migrate(payload: envelope.payload, from: envelope.schemaVersion))
         }
 
-        return envelope.payload
+        return .success(envelope.payload)
+    }
+
+    /// Convenience wrapper that returns nil on any failure (preserves original API for primary load).
+    private static func loadAndVerify<T: Codable>(url: URL, decoder: JSONDecoder) -> [T]? {
+        let result: LoadResult<T> = loadAndVerifyResult(url: url, decoder: decoder)
+        if case .success(let items) = result {
+            return items
+        }
+        return nil
     }
 
     /// Attempt to load a raw JSON array from a file (for legacy migration backups).
@@ -419,20 +462,34 @@ enum DataSafetyFileOps {
         // Rotate backups
         let fm = FileManager.default
         let oldestBackup = directory.appendingPathComponent(collection.backupFilename(slot: DataSafetyManager.backupSlots))
-        try? fm.removeItem(at: oldestBackup)
+        do {
+            try fm.removeItem(at: oldestBackup)
+        } catch let error as NSError {
+            if error.domain != NSCocoaErrorDomain || error.code != NSFileNoSuchFileError {
+                logger.error("Backup rotation: failed to delete slot \(DataSafetyManager.backupSlots) for \(collection.rawValue): \(error.localizedDescription)")
+            }
+        }
 
         for slot in stride(from: DataSafetyManager.backupSlots - 1, through: 1, by: -1) {
             let source = directory.appendingPathComponent(collection.backupFilename(slot: slot))
             let dest = directory.appendingPathComponent(collection.backupFilename(slot: slot + 1))
             if fm.fileExists(atPath: source.path) {
-                try? fm.moveItem(at: source, to: dest)
+                do {
+                    try fm.moveItem(at: source, to: dest)
+                } catch {
+                    logger.error("Backup rotation: failed to move slot \(slot) -> \(slot + 1) for \(collection.rawValue): \(error.localizedDescription)")
+                }
             }
         }
 
         let primary = directory.appendingPathComponent(collection.filename)
         let slot1 = directory.appendingPathComponent(collection.backupFilename(slot: 1))
         if fm.fileExists(atPath: primary.path) {
-            try? fm.copyItem(at: primary, to: slot1)
+            do {
+                try fm.copyItem(at: primary, to: slot1)
+            } catch {
+                logger.error("Backup rotation: failed to copy primary to slot 1 for \(collection.rawValue): \(error.localizedDescription)")
+            }
         }
 
         // Atomic write

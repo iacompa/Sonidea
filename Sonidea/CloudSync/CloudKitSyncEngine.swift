@@ -385,7 +385,7 @@ final class CloudKitSyncEngine {
         tombstoneRecord["deviceId"] = deviceId
 
         do {
-            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            try await modifyRecordsWithPartialFailureHandling(saving: [tombstoneRecord], deleting: [recordID])
             logger.info("Deleted recording from CloudKit: \(recordingId)")
             updateLastSync()
         } catch {
@@ -496,7 +496,7 @@ final class CloudKitSyncEngine {
         tombstoneRecord["deviceId"] = deviceId
 
         do {
-            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            try await modifyRecordsWithPartialFailureHandling(saving: [tombstoneRecord], deleting: [recordID])
             logger.info("Deleted tag from CloudKit: \(tagId)")
             updateLastSync()
         } catch {
@@ -529,7 +529,7 @@ final class CloudKitSyncEngine {
         tombstoneRecord["deviceId"] = deviceId
 
         do {
-            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            try await modifyRecordsWithPartialFailureHandling(saving: [tombstoneRecord], deleting: [recordID])
             logger.info("Deleted album from CloudKit: \(albumId)")
             updateLastSync()
         } catch {
@@ -562,7 +562,7 @@ final class CloudKitSyncEngine {
         tombstoneRecord["deviceId"] = deviceId
 
         do {
-            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            try await modifyRecordsWithPartialFailureHandling(saving: [tombstoneRecord], deleting: [recordID])
             logger.info("Deleted project from CloudKit: \(projectId)")
             updateLastSync()
         } catch {
@@ -621,7 +621,7 @@ final class CloudKitSyncEngine {
         tombstoneRecord["deviceId"] = deviceId
 
         do {
-            try await privateDatabase.modifyRecords(saving: [tombstoneRecord], deleting: [recordID])
+            try await modifyRecordsWithPartialFailureHandling(saving: [tombstoneRecord], deleting: [recordID])
             logger.info("Deleted overdub group from CloudKit: \(groupId)")
             updateLastSync()
         } catch {
@@ -975,33 +975,58 @@ final class CloudKitSyncEngine {
                             // Download audio file if needed
                             if let asset = record["audioFile"] as? CKAsset,
                                let assetURL = asset.fileURL {
-                                // Safely replace existing audio file with the synced version
+                                // Skip download if local file already exists with matching size
                                 let fm = FileManager.default
-                                let backupURL = recording.fileURL.appendingPathExtension("backup")
-                                let originalExists = fm.fileExists(atPath: recording.fileURL.path)
+                                if let assetAttrs = try? fm.attributesOfItem(atPath: assetURL.path),
+                                   let assetSize = assetAttrs[.size] as? UInt64,
+                                   let localAttrs = try? fm.attributesOfItem(atPath: recording.fileURL.path),
+                                   let localSize = localAttrs[.size] as? UInt64,
+                                   assetSize == localSize, assetSize > 0 {
+                                    logger.info("Skipping audio download for \(recording.id) — local file matches (\(assetSize) bytes)")
+                                } else {
+                                    // Safely replace existing audio file with the synced version
+                                    let backupURL = recording.fileURL.appendingPathExtension("backup")
+                                    let originalExists = fm.fileExists(atPath: recording.fileURL.path)
 
-                                // Back up original file if it exists
-                                if originalExists {
-                                    try? fm.removeItem(at: backupURL) // Clean up stale backup
-                                    try? fm.moveItem(at: recording.fileURL, to: backupURL)
-                                }
+                                    // Back up original file if it exists
+                                    if originalExists {
+                                        do {
+                                            try fm.removeItem(at: backupURL) // Clean up stale backup
+                                        } catch {
+                                            logger.warning("Failed to remove stale backup at \(backupURL.lastPathComponent): \(error.localizedDescription)")
+                                        }
+                                        do {
+                                            try fm.moveItem(at: recording.fileURL, to: backupURL)
+                                        } catch {
+                                            logger.error("Failed to back up original audio file \(recording.fileURL.lastPathComponent): \(error.localizedDescription)")
+                                        }
+                                    }
 
-                                do {
-                                    // Remove destination if move failed (original still in place)
-                                    if fm.fileExists(atPath: recording.fileURL.path) {
-                                        try fm.removeItem(at: recording.fileURL)
+                                    do {
+                                        // Remove destination if move failed (original still in place)
+                                        if fm.fileExists(atPath: recording.fileURL.path) {
+                                            try fm.removeItem(at: recording.fileURL)
+                                        }
+                                        try fm.copyItem(at: assetURL, to: recording.fileURL)
+                                        // Copy succeeded, remove backup
+                                        do {
+                                            try fm.removeItem(at: backupURL)
+                                        } catch {
+                                            logger.warning("Failed to remove backup after successful copy for \(recording.id): \(error.localizedDescription)")
+                                        }
+                                    } catch {
+                                        // Copy failed — restore backup if we have one
+                                        if fm.fileExists(atPath: backupURL.path) && !fm.fileExists(atPath: recording.fileURL.path) {
+                                            do {
+                                                try fm.moveItem(at: backupURL, to: recording.fileURL)
+                                            } catch {
+                                                logger.error("Failed to restore audio backup for \(recording.id): \(error.localizedDescription)")
+                                            }
+                                        }
+                                        logger.error("Failed to copy synced audio file: \(error.localizedDescription)")
+                                        // Do NOT update metadata when audio copy fails — prevents metadata/audio mismatch
+                                        continue
                                     }
-                                    try fm.copyItem(at: assetURL, to: recording.fileURL)
-                                    // Copy succeeded, remove backup
-                                    try? fm.removeItem(at: backupURL)
-                                } catch {
-                                    // Copy failed — restore backup if we have one
-                                    if fm.fileExists(atPath: backupURL.path) && !fm.fileExists(atPath: recording.fileURL.path) {
-                                        try? fm.moveItem(at: backupURL, to: recording.fileURL)
-                                    }
-                                    logger.error("Failed to copy synced audio file: \(error.localizedDescription)")
-                                    // Do NOT update metadata when audio copy fails — prevents metadata/audio mismatch
-                                    continue
                                 }
                             }
                             appState.recordings[localIndex] = recording
@@ -1013,11 +1038,26 @@ final class CloudKitSyncEngine {
                         var audioCopied = false
                         if let asset = record["audioFile"] as? CKAsset,
                            let assetURL = asset.fileURL {
-                            do {
-                                try FileManager.default.copyItem(at: assetURL, to: recording.fileURL)
+                            let fm = FileManager.default
+                            // Skip download if local file already exists with matching size
+                            if let assetAttrs = try? fm.attributesOfItem(atPath: assetURL.path),
+                               let assetSize = assetAttrs[.size] as? UInt64,
+                               let localAttrs = try? fm.attributesOfItem(atPath: recording.fileURL.path),
+                               let localSize = localAttrs[.size] as? UInt64,
+                               assetSize == localSize, assetSize > 0 {
+                                logger.info("Skipping audio download for new recording \(recording.id) — local file already exists (\(assetSize) bytes)")
                                 audioCopied = true
-                            } catch {
-                                logger.error("Failed to copy new synced audio file: \(error.localizedDescription)")
+                            } else {
+                                do {
+                                    // Remove partial/mismatched file if it exists
+                                    if fm.fileExists(atPath: recording.fileURL.path) {
+                                        try fm.removeItem(at: recording.fileURL)
+                                    }
+                                    try fm.copyItem(at: assetURL, to: recording.fileURL)
+                                    audioCopied = true
+                                } catch {
+                                    logger.error("Failed to copy new synced audio file: \(error.localizedDescription)")
+                                }
                             }
                         }
                         // Only add the recording if the audio file was successfully copied
@@ -1179,15 +1219,26 @@ final class CloudKitSyncEngine {
     private func loadPersistedState() {
         // Load change token
         if let tokenData = UserDefaults.standard.data(forKey: changeTokenKey) {
-            changeToken = try? NSKeyedUnarchiver.unarchivedObject(
-                ofClass: CKServerChangeToken.self,
-                from: tokenData
-            )
+            do {
+                changeToken = try NSKeyedUnarchiver.unarchivedObject(
+                    ofClass: CKServerChangeToken.self,
+                    from: tokenData
+                )
+            } catch {
+                logger.error("Failed to deserialize CKServerChangeToken: \(error.localizedDescription) — will perform full fetch")
+                changeToken = nil
+                UserDefaults.standard.removeObject(forKey: changeTokenKey)
+            }
         }
 
         // Load tombstones
         if let data = UserDefaults.standard.data(forKey: tombstonesKey) {
-            tombstones = (try? JSONDecoder().decode([Tombstone].self, from: data)) ?? []
+            do {
+                tombstones = try JSONDecoder().decode([Tombstone].self, from: data)
+            } catch {
+                logger.error("Failed to decode tombstones: \(error.localizedDescription) — starting with empty tombstones")
+                tombstones = []
+            }
         }
 
         // Prune old tombstones (older than 90 days)
@@ -1213,7 +1264,12 @@ final class CloudKitSyncEngine {
 
         // Load pending operations queue
         if let data = UserDefaults.standard.data(forKey: pendingOperationsKey) {
-            pendingOperations = (try? JSONDecoder().decode([PendingSyncOperation].self, from: data)) ?? []
+            do {
+                pendingOperations = try JSONDecoder().decode([PendingSyncOperation].self, from: data)
+            } catch {
+                logger.error("Failed to decode pending operations: \(error.localizedDescription) — starting with empty queue")
+                pendingOperations = []
+            }
         }
         // Prune stale pending operations (older than 7 days)
         let opCutoff = Date().addingTimeInterval(-7 * 86400)
@@ -1221,17 +1277,25 @@ final class CloudKitSyncEngine {
     }
 
     private func saveChangeToken() {
-        if let token = changeToken,
-           let data = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) {
-            UserDefaults.standard.set(data, forKey: changeTokenKey)
+        if let token = changeToken {
+            do {
+                let data = try NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true)
+                UserDefaults.standard.set(data, forKey: changeTokenKey)
+            } catch {
+                logger.error("Failed to archive CKServerChangeToken: \(error.localizedDescription)")
+                UserDefaults.standard.removeObject(forKey: changeTokenKey)
+            }
         } else {
             UserDefaults.standard.removeObject(forKey: changeTokenKey)
         }
     }
 
     private func saveTombstones() {
-        if let data = try? JSONEncoder().encode(tombstones) {
+        do {
+            let data = try JSONEncoder().encode(tombstones)
             UserDefaults.standard.set(data, forKey: tombstonesKey)
+        } catch {
+            logger.error("Failed to encode tombstones: \(error.localizedDescription)")
         }
     }
 
@@ -1280,8 +1344,11 @@ final class CloudKitSyncEngine {
     }
 
     private func savePendingOperations() {
-        if let data = try? JSONEncoder().encode(pendingOperations) {
+        do {
+            let data = try JSONEncoder().encode(pendingOperations)
             UserDefaults.standard.set(data, forKey: pendingOperationsKey)
+        } catch {
+            logger.error("Failed to encode pending operations: \(error.localizedDescription)")
         }
         pendingChangesCount = pendingOperations.count
     }
@@ -1389,8 +1456,9 @@ final class CloudKitSyncEngine {
 
     // MARK: - Conflict-Resolving Save
 
-    /// Save a CKRecord with serverRecordChanged conflict resolution.
+    /// Save a CKRecord with serverRecordChanged conflict resolution and partialFailure handling.
     /// On conflict, re-applies fields from the populate closure onto the server record and retries.
+    /// On partialFailure, extracts per-record errors and handles the specific record's error.
     private func saveWithConflictResolution(
         _ record: CKRecord,
         maxRetries: Int = 2,
@@ -1401,6 +1469,34 @@ final class CloudKitSyncEngine {
             do {
                 try await privateDatabase.modifyRecords(saving: [currentRecord], deleting: [])
                 return
+            } catch let error as CKError where error.code == .partialFailure {
+                // Extract per-record errors from the partial failure
+                if let partialErrors = error.partialErrorsByItemID {
+                    // Find the error specific to our record
+                    if let recordError = partialErrors[currentRecord.recordID] as? CKError {
+                        if recordError.code == .serverRecordChanged {
+                            guard attempt < maxRetries else { throw recordError }
+                            guard let serverRecord = recordError.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord else {
+                                throw recordError
+                            }
+                            logger.info("partialFailure/serverRecordChanged on \(currentRecord.recordType), re-applying fields (attempt \(attempt + 1)/\(maxRetries + 1))")
+                            populate(serverRecord)
+                            currentRecord = serverRecord
+                            continue
+                        } else {
+                            // Non-conflict per-record error — throw the specific error
+                            logger.error("partialFailure for record \(currentRecord.recordID.recordName): \(recordError.localizedDescription)")
+                            throw recordError
+                        }
+                    } else {
+                        // Our record succeeded but other records in the batch failed — that's OK for single-record saves
+                        logger.info("partialFailure but our record \(currentRecord.recordID.recordName) succeeded")
+                        return
+                    }
+                } else {
+                    // No per-record details available — throw the original error
+                    throw error
+                }
             } catch let error as CKError where error.code == .serverRecordChanged {
                 guard attempt < maxRetries else { throw error }
                 guard let serverRecord = error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord else {
@@ -1410,6 +1506,51 @@ final class CloudKitSyncEngine {
                 populate(serverRecord)
                 currentRecord = serverRecord
             }
+        }
+    }
+
+    // MARK: - Partial Failure Handling for Batch Modify
+
+    /// Perform a modifyRecords call with partialFailure tolerance.
+    /// For tombstone+delete batches: if the target record is already gone (unknownItem)
+    /// but the tombstone saved, that's a success. Rethrows truly fatal per-record errors.
+    private func modifyRecordsWithPartialFailureHandling(
+        saving: [CKRecord],
+        deleting: [CKRecord.ID]
+    ) async throws {
+        do {
+            try await privateDatabase.modifyRecords(saving: saving, deleting: deleting)
+        } catch let error as CKError where error.code == .partialFailure {
+            guard let partialErrors = error.partialErrorsByItemID else {
+                throw error
+            }
+
+            // Check each per-record error. Some are tolerable:
+            // - .unknownItem on a delete means the record was already deleted
+            // - .serverRecordChanged on a tombstone save can be ignored (tombstone already exists)
+            var hasFatalError = false
+            for (itemID, itemError) in partialErrors {
+                let itemName = (itemID as? CKRecord.ID)?.recordName ?? "\(itemID)"
+                guard let ckItemError = itemError as? CKError else {
+                    logger.error("partialFailure: non-CK error for \(itemName): \(itemError.localizedDescription)")
+                    hasFatalError = true
+                    continue
+                }
+                switch ckItemError.code {
+                case .unknownItem:
+                    logger.info("partialFailure: record \(itemName) already deleted (unknownItem)")
+                case .serverRecordChanged:
+                    logger.info("partialFailure: tombstone conflict for \(itemName) (serverRecordChanged)")
+                default:
+                    logger.error("partialFailure: fatal error for \(itemName): \(ckItemError.localizedDescription)")
+                    hasFatalError = true
+                }
+            }
+
+            if hasFatalError {
+                throw error
+            }
+            logger.info("partialFailure resolved — all per-record errors were tolerable")
         }
     }
 }

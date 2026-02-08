@@ -1072,15 +1072,7 @@ final class AppState {
 
     /// Remove a shared album (when leaving or owner stops sharing)
     func removeSharedAlbum(_ album: Album) {
-        guard album.isShared else { return }
-
-        let albumId = album.id
-        albums.removeAll { $0.id == albumId }
-
-        // Remove recordings associated with this shared album from local state
-        // (They live in CloudKit shared zone, not locally persisted)
-        recordings.removeAll { $0.albumID == albumId }
-
+        let _ = SharedAlbumRepository.removeSharedAlbum(album, albums: &albums, recordings: &recordings)
         saveAlbums()
         saveRecordings()
     }
@@ -1138,24 +1130,18 @@ final class AppState {
 
     /// Update shared album properties (participant count, etc.)
     func updateSharedAlbum(_ album: Album) {
-        guard let index = albums.firstIndex(where: { $0.id == album.id }) else { return }
-        albums[index] = album
+        guard SharedAlbumRepository.updateAlbum(album, in: &albums) else { return }
         saveAlbums()
     }
 
     /// Check if recording can be added to album (handles shared album consent)
     func canAddRecordingToAlbum(_ album: Album, skipConsent: Bool = false) -> Bool {
-        // For shared albums, check if consent is required
-        if album.isShared && !album.skipAddRecordingConsent && !skipConsent {
-            return false  // Need to show consent sheet
-        }
-        return true
+        SharedAlbumRepository.canAddRecording(album, skipConsent: skipConsent)
     }
 
     /// Update shared album consent preference
     func setSkipConsentForAlbum(_ album: Album, skip: Bool) {
-        guard let index = albums.firstIndex(where: { $0.id == album.id }) else { return }
-        albums[index].skipAddRecordingConsent = skip
+        guard SharedAlbumRepository.setSkipConsent(for: album, skip: skip, albums: &albums) else { return }
         saveAlbums()
     }
 
@@ -1213,24 +1199,17 @@ final class AppState {
 
     /// Get shared recording info for a recording (from cache or creates default)
     func sharedRecordingInfo(for recording: RecordingItem, in album: Album) -> SharedRecordingItem? {
-        guard album.isShared else { return nil }
-
-        if let cached = sharedRecordingInfoCache[recording.id] {
-            return cached
-        }
-
-        // Create default shared recording info
-        return nil
+        SharedAlbumRepository.sharedRecordingInfo(for: recording, in: album, cache: sharedRecordingInfoCache)
     }
 
     /// Update cached shared recording info
     func updateSharedRecordingInfo(_ info: SharedRecordingItem) {
-        sharedRecordingInfoCache[info.recordingId] = info
+        SharedAlbumRepository.updateSharedRecordingInfo(info, cache: &sharedRecordingInfoCache)
     }
 
     /// Clear shared recording info cache
     func clearSharedRecordingInfoCache() {
-        sharedRecordingInfoCache.removeAll()
+        SharedAlbumRepository.clearCache(&sharedRecordingInfoCache)
     }
 
     /// Move recording to shared album trash
@@ -1368,15 +1347,11 @@ final class AppState {
 
     /// Get recordings with pending sensitive approval (for admin)
     func pendingSensitiveApprovals(in album: Album) -> [(recording: RecordingItem, sharedInfo: SharedRecordingItem)] {
-        guard album.isShared, album.currentUserRole == .admin || (album.currentUserRole == nil && album.isOwner) else { return [] }
-
-        return recordings(in: album).compactMap { recording -> (RecordingItem, SharedRecordingItem)? in
-            guard let info = sharedRecordingInfoCache[recording.id],
-                  info.isSensitive && !info.sensitiveApproved else {
-                return nil
-            }
-            return (recording, info)
-        }
+        SharedAlbumRepository.pendingSensitiveApprovals(
+            in: album,
+            recordings: recordings,
+            cache: sharedRecordingInfoCache
+        )
     }
 
     /// Refresh shared album data from CloudKit

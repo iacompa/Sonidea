@@ -264,6 +264,7 @@ struct ParametricEQView: View {
                     color: Self.bandColors[index],
                     isLogarithmic: true
                 )
+                .accessibilityLabel("Frequency")
 
                 Text(formatFrequency(settings.bands[index].frequency))
                     .font(.system(size: 11))
@@ -289,6 +290,7 @@ struct ParametricEQView: View {
                     range: EQBandSettings.minGain...EQBandSettings.maxGain,
                     color: Self.bandColors[index]
                 )
+                .accessibilityLabel("Gain")
 
                 Text(formatGain(settings.bands[index].gain))
                     .font(.system(size: 11))
@@ -314,6 +316,7 @@ struct ParametricEQView: View {
                     range: EQBandSettings.minQ...EQBandSettings.maxQ,
                     color: Self.bandColors[index]
                 )
+                .accessibilityLabel("Q Factor")
 
                 Text(String(format: "%.1f", settings.bands[index].q))
                     .font(.system(size: 11))

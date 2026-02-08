@@ -107,6 +107,9 @@ final class RecorderManager: NSObject {
     /// Whether the audio engine is pre-warmed and ready for instant recording
     private(set) var isPrewarmed = false
 
+    /// In-flight prewarm task (so startRecording can await it instead of starting a redundant slow path)
+    private var prewarmTask: Task<Void, Never>?
+
     /// Pre-warmed engine components (ready to record instantly)
     private var prewarmedEngine: AVAudioEngine?
     private var prewarmedGainMixer: AVAudioMixerNode?
@@ -138,6 +141,11 @@ final class RecorderManager: NSObject {
 
     // Callback for when recording should be stopped and saved (from Live Activity)
     var onStopAndSaveRequested: (() -> Void)?
+
+    // Intent notification observers (must be stored to prevent premature deallocation)
+    nonisolated(unsafe) private var stopRecordingObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var pauseRecordingObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var resumeRecordingObserver: NSObjectProtocol?
 
     // MARK: - Live Gain/Limiter Control
 
@@ -195,11 +203,23 @@ final class RecorderManager: NSObject {
         setupIntentNotificationHandling()
     }
 
+    deinit {
+        if let observer = stopRecordingObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = pauseRecordingObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = resumeRecordingObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     // MARK: - Intent Notification Handling
 
     private func setupIntentNotificationHandling() {
         // Handle stop recording request from Live Activity
-        NotificationCenter.default.addObserver(
+        stopRecordingObserver = NotificationCenter.default.addObserver(
             forName: .stopRecordingRequested,
             object: nil,
             queue: .main
@@ -210,7 +230,7 @@ final class RecorderManager: NSObject {
         }
 
         // Handle pause request from Live Activity
-        NotificationCenter.default.addObserver(
+        pauseRecordingObserver = NotificationCenter.default.addObserver(
             forName: .pauseRecordingRequested,
             object: nil,
             queue: .main
@@ -221,7 +241,7 @@ final class RecorderManager: NSObject {
         }
 
         // Handle resume request from Live Activity
-        NotificationCenter.default.addObserver(
+        resumeRecordingObserver = NotificationCenter.default.addObserver(
             forName: .resumeRecordingRequested,
             object: nil,
             queue: .main
@@ -364,25 +384,16 @@ final class RecorderManager: NSObject {
     /// Pre-warm the audio engine for instant recording start.
     /// Call this when the user enters the recording view or when app becomes active.
     func prewarm() {
-        guard !isPrewarmed, recordingState == .idle else { return }
+        guard !isPrewarmed, recordingState == .idle, prewarmTask == nil else { return }
 
-        Task { @MainActor in
+        prewarmTask = Task { @MainActor in
+            defer { self.prewarmTask = nil }
             do {
                 // Configure audio session
-                let isBluetooth = AudioSessionManager.shared.isBluetoothOutput()
-                    || AudioSessionManager.shared.isBluetoothInput()
-
-                if isBluetooth {
-                    try await AudioSessionManager.shared.configureForRecording(
-                        quality: qualityPreset,
-                        settings: appSettings
-                    )
-                } else {
-                    try await AudioSessionManager.shared.configureForRecording(
-                        quality: qualityPreset,
-                        settings: appSettings
-                    )
-                }
+                try await AudioSessionManager.shared.configureForRecording(
+                    quality: qualityPreset,
+                    settings: appSettings
+                )
 
                 // Create and prepare engine
                 let engine = AVAudioEngine()
@@ -445,6 +456,10 @@ final class RecorderManager: NSObject {
 
     /// Release pre-warmed resources when leaving recording view.
     func cooldown() {
+        // Cancel in-flight prewarm if still running
+        prewarmTask?.cancel()
+        prewarmTask = nil
+
         guard isPrewarmed else { return }
 
         prewarmedEngine?.stop()
@@ -530,6 +545,18 @@ final class RecorderManager: NSObject {
             return
         }
 
+        // PREWARM IN PROGRESS: wait for it then use fast path (avoids redundant engine setup)
+        if prewarmTask != nil {
+            isPreparing = true
+            Task { @MainActor in
+                await self.prewarmTask?.value
+                self.isPreparing = false
+                // Re-enter — isPrewarmed should now be true, so fast path is taken
+                self.startRecording()
+            }
+            return
+        }
+
         // SLOW PATH: Need to configure audio session and create engine
         isPreparing = true
 
@@ -611,14 +638,17 @@ final class RecorderManager: NSObject {
 
             // Create audio file with settings that match the tap format
             let settings = recordingSettings(for: qualityPreset)
-            let processingFormat = AVAudioFormat(
+            guard let processingFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: effectiveTapFormat.sampleRate,
                 channels: effectiveTapFormat.channelCount,
                 interleaved: effectiveTapFormat.isInterleaved
-            )
+            ) else {
+                recordingError = "Audio format unavailable"
+                return
+            }
 
-            audioFile = try AVAudioFile(forWriting: fileURL, settings: settings, commonFormat: processingFormat!.commonFormat, interleaved: false)
+            audioFile = try AVAudioFile(forWriting: fileURL, settings: settings, commonFormat: processingFormat.commonFormat, interleaved: false)
 
             // Apply gain/limiter settings
             applyInputSettings()
@@ -855,12 +885,16 @@ final class RecorderManager: NSObject {
             if metronome.isEnabled {
                 let clickNode = metronome.createSourceNode(sampleRate: inputFormat.sampleRate)
                 engine.attach(clickNode)
-                let monoFormat = AVAudioFormat(
+                guard let monoFormat = AVAudioFormat(
                     commonFormat: .pcmFormatFloat32,
                     sampleRate: inputFormat.sampleRate,
                     channels: 1,
                     interleaved: false
-                )!
+                ) else {
+                    print("[RecorderManager] Failed to create mono format for metronome at sr=\(inputFormat.sampleRate)")
+                    recordingError = "Audio format unavailable for metronome."
+                    return
+                }
                 engine.connect(clickNode, to: engine.mainMixerNode, format: monoFormat)
                 print("[RecorderManager] Metronome click node attached: sr=\(inputFormat.sampleRate)")
             }
