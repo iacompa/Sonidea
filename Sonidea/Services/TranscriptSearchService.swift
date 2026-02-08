@@ -42,8 +42,11 @@ actor TranscriptSearchService {
     /// Cache of recording metadata for search results
     private var recordingCache: [UUID: RecordingMeta] = [:]
 
-    /// Track last index rebuild for incremental updates
-    private var lastFullRebuildDate: Date?
+    /// Track last index rebuild for incremental updates (persisted to survive app restarts)
+    private var lastFullRebuildDate: Date? {
+        get { UserDefaults.standard.object(forKey: "TranscriptSearchLastRebuild") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "TranscriptSearchLastRebuild") }
+    }
 
     /// Track indexed recording IDs and their modified dates
     private var indexedRecordings: [UUID: Date] = [:]
@@ -125,9 +128,10 @@ actor TranscriptSearchService {
 
         try executeSQL(createTrigramTableSQL)
 
-        // Migration: Drop old triggers with incorrect FTS5 external content syntax
+        // Migration: Drop ALL old triggers to ensure fresh creation with correct FTS5 external content syntax
         // The old triggers used "DELETE FROM transcripts_fts WHERE rowid = old.id" which doesn't work
         // for external content FTS5 tables. Must use special 'delete' INSERT command.
+        try executeSQL("DROP TRIGGER IF EXISTS transcripts_ai;")
         try executeSQL("DROP TRIGGER IF EXISTS transcripts_ad;")
         try executeSQL("DROP TRIGGER IF EXISTS transcripts_au;")
 
@@ -135,7 +139,7 @@ actor TranscriptSearchService {
         // FTS5 external content tables require special INSERT syntax for delete operations:
         // INSERT INTO fts_table(fts_table, rowid, ...) VALUES('delete', old.id, old.columns...)
         let createInsertTriggerSQL = """
-        CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts_segments BEGIN
+        CREATE TRIGGER transcripts_ai AFTER INSERT ON transcripts_segments BEGIN
             INSERT INTO transcripts_fts(rowid, recordingId, startTime, endTime, text)
             VALUES(new.id, new.recordingId, new.startTime, new.endTime, new.text);
         END;
@@ -145,7 +149,7 @@ actor TranscriptSearchService {
 
         // For external content FTS5, deletion requires special 'delete' command
         let createDeleteTriggerSQL = """
-        CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts_segments BEGIN
+        CREATE TRIGGER transcripts_ad AFTER DELETE ON transcripts_segments BEGIN
             INSERT INTO transcripts_fts(transcripts_fts, rowid, recordingId, startTime, endTime, text)
             VALUES('delete', old.id, old.recordingId, old.startTime, old.endTime, old.text);
             DELETE FROM transcripts_trigrams WHERE segmentId = old.id;
@@ -155,7 +159,7 @@ actor TranscriptSearchService {
         try executeSQL(createDeleteTriggerSQL)
 
         let createUpdateTriggerSQL = """
-        CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE ON transcripts_segments BEGIN
+        CREATE TRIGGER transcripts_au AFTER UPDATE ON transcripts_segments BEGIN
             INSERT INTO transcripts_fts(transcripts_fts, rowid, recordingId, startTime, endTime, text)
             VALUES('delete', old.id, old.recordingId, old.startTime, old.endTime, old.text);
             DELETE FROM transcripts_trigrams WHERE segmentId = old.id;
@@ -171,10 +175,8 @@ actor TranscriptSearchService {
         try executeSQL("CREATE INDEX IF NOT EXISTS idx_trigrams_trigram ON transcripts_trigrams(trigram);")
         try executeSQL("CREATE INDEX IF NOT EXISTS idx_trigrams_segment ON transcripts_trigrams(segmentId);")
 
-        // Rebuild FTS index from content table to ensure consistency
-        // This is especially important after trigger migration to fix any stale FTS data
-        // The 'rebuild' command reconstructs the FTS index from the external content table
-        try? executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');")
+        // Note: FTS rebuild is handled by rebuildIndex() on first launch, not here
+        // This prevents double-rebuild which can cause stale FTS entries
 
         Self.logger.info("TranscriptSearchService database initialized")
     }
@@ -185,11 +187,18 @@ actor TranscriptSearchService {
     func indexTranscript(recordingId: UUID, segments: [TranscriptionSegment], title: String, createdAt: Date) throws {
         try ensureDatabase()
 
+        guard !segments.isEmpty else {
+            Self.logger.warning("indexTranscript called with empty segments for \(recordingId.uuidString.prefix(8))")
+            return
+        }
+
         let recordingIdStr = recordingId.uuidString
 
         // Store metadata for search results
         recordingCache[recordingId] = RecordingMeta(title: title, createdAt: createdAt)
         indexedRecordings[recordingId] = Date()
+
+        Self.logger.info("Indexing \(segments.count) segments for recording \(recordingId.uuidString.prefix(8)), first segment: '\(segments.first?.text ?? "nil")'")
 
         // Begin transaction for better performance
         try executeSQL("BEGIN TRANSACTION;")
@@ -368,20 +377,36 @@ actor TranscriptSearchService {
             }
         }
 
-        // Sort by combined relevance score (higher = better)
-        results.sort { $0.relevanceScore > $1.relevanceScore }
+        // Deduplicate by recordingId, keeping highest-scoring segment per recording
+        var bestByRecording: [UUID: TranscriptSearchResult] = [:]
+        for result in results {
+            if let existing = bestByRecording[result.recordingId] {
+                if result.relevanceScore > existing.relevanceScore {
+                    bestByRecording[result.recordingId] = result
+                }
+            } else {
+                bestByRecording[result.recordingId] = result
+            }
+        }
 
-        Self.logger.info("Search '\(trimmedQuery)' returned \(results.count) results")
-        return Array(results.prefix(limit))
+        var dedupedResults = Array(bestByRecording.values)
+
+        // Sort by combined relevance score (higher = better)
+        dedupedResults.sort { $0.relevanceScore > $1.relevanceScore }
+
+        Self.logger.info("Search '\(trimmedQuery)' returned \(dedupedResults.count) results (from \(results.count) segments)")
+        return Array(dedupedResults.prefix(limit))
     }
 
     /// Standard FTS5 search with BM25 ranking
     private func searchFTS(query: String, limit: Int) throws -> [TranscriptSearchResult] {
         // Build FTS5 query with prefix matching and OR for typo variants
         let ftsQuery = buildFTSQuery(from: query)
+        Self.logger.info("FTS query: \(ftsQuery)")
 
-        // Search with recency-weighted ranking
-        // Score = BM25 relevance (normalized) + recency boost + occurrence boost
+        // Search with BM25 ranking
+        // Note: For FTS5 with external content, we query the FTS table first, then join with content
+        // Using GROUP BY ts.id to prevent duplicate results from stale FTS entries
         let searchSQL = """
         SELECT
             ts.id,
@@ -390,11 +415,12 @@ actor TranscriptSearchService {
             ts.endTime,
             ts.text,
             snippet(transcripts_fts, 3, '<mark>', '</mark>', '...', 15) AS snippet,
-            bm25(transcripts_fts) AS bm25_score,
-            (SELECT COUNT(*) FROM transcripts_fts f2 WHERE f2.recordingId = ts.recordingId AND f2 MATCH ?) AS occurrence_count
-        FROM transcripts_fts fts
-        JOIN transcripts_segments ts ON fts.rowid = ts.id
-        WHERE fts MATCH ?
+            bm25(transcripts_fts) AS bm25_score
+        FROM transcripts_fts
+        JOIN transcripts_segments ts ON transcripts_fts.rowid = ts.id
+        WHERE transcripts_fts MATCH ?
+        GROUP BY ts.id
+        ORDER BY bm25_score
         LIMIT ?;
         """
 
@@ -406,10 +432,11 @@ actor TranscriptSearchService {
         defer { sqlite3_finalize(statement) }
 
         sqlite3_bind_text(statement, 1, ftsQuery, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_text(statement, 2, ftsQuery, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_int(statement, 3, Int32(limit * 2))  // Fetch more for post-ranking
+        sqlite3_bind_int(statement, 2, Int32(limit * 2))  // Fetch more for post-ranking
 
-        return try extractResults(from: statement, isFuzzy: false)
+        let results = try extractResults(from: statement, isFuzzy: false)
+        Self.logger.info("FTS search returned \(results.count) results")
+        return results
     }
 
     /// Fuzzy search using trigram similarity for typo tolerance
@@ -490,7 +517,8 @@ actor TranscriptSearchService {
             }
 
             let rawScore = sqlite3_column_double(statement, 6)
-            let occurrenceCount = Int(sqlite3_column_int(statement, 7))
+            // For fuzzy search, column 7 is match_count; for FTS search, we default to 1
+            let occurrenceCount = isFuzzy ? Int(sqlite3_column_int(statement, 7)) : 1
 
             // Look up cached metadata
             let meta = recordingCache[recordingId]
@@ -573,6 +601,16 @@ actor TranscriptSearchService {
     func rebuildIndex(from recordings: [RecordingItem]) throws {
         try ensureDatabase()
 
+        // One-time migration to fix stale FTS entries (v2 schema fix)
+        let migrationKey = "TranscriptSearchFTSMigrationV2"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            Self.logger.info("Running one-time FTS migration to fix stale entries")
+            try fullRebuild(from: recordings)
+            lastFullRebuildDate = Date()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+            return
+        }
+
         // First time: full rebuild
         if lastFullRebuildDate == nil {
             try fullRebuild(from: recordings)
@@ -633,13 +671,17 @@ actor TranscriptSearchService {
 
     /// Full index rebuild (used on first launch or when needed)
     private func fullRebuild(from recordings: [RecordingItem]) throws {
-        // Clear existing FTS index first using the 'delete-all' command
-        // This ensures the FTS index is consistent before rebuilding
-        try? executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('delete-all');")
-
-        // Clear existing data
+        // Clear existing data first - DELETE triggers will clean up FTS entries
+        // This is more reliable than 'delete-all' for external content FTS tables
         try executeSQL("DELETE FROM transcripts_segments;")
         try executeSQL("DELETE FROM transcripts_trigrams;")
+
+        // Also explicitly clear any orphaned FTS entries (belt and suspenders)
+        do {
+            try executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('delete-all');")
+        } catch {
+            Self.logger.warning("FTS delete-all failed (may be expected if triggers already cleaned up): \(error.localizedDescription)")
+        }
         recordingCache.removeAll()
         indexedRecordings.removeAll()
 

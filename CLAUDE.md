@@ -738,3 +738,101 @@ Replaced slider-based EQ band controls with Logic Pro-style rotary knobs in `EQG
 | `RecordingsListView.swift` | +pendingNavigationRecordingID observer |
 | `RecordingRepository.swift` | +segments parameter in updateTranscript |
 | `StartRecordingIntent.swift` | +AppShortcutsProvider with 4 shortcuts |
+
+## Transcript Search Duplicate Results Fix (latest session)
+
+### Problem
+Searching for a word like "michael" in the Transcripts tab returned 3 duplicate results for the same recording, despite only one recording existing.
+
+### Root Causes Identified (via multi-agent audit)
+
+1. **`lastFullRebuildDate` was in-memory only** (line 46) - Reset every app launch, causing repeated full rebuilds that could leave stale FTS entries
+2. **Double rebuild on launch** - `setup()` at line 179 ran `VALUES('rebuild')`, then `rebuildIndex()` ran `fullRebuild()` again
+3. **Silent failure on FTS delete-all** (line 667) - `try?` hid errors, allowing stale entries to persist
+4. **No deduplication in search results** - Multiple FTS entries for same segment returned as separate results
+
+### Fixes Applied
+
+**File:** `Sonidea/Services/TranscriptSearchService.swift`
+
+#### 1. Persisted `lastFullRebuildDate` to UserDefaults (lines 46-50)
+```swift
+// Before: private var lastFullRebuildDate: Date?
+// After:
+private var lastFullRebuildDate: Date? {
+    get { UserDefaults.standard.object(forKey: "TranscriptSearchLastRebuild") as? Date }
+    set { UserDefaults.standard.set(newValue, forKey: "TranscriptSearchLastRebuild") }
+}
+```
+Survives app restarts, prevents unnecessary full rebuilds.
+
+#### 2. Removed rebuild from `setup()` (lines 175-177)
+```swift
+// Before: try executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');")
+// After: Removed - rebuild handled by rebuildIndex() only
+```
+Prevents double-rebuild race condition.
+
+#### 3. Added one-time migration for existing users (lines 602-611)
+```swift
+let migrationKey = "TranscriptSearchFTSMigrationV2"
+if !UserDefaults.standard.bool(forKey: migrationKey) {
+    Self.logger.info("Running one-time FTS migration to fix stale entries")
+    try fullRebuild(from: recordings)
+    lastFullRebuildDate = Date()
+    UserDefaults.standard.set(true, forKey: migrationKey)
+    return
+}
+```
+Forces clean FTS rebuild for users with stale data.
+
+#### 4. Improved `fullRebuild()` error handling (lines 665-676)
+```swift
+// Before: try? executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('delete-all');")
+// After:
+try executeSQL("DELETE FROM transcripts_segments;")  // Triggers clean up FTS via DELETE trigger
+try executeSQL("DELETE FROM transcripts_trigrams;")
+do {
+    try executeSQL("INSERT INTO transcripts_fts(transcripts_fts) VALUES('delete-all');")
+} catch {
+    Self.logger.warning("FTS delete-all failed: \(error.localizedDescription)")
+}
+```
+DELETE triggers now clean FTS entries; delete-all is belt-and-suspenders with proper logging.
+
+#### 5. Added `GROUP BY` to search query (lines 399-415)
+```sql
+-- Before: no grouping, could return duplicate FTS entries
+-- After:
+SELECT ts.id, ts.recordingId, ...
+FROM transcripts_fts
+JOIN transcripts_segments ts ON transcripts_fts.rowid = ts.id
+WHERE transcripts_fts MATCH ?
+GROUP BY ts.id  -- Prevents duplicates at SQL level
+ORDER BY bm25_score
+LIMIT ?;
+```
+SQL-level safety net against duplicate FTS entries.
+
+#### 6. Added result deduplication by recordingId (lines 384-396)
+```swift
+var bestByRecording: [UUID: TranscriptSearchResult] = [:]
+for result in results {
+    if let existing = bestByRecording[result.recordingId] {
+        if result.relevanceScore > existing.relevanceScore {
+            bestByRecording[result.recordingId] = result
+        }
+    } else {
+        bestByRecording[result.recordingId] = result
+    }
+}
+var dedupedResults = Array(bestByRecording.values)
+```
+Keeps only highest-scoring segment per recording.
+
+### Audit Results (Tap-to-Jump Feature)
+The multi-agent audit confirmed the tap-to-jump transcript feature is working correctly:
+- Tapping a word correctly seeks to `segment.startTime`
+- Currently-playing word highlighted with half-open interval check `[startTime, startTime+duration)`
+- PlaybackEngine updates `currentTime` via 100ms timer with `.common` run loop mode
+- FlowLayout correctly arranges word chips with wrapping
